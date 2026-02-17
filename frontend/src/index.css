@@ -1357,14 +1357,16 @@ pre {
 
 .reading-content {
   max-width: 720px;
+  width: 100%;
   margin: 80px auto 48px;
   padding: 0 48px;
+  box-sizing: border-box;
 }
 
 .reading-content .stream-paper {
   border: none;
   background: transparent;
-  padding: 0;
+  padding: 24px;
   font-family: 'Noto Serif SC', serif;
   font-size: 1.1rem;
   line-height: 2;
@@ -1404,6 +1406,9 @@ pre {
 
 .app-layout--reading .app-layout__content {
   padding: 0;
+  display: flex;
+  justify-content: center;
+  width: 100%;
 }
 
 /* ===== ShortcutHelpPanel ===== */

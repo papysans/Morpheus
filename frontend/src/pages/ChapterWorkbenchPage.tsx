@@ -464,12 +464,21 @@ export default function ChapterWorkbenchPage() {
     /* ── 阅读模式 ── */
     if (readingMode) {
         const rawContent = chapter.final || chapter.draft || draftContent || ''
+        console.log('[阅读模式] 原始内容长度:', rawContent.length)
+        console.log('[阅读模式] 原始内容前200字:', rawContent.substring(0, 200))
+
         // 清洗内容：移除 <think>、评价性标签等
         const displayContent = rawContent
             .replace(/<think>[\s\S]*?<\/think>/gi, '')
             .replace(/【.*?】/g, '')
             .replace(/\[.*?\]/g, '')
             .trim()
+
+        console.log('[阅读模式] 清洗后内容长度:', displayContent.length)
+        console.log('[阅读模式] 清洗后内容前200字:', displayContent.substring(0, 200))
+        console.log('[阅读模式] chapter.final:', chapter.final ? '存在' : '不存在')
+        console.log('[阅读模式] chapter.draft:', chapter.draft ? '存在' : '不存在')
+        console.log('[阅读模式] draftContent:', draftContent ? '存在' : '不存在')
 
         return (
             <PageTransition>
