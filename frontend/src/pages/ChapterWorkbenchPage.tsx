@@ -463,7 +463,14 @@ export default function ChapterWorkbenchPage() {
 
     /* ── 阅读模式 ── */
     if (readingMode) {
-        const displayContent = chapter.final || chapter.draft || draftContent || ''
+        const rawContent = chapter.final || chapter.draft || draftContent || ''
+        // 清洗内容：移除 <think>、评价性标签等
+        const displayContent = rawContent
+            .replace(/<think>[\s\S]*?<\/think>/gi, '')
+            .replace(/【.*?】/g, '')
+            .replace(/\[.*?\]/g, '')
+            .trim()
+
         return (
             <PageTransition>
                 <AnimatePresence>
