@@ -1,0 +1,6 @@
+### Page
+- Page URL: http://127.0.0.1:3000/dashboard
+- Page Title: 小说家 Agent
+- Console: 0 errors, 2 warnings
+### Snapshot
+- [Snapshot](output/playwright/.playwright-cli/page-2026-02-14T15-57-47-731Z.yml)

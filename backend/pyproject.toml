@@ -1,0 +1,46 @@
+[tool.poetry]
+name = "morpheus"
+version = "1.0.0"
+description = "Multi-Agent Novel Writing System with Three-Layer Memory"
+authors = ["Novelist Team"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.109.0"
+uvicorn = "^0.25.0"
+pydantic = "^2.5.3"
+pydantic-settings = "^2.1.0"
+python-multipart = "^0.0.6"
+sqlalchemy = "^2.0.23"
+aiosqlite = "^0.19.0"
+lancedb = "^0.4.0"
+numpy = "^1.26.2"
+openai = "^1.6.1"
+tenacity = "^8.2.3"
+python-dotenv = "^1.0.0"
+pyyaml = "^6.0.1"
+jsonschema = "^4.20.0"
+tiktoken = "^0.5.2"
+httpx = "^0.25.2"
+sse-starlette = "^1.8.2"
+requests = "^2.31.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.4.3"
+pytest-asyncio = "^0.21.1"
+pytest-cov = "^4.1.0"
+black = "^23.12.1"
+ruff = "^0.1.8"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
