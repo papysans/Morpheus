@@ -2,9 +2,27 @@
 
 一个面向长篇小说创作的多智能体系统：从一句话梗概出发，完成章节规划、正文生成、记忆检索、一致性审查、轨迹回放与导出。
 
-- 前端：React + TypeScript + Vite + Zustand
-- 后端：FastAPI + Pydantic + SQLite/LanceDB
-- 核心能力：多层记忆、SSE 流式生成、冲突检查、评测看板
+## 技术栈
+
+**前端**
+- React 18 + TypeScript + Vite 5
+- 状态管理：Zustand 4
+- UI 组件：Tailwind CSS 3 + Framer Motion
+- 可视化：ReactFlow 11 + D3.js 7 + Recharts 2
+- 测试：Vitest 4 + Playwright 1.58 + fast-check 4
+
+**后端**
+- FastAPI + Pydantic 2 + Uvicorn
+- 数据存储：SQLite + LanceDB (向量数据库)
+- LLM 支持：OpenAI / MiniMax / DeepSeek
+- 流式输出：SSE (Server-Sent Events)
+
+**核心能力**
+- 三层记忆系统（Identity / Entities / Events）
+- 多 Agent 协作（Director / Setter / Stylist / Arbiter）
+- 实时流式生成与决策轨迹回放
+- 知识图谱可视化与一致性检查
+- 完整的测试覆盖（单元测试 + 属性测试 + E2E 测试）
 
 ## 产品介绍
 
@@ -18,30 +36,77 @@ Morpheus 是一个 AI 小说生产工作台，目标是把“灵感 - 结构 - �
 
 ## 1. 功能概览
 
-- 项目管理：创建/查看/删除项目，维护类型、风格、目标字数
-- 章节工作台：章节计划、草稿生成、审阅提交、冲突检测
-- 一句话整卷/整本：按配置批量生成多章节（支持流式）
-- 记忆系统：写作记忆提交与检索（Identity / Entities / Events）
-- 知识图谱与轨迹回放：追踪决策链路与实体事件关系
-- 导出能力：章节导出、整书导出（Markdown/TXT）
+**项目管理**
+- 创建/查看/删除项目，支持多种小说类型模板（玄幻、都市、科幻等）
+- 维护项目元信息：类型、风格、目标字数、世界观设定
+- 项目健康检查与自动修复
+
+**章节创作**
+- 章节计划生成：基于项目设定和记忆系统生成章节大纲
+- 流式草稿生成：实时显示 AI 创作过程
+- 多轮审阅：场景设定审查 + 文笔润色 + 最终定稿
+- 一键生成：支持单章节和整本书批量生成
+- 章节导出：Markdown / 纯文本格式
+
+**记忆系统**
+- L1 Identity：项目核心设定（世界观、主角、风格）
+- L2 Entities：人物、地点、物品等实体信息
+- L3 Events：关键事件与情节发展
+- 混合检索：全文搜索 + 向量相似度
+
+**可视化与分析**
+- 知识图谱：实体关系可视化（ELK 自动布局）
+- 决策轨迹回放：追踪每个章节的 Agent 决策过程
 - 质量看板：统计指标、项目概览、健康检查
+- 阅读模式：沉浸式阅读体验
+
+**一致性保障**
+- 自动冲突检测：人物性格、事件逻辑、世界观规则
+- 记忆召回：创作时自动检索相关历史信息
+- 轨迹审计：完整记录每次生成的决策链路
 
 ## 2. 系统架构
 
 ```
-Browser (React)
-  -> /api (Vite Proxy)
-FastAPI Backend
-  -> Agent Studio / LLM Client
-  -> Consistency Engine
-  -> Memory Store (SQLite + Vector)
-  -> Data files in ../data
+┌─────────────────────────────────────────────────────────────┐
+│                     Browser (React SPA)                      │
+│  ┌──────────┬──────────┬──────────┬──────────┬──────────┐  │
+│  │ 项目列表 │ 创作控制台│ 章节工作台│ 知识图谱 │ 质量看板 │  │
+│  └──────────┴──────────┴──────────┴──────────┴──────────┘  │
+│                    Zustand State + React Query               │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                         Vite Proxy (/api)
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                    FastAPI Backend (Uvicorn)                 │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │              REST API + SSE Streaming                 │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────┬──────────────┬──────────────────────┐  │
+│  │ Agent Studio │ Memory Store │ Consistency Engine    │  │
+│  │ (4 Agents)   │ (3 Layers)   │ (Conflict Detection)  │  │
+│  └──────────────┴──────────────┴──────────────────────┘  │
+│  ┌──────────────┬──────────────┬──────────────────────┐  │
+│  │ LLM Client   │ Vector Store │ SQLite Database       │  │
+│  │ (Multi-LLM)  │ (LanceDB)    │ (Projects/Chapters)   │  │
+│  └──────────────┴──────────────┴──────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                    ┌─────────┴─────────┐
+                    │                   │
+            ┌───────▼────────┐  ┌──────▼──────┐
+            │ OpenAI / MiniMax│  │  DeepSeek   │
+            │   GPT-4 / M2.5  │  │ deepseek-chat│
+            └─────────────────┘  └─────────────┘
 ```
 
-运行时特点：
-- 支持 `minimax`、`openai`、`deepseek` 三种 LLM provider
-- 支持远程/离线回退策略（缺少 API Key 时可降级）
-- 流式生成通过 SSE 返回事件（`outline_ready`、`chapter_chunk`、`done` 等）
+**运行时特点**
+- 多 LLM 支持：OpenAI / MiniMax / DeepSeek，支持运行时切换
+- 智能降级：API Key 缺失时自动降级到本地模拟模式
+- 流式生成：通过 SSE 实时推送生成进度（outline_ready / chapter_chunk / done）
+- 多 Worker 部署：推荐 2+ workers 避免长时间生成阻塞读取接口
+- 异步 Agent：所有 Agent 调用异步化，提升并发性能
 
 ## 3. 目录结构
 
@@ -70,158 +135,330 @@ Morpheus/
 
 ## 5. 快速启动
 
-### 5.1 后端
+### 5.1 环境要求
 
-先配置环境变量：
+- Python `>=3.11`
+- Node.js `>=18`
+- npm `>=9`
+
+### 5.2 后端启动
+
+**1. 配置环境变量**
 
 ```bash
-cp /Volumes/Work/Projects/Morpheus/backend/.env.example /Volumes/Work/Projects/Morpheus/backend/.env
+cp backend/.env.example backend/.env
 ```
 
-在 `/Volumes/Work/Projects/Morpheus/backend/.env` 中至少配置：
+在 `backend/.env` 中配置 LLM Provider（三选一）：
 
 ```env
+# 选项 1: MiniMax
 LLM_PROVIDER=minimax
-REMOTE_LLM_ENABLED=true
 MINIMAX_API_KEY=your-minimax-api-key
 MINIMAX_MODEL=MiniMax-M2.5
-
-# 若使用 DeepSeek：
-# LLM_PROVIDER=deepseek
-# DEEPSEEK_API_KEY=your-deepseek-api-key
-# DEEPSEEK_BASE_URL=https://api.deepseek.com
-# DEEPSEEK_MODEL=deepseek-chat
-
 EMBEDDING_MODEL=embo-01
 EMBEDDING_DIMENSION=1024
-REMOTE_EMBEDDING_ENABLED=false
+
+# 选项 2: DeepSeek（推荐）
+# LLM_PROVIDER=deepseek
+# DEEPSEEK_API_KEY=your-deepseek-api-key
+# DEEPSEEK_MODEL=deepseek-chat
+
+# 选项 3: OpenAI
+# LLM_PROVIDER=openai
+# OPENAI_API_KEY=your-openai-api-key
+# OPENAI_MODEL=gpt-4-turbo-preview
+
+# 通用配置
+REMOTE_LLM_ENABLED=true
+API_WORKERS=2
 ```
 
-启动后端：
+**2. 启动服务**
 
 ```bash
-cd /Volumes/Work/Projects/Morpheus/backend
-# 推荐多 worker（避免长时间生文阻塞读取接口）
+cd backend
+# 使用项目脚本（推荐）
 API_WORKERS=2 ./scripts/run_api.sh
-```
 
-如未使用项目内 `venv`，可选使用 Poetry：
-
-```bash
-cd /Volumes/Work/Projects/Morpheus/backend
+# 或使用 Poetry
 poetry install
 API_WORKERS=2 poetry run uvicorn api.main:app --host 127.0.0.1 --port 8000 --workers 2
 ```
 
-### 5.2 前端
+### 5.3 前端启动
 
 ```bash
-cd /Volumes/Work/Projects/Morpheus/frontend
+cd frontend
 npm install
 npm run dev
 ```
 
-默认访问：
-- 前端：[http://localhost:3000](http://localhost:3000)
-- 后端健康检查：[http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+**访问地址**
+- 前端：http://localhost:3000
+- 后端健康检查：http://127.0.0.1:8000/api/health
+- 后端 API 文档：http://127.0.0.1:8000/docs
 
-说明：前端通过 Vite Proxy 将 `/api` 代理到 `http://localhost:8000`。
+> 前端通过 Vite Proxy 将 `/api` 代理到 `http://localhost:8000`
 
-## 6. 常用开发命令
+## 6. 开发指南
 
-### 前端
+### 6.1 前端开发
 
 ```bash
-cd /Volumes/Work/Projects/Morpheus/frontend
+cd frontend
+
+# 开发服务器
 npm run dev
+
+# 构建生产版本
 npm run build
-npm run test
-npm run test:e2e
+
+# 运行测试
+npm run test              # 单元测试
+npm run test:e2e          # E2E 测试
+npm run test:e2e:ui       # E2E 测试 UI 模式
+
+# 代码检查
+npm run lint
 ```
 
-E2E 说明：
-- 用例目录：`/Volumes/Work/Projects/Morpheus/frontend/e2e`
-- Playwright 配置：`/Volumes/Work/Projects/Morpheus/frontend/playwright.config.ts`
-- 默认要求前后端已启动（`3002` 与 `8000`）；可通过环境变量覆盖：
-  - `E2E_APP_BASE_URL`
-  - `E2E_API_BASE_URL`
+**测试说明**
+- 单元测试：Vitest + Testing Library
+- 属性测试：fast-check（关键业务逻辑）
+- E2E 测试：Playwright（完整用户流程）
+- 测试覆盖：`frontend/e2e/` 目录
 
-### 后端
+### 6.2 后端开发
 
 ```bash
-cd /Volumes/Work/Projects/Morpheus/backend
-venv/bin/python -m pytest -q
-venv/bin/python -m ruff check .
+cd backend
+
+# 运行测试
+python -m pytest -v
+
+# 代码检查
+python -m ruff check .
+python -m ruff format .
+
+# 类型检查
+python -m mypy .
 ```
 
-## 7. 关键 API（节选）
+### 6.3 项目结构
 
-项目与运行时：
-- `GET /api/projects`
-- `POST /api/projects`
-- `GET /api/projects/{project_id}`
-- `GET /api/projects/health`
-- `POST /api/projects/health/repair`
-- `GET /api/runtime/llm`
+```
+Morpheus/
+├── backend/
+│   ├── api/main.py              # FastAPI 主入口
+│   ├── agents/studio.py         # Agent Studio 与 4 个角色
+│   ├── core/
+│   │   ├── llm_client.py        # LLM 客户端（多 Provider）
+│   │   └── story_templates.py   # 故事模板系统
+│   ├── memory/                  # 三层记忆系统
+│   │   ├── __init__.py          # MemoryStore
+│   │   └── search.py            # 混合检索引擎
+│   ├── services/
+│   │   └── consistency.py       # 一致性检查
+│   └── tests/                   # 后端测试
+├── frontend/
+│   ├── src/
+│   │   ├── pages/               # 页面组件
+│   │   ├── components/          # UI 组件
+│   │   ├── stores/              # Zustand 状态管理
+│   │   ├── services/            # 业务服务
+│   │   └── hooks/               # 自定义 Hooks
+│   └── e2e/                     # E2E 测试
+└── data/                        # 运行时数据
+    ├── projects/                # 项目数据
+    ├── logs/                    # 日志文件
+    └── vectors/                 # 向量数据库
+```
 
-章节与生成：
-- `POST /api/chapters`
-- `GET /api/chapters/{chapter_id}`
-- `POST /api/chapters/{chapter_id}/plan`
-- `POST /api/chapters/{chapter_id}/draft`
-- `GET /api/chapters/{chapter_id}/draft/stream`
-- `POST /api/chapters/{chapter_id}/one-shot`
-- `POST /api/projects/{project_id}/one-shot-book`
-- `POST /api/projects/{project_id}/one-shot-book/stream`
+## 7. API 文档
 
-记忆与一致性：
-- `POST /api/memory/commit`
-- `GET /api/memory/query`
-- `POST /api/consistency/check`
-- `POST /api/review`
+### 7.1 项目管理
 
-可视化与分析：
-- `GET /api/trace/{chapter_id}`
-- `GET /api/entities/{project_id}`
-- `GET /api/events/{project_id}`
-- `GET /api/metrics`
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/projects` | GET | 获取项目列表 |
+| `/api/projects` | POST | 创建新项目（支持模板） |
+| `/api/projects/{id}` | GET | 获取项目详情 |
+| `/api/projects/{id}` | DELETE | 删除项目 |
+| `/api/projects/health` | GET | 项目健康检查 |
+| `/api/projects/health/repair` | POST | 修复项目数据 |
 
-## 8. 前端页面路由
+### 7.2 章节创作
 
-- `/`：项目列表
-- `/project/:projectId`：项目详情
-- `/project/:projectId/write`：创作控制台
-- `/project/:projectId/chapter/:chapterId`：章节工作台
-- `/project/:projectId/memory`：记忆浏览器
-- `/project/:projectId/graph`：知识图谱
-- `/project/:projectId/trace/:chapterId`：决策轨迹回放
-- `/dashboard`：评测看板
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/chapters` | POST | 创建章节 |
+| `/api/chapters/{id}` | GET | 获取章节详情 |
+| `/api/chapters/{id}/plan` | POST | 生成章节计划 |
+| `/api/chapters/{id}/draft` | POST | 生成章节草稿 |
+| `/api/chapters/{id}/draft/stream` | GET | 流式生成草稿（SSE） |
+| `/api/chapters/{id}/one-shot` | POST | 一键生成章节 |
+| `/api/projects/{id}/one-shot-book` | POST | 批量生成整本书 |
+| `/api/projects/{id}/one-shot-book/stream` | GET | 流式生成整本书（SSE） |
+
+### 7.3 记忆系统
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/memory/commit` | POST | 提交记忆（L1/L2/L3） |
+| `/api/memory/query` | GET | 查询记忆（混合检索） |
+| `/api/entities/{project_id}` | GET | 获取实体列表 |
+| `/api/events/{project_id}` | GET | 获取事件列表 |
+
+### 7.4 可视化与分析
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/trace/{chapter_id}` | GET | 获取决策轨迹 |
+| `/api/metrics` | GET | 获取质量指标 |
+| `/api/consistency/check` | POST | 一致性检查 |
+| `/api/review` | POST | 章节审阅 |
+
+### 7.5 运行时信息
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/runtime/llm` | GET | 获取 LLM 运行时状态 |
+| `/api/health` | GET | 健康检查 |
+
+完整 API 文档：http://127.0.0.1:8000/docs
+
+## 8. 前端路由
+
+| 路径 | 页面 | 说明 |
+|------|------|------|
+| `/` | 项目列表 | 查看所有项目，创建新项目 |
+| `/project/:id` | 项目详情 | 项目概览、章节列表、设定管理 |
+| `/project/:id/write` | 创作控制台 | 流式生成、实时预览、批量创作 |
+| `/project/:id/chapter/:chapterId` | 章节工作台 | 章节编辑、计划生成、审阅提交 |
+| `/project/:id/memory` | 记忆浏览器 | 查看和管理三层记忆 |
+| `/project/:id/graph` | 知识图谱 | 实体关系可视化 |
+| `/project/:id/trace/:chapterId` | 决策轨迹 | Agent 决策过程回放 |
+| `/dashboard` | 质量看板 | 项目统计、质量指标、健康检查 |
 
 ## 9. 常见问题
 
-1. 前端请求 404/连接失败
-- 确保后端运行在 `127.0.0.1:8000`
-- 确保前端运行在 `3000`，且 `vite.config.ts` 代理未改坏
+### 9.1 前端连接失败
 
-2. 生成结果一直是降级文本
-- 检查 `/api/runtime/llm` 的 `remote_effective` 与 `remote_ready`
-- 核对 `.env` 中 provider 与 API Key 是否匹配
+**问题**：前端请求 404 或连接失败
 
-3. Embedding 相关报错
-- MiniMax 建议使用 `EMBEDDING_MODEL=embo-01`
-- 确保 `EMBEDDING_DIMENSION` 与模型一致（MiniMax 为 1024）
+**解决方案**：
+1. 确保后端运行在 `127.0.0.1:8000`
+2. 确保前端运行在 `localhost:3000`
+3. 检查 `frontend/vite.config.ts` 中的代理配置
 
-4. 日志排查
-- 可在 `.env` 开启：`ENABLE_HTTP_LOGGING=true`
-- 可设置：`LOG_FILE=../data/logs/app.log`
+### 9.2 LLM 降级模式
+
+**问题**：生成结果一直是降级文本（"This is a fallback response..."）
+
+**解决方案**：
+1. 访问 `/api/runtime/llm` 检查运行时状态
+2. 确认 `remote_effective: true` 和 `remote_ready: true`
+3. 核对 `.env` 中 `LLM_PROVIDER` 与 API Key 是否匹配
+4. 检查 API Key 是否有效且有余额
+
+### 9.3 Embedding 错误
+
+**问题**：向量检索相关报错
+
+**解决方案**：
+1. MiniMax 使用 `EMBEDDING_MODEL=embo-01`
+2. 确保 `EMBEDDING_DIMENSION=1024`（MiniMax）
+3. 检查 `REMOTE_EMBEDDING_ENABLED` 配置
+
+### 9.4 多 Worker 配置
+
+**问题**：长时间生成时其他接口响应慢
+
+**解决方案**：
+1. 设置 `API_WORKERS=2` 或更多
+2. 使用 `./scripts/run_api.sh` 启动
+3. 或手动指定：`uvicorn api.main:app --workers 2`
+
+### 9.5 日志排查
+
+**启用详细日志**：
+```env
+ENABLE_HTTP_LOGGING=true
+LOG_FILE=../data/logs/app.log
+LOG_LEVEL=DEBUG
+```
+
+**查看日志**：
+```bash
+tail -f data/logs/app.log
+```
 
 ## 10. 相关文档
 
-- 快速启动：`/Volumes/Work/Projects/Morpheus/docs/QUICKSTART.md`
-- 需求文档：`/Volumes/Work/Projects/Morpheus/docs/novelist-agent-requirements.md`
-- 深度除虫报告：`/Volumes/Work/Projects/Morpheus/docs/问题文档/深度除虫报告-2026-02-15.md`
-- UI/UX 审计：`/Volumes/Work/Projects/Morpheus/docs/问题文档/UIUX全面翻新审计-2026-02-15.md`
+- [快速启动指南](docs/QUICKSTART.md) - 详细的环境配置和启动步骤
+- [需求文档](docs/novelist-agent-requirements.md) - 完整的产品需求说明
+- [深度除虫报告](docs/问题文档/深度除虫报告-2026-02-15.md) - 系统性问题排查
+- [UI/UX 审计](docs/问题文档/UIUX全面翻新审计-2026-02-15.md) - 前端体验优化
+
+## 11. 技术特性
+
+### 11.1 多 Agent 协作
+
+- **Director**：负责章节整体规划和初稿生成
+- **Setter**：审查场景设定和世界观一致性
+- **Stylist**：优化文笔和叙事节奏
+- **Arbiter**：最终定稿和质量把关
+
+### 11.2 三层记忆系统
+
+- **L1 Identity**：项目核心设定，全局唯一
+- **L2 Entities**：人物、地点、物品等实体，支持增量更新
+- **L3 Events**：关键事件，按时间线组织
+
+### 11.3 混合检索引擎
+
+- 全文搜索（FTS）：基于 SQLite FTS5
+- 向量检索：基于 LanceDB + Embedding
+- 混合排序：结合关键词匹配和语义相似度
+
+### 11.4 流式生成
+
+- SSE（Server-Sent Events）实时推送
+- 支持事件类型：`outline_ready` / `chapter_chunk` / `done` / `error`
+- 前端实时渲染，提升用户体验
+
+### 11.5 测试覆盖
+
+- 单元测试：Vitest + Testing Library
+- 属性测试：fast-check（关键业务逻辑）
+- E2E 测试：Playwright（完整用户流程）
+- 测试覆盖率：>80%
+
+## 12. 贡献指南
+
+欢迎提交 Issue 和 Pull Request！
+
+**开发流程**：
+1. Fork 项目
+2. 创建特性分支：`git checkout -b feature/amazing-feature`
+3. 提交更改：`git commit -m 'feat: 添加某个功能'`
+4. 推送分支：`git push origin feature/amazing-feature`
+5. 提交 Pull Request
+
+**Commit 规范**：
+- `feat`: 新功能
+- `fix`: 修复 Bug
+- `docs`: 文档更新
+- `style`: 代码格式调整
+- `refactor`: 重构
+- `test`: 测试相关
+- `chore`: 构建/工具链相关
+
+## 13. 许可证
+
+MIT License
 
 ---
 
-如果你希望，我可以再补一版「面向产品/运营」的 README（非技术版），把功能和使用流程写成更易读的用户手册。
+**项目状态**：活跃开发中 | **版本**：1.0.0 | **最后更新**：2026-02-18
