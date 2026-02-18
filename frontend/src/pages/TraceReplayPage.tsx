@@ -56,6 +56,21 @@ function getRoleStyle(role: string) {
     return AGENT_ROLE_COLORS[role] ?? { color: 'rgba(167,192,222,0.2)', borderColor: 'rgba(167,192,222,0.4)', label: role }
 }
 
+function sanitizeDecisionText(text?: string) {
+    if (!text) return ''
+    return text
+        .replace(/<\s*think(?:ing)?\s*>[\s\S]*?<\s*\/\s*think(?:ing)?\s*>/gi, '')
+        .replace(/```(?:thinking|reasoning)\s*[\s\S]*?```/gi, '')
+        .replace(/^\s*(thinking|thoughts?|reasoning)\s*[:：].*(?:\n|$)/gim, '')
+        .trim()
+}
+
+function formatDecisionTime(timestamp: string) {
+    const date = new Date(timestamp)
+    if (Number.isNaN(date.getTime())) return '--:--:--'
+    return date.toLocaleTimeString()
+}
+
 /* ── SVG 图标 ── */
 
 export const IconReplay = () => (
@@ -232,6 +247,10 @@ export default function TraceReplayPage() {
                                             {trace.decisions.map((decision, index) => {
                                                 const roleStyle = getRoleStyle(decision.agent_role)
                                                 const isSelected = selectedDecisionId === decision.id
+                                                const previewText =
+                                                    sanitizeDecisionText(decision.decision_text) ||
+                                                    sanitizeDecisionText(decision.reasoning) ||
+                                                    '（暂无可展示文本）'
                                                 return (
                                                     <motion.button
                                                         key={decision.id}
@@ -245,6 +264,10 @@ export default function TraceReplayPage() {
                                                             textAlign: 'left',
                                                             background: isSelected ? roleStyle.color : undefined,
                                                             borderLeft: `3px solid ${roleStyle.borderColor}`,
+                                                            display: 'block',
+                                                            width: '100%',
+                                                            padding: '10px 12px',
+                                                            whiteSpace: 'normal',
                                                             boxShadow: isSelected
                                                                 ? `inset 0 0 0 1px ${roleStyle.borderColor}`
                                                                 : undefined,
@@ -255,11 +278,11 @@ export default function TraceReplayPage() {
                                                                 {index + 1}. <span style={{ color: roleStyle.borderColor }}>{roleStyle.label}</span>
                                                             </span>
                                                             <span className="metric-label">
-                                                                {new Date(decision.timestamp).toLocaleTimeString()}
+                                                                {formatDecisionTime(decision.timestamp)}
                                                             </span>
                                                         </div>
                                                         <div className="line-clamp-2 muted" style={{ marginTop: 6 }}>
-                                                            {decision.decision_text}
+                                                            {previewText}
                                                         </div>
                                                     </motion.button>
                                                 )
@@ -299,15 +322,15 @@ export default function TraceReplayPage() {
                                             <article className="card-strong" style={{ padding: 12 }}>
                                                 <div className="metric-label">决策文本</div>
                                                 <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
-                                                    {selectedDecision.decision_text}
+                                                    {sanitizeDecisionText(selectedDecision.decision_text) || '（暂无可展示文本）'}
                                                 </div>
                                             </article>
 
-                                            {selectedDecision.reasoning && (
+                                            {sanitizeDecisionText(selectedDecision.reasoning) && (
                                                 <article className="card-strong" style={{ padding: 12 }}>
                                                     <div className="metric-label">推理过程</div>
                                                     <div style={{ marginTop: 8, whiteSpace: 'pre-wrap', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-                                                        {selectedDecision.reasoning}
+                                                        {sanitizeDecisionText(selectedDecision.reasoning)}
                                                     </div>
                                                 </article>
                                             )}

@@ -76,12 +76,21 @@ const projectSubNav: SubNavItem[] = [
 export default function Sidebar() {
     const location = useLocation()
     const currentProject = useProjectStore((s) => s.currentProject)
+    const projectError = useProjectStore((s) => s.projectError)
     const collapsed = useUIStore((s) => s.sidebarCollapsed)
     const toggleSidebar = useUIStore((s) => s.toggleSidebar)
     const recentItems = useRecentAccessStore((s) => s.items)
 
     const projectIdMatch = location.pathname.match(/^\/project\/([^/]+)/)
     const projectId = projectIdMatch ? projectIdMatch[1] : null
+    const projectResolved = Boolean(projectId && currentProject?.id === projectId)
+    const projectNotFound = Boolean(
+        projectId &&
+        !projectResolved &&
+        typeof projectError === 'string' &&
+        /not found|项目不存在/.test(projectError.toLowerCase()),
+    )
+    const showProjectSubNav = Boolean(projectId) && !projectNotFound
 
     return (
         <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`} role="navigation" aria-label="主导航">
@@ -109,11 +118,11 @@ export default function Sidebar() {
                     </NavLink>
                 </div>
 
-                {projectId && (
+                {showProjectSubNav && (
                     <div className="sidebar__section">
                         {!collapsed && (
                             <span className="sidebar__section-title">
-                                {currentProject?.name ?? '当前项目'}
+                                {projectResolved ? currentProject?.name : '当前项目'}
                             </span>
                         )}
                         {projectSubNav.map((item) => {

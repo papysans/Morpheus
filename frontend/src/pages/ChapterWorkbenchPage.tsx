@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
-import { AnimatePresence } from 'framer-motion'
 import { api } from '../lib/api'
 import { useProjectStore } from '../stores/useProjectStore'
 import { useToastStore } from '../stores/useToastStore'
@@ -10,7 +9,7 @@ import { useUIStore } from '../stores/useUIStore'
 import { useAutoSave } from '../hooks/useAutoSave'
 import ChapterExportMenu from '../components/chapter/ChapterExportMenu'
 import DisabledTooltip from '../components/ui/DisabledTooltip'
-import ReadingModeToolbar from '../components/ui/ReadingModeToolbar'
+import ReadingModeView from '../components/ui/ReadingModeView'
 import Skeleton from '../components/ui/Skeleton'
 import PageTransition from '../components/ui/PageTransition'
 import type { ChapterContent } from '../services/exportService'
@@ -66,6 +65,97 @@ interface StreamDonePayload {
 
 type OneShotMode = 'studio' | 'quick' | 'cinematic'
 
+type BlueprintDetailItem = {
+    title: string
+    detail: string
+}
+
+const BLUEPRINT_NOISE_TOKENS = new Set([
+    'id',
+    'description',
+    'type',
+    'item',
+    'target',
+    'source_chapter',
+    'potential_use',
+])
+
+function cleanBlueprintText(raw: string): string {
+    const text = String(raw || '')
+        .replace(/\s+/g, ' ')
+        .replace(/^[-•*]\s*/, '')
+        .trim()
+    if (!text) return ''
+    if (BLUEPRINT_NOISE_TOKENS.has(text.toLowerCase())) return ''
+    return text
+}
+
+function parseBlueprintDetailItems(
+    values: string[],
+    options: {
+        titleKeys: string[]
+        detailKeys: string[]
+        ignoreKeys?: string[]
+    },
+): BlueprintDetailItem[] {
+    const titleKeys = new Set(options.titleKeys.map((k) => k.toLowerCase()))
+    const detailKeys = new Set(options.detailKeys.map((k) => k.toLowerCase()))
+    const ignoreKeys = new Set((options.ignoreKeys || []).map((k) => k.toLowerCase()))
+    const items: BlueprintDetailItem[] = []
+
+    for (const raw of values) {
+        const parts = String(raw || '')
+            .split(/\s*\/\s*/)
+            .map((part) => part.trim())
+            .filter(Boolean)
+
+        if (parts.length >= 4) {
+            let currentTitle = ''
+            let currentDetail = ''
+            const pushCurrent = () => {
+                const title = cleanBlueprintText(currentTitle)
+                const detail = cleanBlueprintText(currentDetail)
+                if (!title && !detail) return
+                items.push({
+                    title: title || '未命名线索',
+                    detail: detail || '',
+                })
+            }
+
+            for (let i = 0; i < parts.length; i += 1) {
+                const token = parts[i]
+                const key = token.toLowerCase()
+                const next = i + 1 < parts.length ? parts[i + 1] : ''
+                if (titleKeys.has(key)) {
+                    if (currentTitle || currentDetail) pushCurrent()
+                    currentTitle = next
+                    currentDetail = ''
+                    i += 1
+                    continue
+                }
+                if (detailKeys.has(key)) {
+                    currentDetail = next
+                    i += 1
+                    continue
+                }
+                if (ignoreKeys.has(key)) {
+                    i += 1
+                    continue
+                }
+            }
+            if (currentTitle || currentDetail) pushCurrent()
+            continue
+        }
+
+        const cleaned = cleanBlueprintText(raw)
+        if (cleaned) {
+            items.push({ title: cleaned, detail: '' })
+        }
+    }
+
+    return items
+}
+
 export default function ChapterWorkbenchPage() {
     const { projectId, chapterId } = useParams<{ projectId: string; chapterId: string }>()
     const navigate = useNavigate()
@@ -89,6 +179,7 @@ export default function ChapterWorkbenchPage() {
     const [oneShotPrompt, setOneShotPrompt] = useState('')
     const [oneShotMode, setOneShotMode] = useState<OneShotMode>('studio')
     const [oneShotWords, setOneShotWords] = useState(1600)
+    const [oneShotWordsInput, setOneShotWordsInput] = useState('1600')
     const [oneShotLoading, setOneShotLoading] = useState(false)
     const [loadingPlan, setLoadingPlan] = useState(false)
     const [streaming, setStreaming] = useState(false)
@@ -194,6 +285,35 @@ export default function ChapterWorkbenchPage() {
         [chapter],
     )
 
+    const blueprintBeats = useMemo(
+        () => (chapter?.plan?.beats || []).map(cleanBlueprintText).filter(Boolean),
+        [chapter?.plan?.beats],
+    )
+
+    const blueprintConflicts = useMemo(
+        () => (chapter?.plan?.conflicts || []).map(cleanBlueprintText).filter(Boolean),
+        [chapter?.plan?.conflicts],
+    )
+
+    const blueprintForeshadowing = useMemo(
+        () =>
+            parseBlueprintDetailItems(chapter?.plan?.foreshadowing || [], {
+                titleKeys: ['item', '伏笔', '埋伏笔'],
+                detailKeys: ['description', '说明'],
+            }),
+        [chapter?.plan?.foreshadowing],
+    )
+
+    const blueprintCallbacks = useMemo(
+        () =>
+            parseBlueprintDetailItems(chapter?.plan?.callback_targets || [], {
+                titleKeys: ['target', '回收目标'],
+                detailKeys: ['potential_use', '用途', '回收方式'],
+                ignoreKeys: ['source_chapter'],
+            }),
+        [chapter?.plan?.callback_targets],
+    )
+
     /* ── 章节导航（阅读模式用） ── */
     const sortedChapters = useMemo(
         () => [...storeChapters].sort((a, b) => a.chapter_number - b.chapter_number),
@@ -212,6 +332,16 @@ export default function ChapterWorkbenchPage() {
             if (ch && projectId) navigate(`/project/${projectId}/chapter/${ch.id}`)
         },
         [sortedChapters, projectId, navigate],
+    )
+    const readingTocItems = useMemo(
+        () =>
+            sortedChapters.map((ch, idx) => ({
+                id: ch.id,
+                label: `第${ch.chapter_number}章 · ${ch.title || '未命名章节'}`,
+                active: idx === currentChapterIndex,
+                onClick: () => navigateToChapter(idx),
+            })),
+        [sortedChapters, currentChapterIndex, navigateToChapter],
     )
 
     /* ── 导出数据 ── */
@@ -464,39 +594,27 @@ export default function ChapterWorkbenchPage() {
     /* ── 阅读模式 ── */
     if (readingMode) {
         const rawContent = chapter.final || chapter.draft || draftContent || ''
-        console.log('[阅读模式] 原始内容长度:', rawContent.length)
-        console.log('[阅读模式] 原始内容前200字:', rawContent.substring(0, 200))
-
-        // 清洗内容：移除 <think>、评价性标签等
         const displayContent = rawContent
             .replace(/<think>[\s\S]*?<\/think>/gi, '')
             .replace(/【.*?】/g, '')
             .replace(/\[.*?\]/g, '')
             .trim()
 
-        console.log('[阅读模式] 清洗后内容长度:', displayContent.length)
-        console.log('[阅读模式] 清洗后内容前200字:', displayContent.substring(0, 200))
-        console.log('[阅读模式] chapter.final:', chapter.final ? '存在' : '不存在')
-        console.log('[阅读模式] chapter.draft:', chapter.draft ? '存在' : '不存在')
-        console.log('[阅读模式] draftContent:', draftContent ? '存在' : '不存在')
-
         return (
             <PageTransition>
-                <AnimatePresence>
-                    <ReadingModeToolbar
-                        onExit={exitReadingMode}
-                        onPrevChapter={hasPrevChapter ? () => navigateToChapter(currentChapterIndex - 1) : undefined}
-                        onNextChapter={hasNextChapter ? () => navigateToChapter(currentChapterIndex + 1) : undefined}
-                        hasPrev={hasPrevChapter}
-                        hasNext={hasNextChapter}
-                        currentLabel={`第 ${chapter.chapter_number} 章 · ${chapter.title}`}
-                    />
-                </AnimatePresence>
-                <div className="reading-content">
-                    <div className="stream-paper" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.9 }}>
-                        {displayContent || '暂无内容'}
-                    </div>
-                </div>
+                <ReadingModeView
+                    content={displayContent}
+                    contentType="markdown"
+                    emptyText="暂无内容"
+                    tocItems={readingTocItems}
+                    tocTitle="章节目录"
+                    onExit={exitReadingMode}
+                    onPrevChapter={hasPrevChapter ? () => navigateToChapter(currentChapterIndex - 1) : undefined}
+                    onNextChapter={hasNextChapter ? () => navigateToChapter(currentChapterIndex + 1) : undefined}
+                    hasPrev={hasPrevChapter}
+                    hasNext={hasNextChapter}
+                    currentLabel={`第 ${chapter.chapter_number} 章 · ${chapter.title}`}
+                />
             </PageTransition>
         )
     }
@@ -546,31 +664,86 @@ export default function ChapterWorkbenchPage() {
                             <h2 className="section-title">章节蓝图</h2>
                             {!chapter.plan && <p className="muted">尚未生成蓝图。</p>}
                             {chapter.plan && (
-                                <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
-                                    <div>
-                                        <div className="metric-label">节拍</div>
-                                        <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 20 }}>
-                                            {chapter.plan.beats.map((item, i) => (
-                                                <li key={i}>{item}</li>
-                                            ))}
-                                        </ul>
+                                <div className="blueprint-panel">
+                                    <div className="blueprint-group">
+                                        <div className="blueprint-group__head">
+                                            <div className="metric-label">节拍</div>
+                                            <span className="chip">{blueprintBeats.length}</span>
+                                        </div>
+                                        {blueprintBeats.length === 0 && (
+                                            <p className="muted" style={{ margin: '6px 0 0' }}>暂无节拍。</p>
+                                        )}
+                                        {blueprintBeats.length > 0 && (
+                                            <ol className="blueprint-list">
+                                                {blueprintBeats.map((item, i) => (
+                                                    <li key={`${item}-${i}`} className="blueprint-item">
+                                                        <span className="blueprint-item__index">{i + 1}</span>
+                                                        <p className="blueprint-item__text">{item}</p>
+                                                    </li>
+                                                ))}
+                                            </ol>
+                                        )}
                                     </div>
-                                    <div>
-                                        <div className="metric-label">冲突点</div>
-                                        <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 20 }}>
-                                            {chapter.plan.conflicts.map((item, i) => (
-                                                <li key={i}>{item}</li>
-                                            ))}
-                                        </ul>
+
+                                    <div className="blueprint-group">
+                                        <div className="blueprint-group__head">
+                                            <div className="metric-label">冲突点</div>
+                                            <span className="chip p1">{blueprintConflicts.length}</span>
+                                        </div>
+                                        {blueprintConflicts.length === 0 && (
+                                            <p className="muted" style={{ margin: '6px 0 0' }}>暂无冲突点。</p>
+                                        )}
+                                        {blueprintConflicts.length > 0 && (
+                                            <ul className="blueprint-list">
+                                                {blueprintConflicts.map((item, i) => (
+                                                    <li key={`${item}-${i}`} className="blueprint-item blueprint-item--conflict">
+                                                        <span className="blueprint-item__tag">冲突</span>
+                                                        <p className="blueprint-item__text">{item}</p>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
                                     </div>
-                                    <div>
-                                        <div className="metric-label">伏笔与回收</div>
-                                        <p style={{ marginTop: 6, marginBottom: 4 }}>
-                                            埋伏笔：{chapter.plan.foreshadowing.join(' / ') || '无'}
-                                        </p>
-                                        <p style={{ margin: 0 }}>
-                                            回收目标：{chapter.plan.callback_targets.join(' / ') || '无'}
-                                        </p>
+
+                                    <div className="blueprint-group">
+                                        <div className="blueprint-group__head">
+                                            <div className="metric-label">伏笔与回收</div>
+                                        </div>
+                                        <div className="blueprint-grid">
+                                            <article className="blueprint-detail-card">
+                                                <div className="blueprint-detail-card__title">埋伏笔</div>
+                                                {blueprintForeshadowing.length === 0 && (
+                                                    <p className="muted" style={{ margin: '6px 0 0' }}>暂无伏笔。</p>
+                                                )}
+                                                {blueprintForeshadowing.length > 0 && (
+                                                    <ul className="blueprint-detail-list">
+                                                        {blueprintForeshadowing.map((item, i) => (
+                                                            <li key={`${item.title}-${i}`} className="blueprint-detail-item">
+                                                                <p className="blueprint-detail-item__title">{item.title}</p>
+                                                                {item.detail && <p className="blueprint-detail-item__detail">{item.detail}</p>}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                )}
+                                            </article>
+
+                                            <article className="blueprint-detail-card">
+                                                <div className="blueprint-detail-card__title">回收目标</div>
+                                                {blueprintCallbacks.length === 0 && (
+                                                    <p className="muted" style={{ margin: '6px 0 0' }}>暂无回收目标。</p>
+                                                )}
+                                                {blueprintCallbacks.length > 0 && (
+                                                    <ul className="blueprint-detail-list">
+                                                        {blueprintCallbacks.map((item, i) => (
+                                                            <li key={`${item.title}-${i}`} className="blueprint-detail-item">
+                                                                <p className="blueprint-detail-item__title">{item.title}</p>
+                                                                {item.detail && <p className="blueprint-detail-item__detail">{item.detail}</p>}
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                )}
+                                            </article>
+                                        </div>
                                     </div>
                                 </div>
                             )}
@@ -645,8 +818,31 @@ export default function ChapterWorkbenchPage() {
                                         type="number"
                                         min={300}
                                         max={12000}
-                                        value={oneShotWords}
-                                        onChange={(e) => setOneShotWords(Number(e.target.value) || 1600)}
+                                        value={oneShotWordsInput}
+                                        onChange={(e) => {
+                                            const raw = e.target.value
+                                            if (!/^\d*$/.test(raw)) return
+                                            setOneShotWordsInput(raw)
+                                            if (!raw) return
+                                            const parsed = Number(raw)
+                                            if (Number.isFinite(parsed)) {
+                                                setOneShotWords(parsed)
+                                            }
+                                        }}
+                                        onBlur={() => {
+                                            if (!oneShotWordsInput.trim()) {
+                                                setOneShotWordsInput(String(oneShotWords))
+                                                return
+                                            }
+                                            const parsed = Number(oneShotWordsInput)
+                                            if (!Number.isFinite(parsed)) {
+                                                setOneShotWordsInput(String(oneShotWords))
+                                                return
+                                            }
+                                            const normalized = Math.max(300, Math.min(12000, parsed))
+                                            setOneShotWords(normalized)
+                                            setOneShotWordsInput(String(normalized))
+                                        }}
                                         disabled={streaming || oneShotLoading}
                                         style={{ width: 130 }}
                                     />

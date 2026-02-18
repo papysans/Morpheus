@@ -1,0 +1,22 @@
+{
+  "stamp": "2026-02-17T15-46-23-684Z",
+  "validProjectId": "d2b853d3-b35e-45f1-a452-a1f0e7e7513e",
+  "validProjectName": "probe-create-912784",
+  "projectDetailOk": true,
+  "graphOk": true,
+  "traceOk": true,
+  "consoleErrors": [
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "获取章节列表失败 AxiosError: Request failed with status code 404\n    at settle (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1281:12)\n    at XMLHttpRequest.onloadend (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1638:7)\n    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)\n    at async fetchChapters (http://localhost:3002/src/stores/useProjectStore.ts?t=1771342678034:109:26)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "AxiosError: Request failed with status code 404\n    at settle (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1281:12)\n    at XMLHttpRequest.onloadend (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1638:7)\n    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)\n    at async Promise.all (index 0)\n    at async loadData (http://localhost:3002/src/pages/KnowledgeGraphPage.tsx?t=1771342678034:343:37)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "AxiosError: Request failed with status code 404\n    at settle (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1281:12)\n    at XMLHttpRequest.onloadend (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1638:7)\n    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)\n    at async Promise.all (index 0)\n    at async loadData (http://localhost:3002/src/pages/KnowledgeGraphPage.tsx?t=1771342678034:343:37)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "获取章节列表失败 AxiosError: Request failed with status code 404\n    at settle (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1281:12)\n    at XMLHttpRequest.onloadend (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1638:7)\n    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)\n    at async fetchChapters (http://localhost:3002/src/stores/useProjectStore.ts?t=1771342678034:109:26)",
+    "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "获取章节列表失败 AxiosError: Request failed with status code 404\n    at settle (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1281:12)\n    at XMLHttpRequest.onloadend (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1638:7)\n    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)\n    at async fetchChapters (http://localhost:3002/src/stores/useProjectStore.ts?t=1771342678034:109:26)"
+  ],
+  "pageErrors": []
+}

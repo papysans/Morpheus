@@ -1,7 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import WritingConsolePage from '../WritingConsolePage'
+
+/* ── localStorage mock ── */
+
+const localStorageMock = (() => {
+    let store: Record<string, string> = {}
+    return {
+        getItem: vi.fn((key: string) => (key in store ? store[key] : null)),
+        setItem: vi.fn((key: string, value: string) => {
+            store[key] = String(value)
+        }),
+        removeItem: vi.fn((key: string) => {
+            delete store[key]
+        }),
+        clear: vi.fn(() => {
+            store = {}
+        }),
+    }
+})()
+
+Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, writable: true })
 
 /* ── Mocks ── */
 
@@ -76,9 +96,9 @@ vi.mock('../../stores/useUIStore', () => ({
 
 /* ── Helpers ── */
 
-function renderPage() {
+function renderPage(initialPath = '/project/proj-1/write') {
     return render(
-        <MemoryRouter initialEntries={['/project/proj-1/write']}>
+        <MemoryRouter initialEntries={[initialPath]}>
             <Routes>
                 <Route path="/project/:projectId/write" element={<WritingConsolePage />} />
             </Routes>
@@ -91,6 +111,7 @@ function renderPage() {
 describe('WritingConsolePage', () => {
     beforeEach(() => {
         vi.clearAllMocks()
+        localStorageMock.clear()
         mockStreamStore.sections = []
         mockStreamStore.chapters = []
         mockStreamStore.logs = []
@@ -104,10 +125,24 @@ describe('WritingConsolePage', () => {
         expect(screen.getByText(/测试项目/)).toBeTruthy()
     })
 
+    it('route 项目与 currentProject 不一致时会重新拉取项目', async () => {
+        renderPage('/project/proj-2/write')
+        await waitFor(() => {
+            expect(mockProjectStore.fetchProject).toHaveBeenCalledWith('proj-2')
+        })
+    })
+
     it('渲染生成表单的 prompt 输入框', () => {
         renderPage()
         const textarea = screen.getByPlaceholderText(/一句话输入你的小说核心/)
         expect(textarea).toBeTruthy()
+    })
+
+    it('从项目概览带参进入时自动填充 prompt 与 scope', () => {
+        renderPage('/project/proj-1/write?prompt=%E6%B5%8B%E8%AF%95%E6%A2%97%E6%A6%82&scope=book')
+        const textarea = screen.getByPlaceholderText(/一句话输入你的小说核心/) as HTMLTextAreaElement
+        expect(textarea.value).toBe('测试梗概')
+        expect(screen.getByText('整本').className).toContain('active')
     })
 
     it('渲染模式选择按钮', () => {
@@ -337,5 +372,75 @@ describe('WritingConsolePage', () => {
         const input = screen.getByLabelText('章节数')
         fireEvent.focus(input)
         expect(input.className).not.toContain('field-error')
+    })
+
+    it('章节数支持先清空再输入新值', () => {
+        renderPage()
+        const input = screen.getByLabelText('章节数') as HTMLInputElement
+        fireEvent.change(input, { target: { value: '' } })
+        expect(input.value).toBe('')
+
+        fireEvent.change(input, { target: { value: '18' } })
+        expect(input.value).toBe('18')
+    })
+
+    it('每章字数支持先清空再输入新值', () => {
+        renderPage()
+        const input = screen.getByLabelText('每章目标字数') as HTMLInputElement
+        fireEvent.change(input, { target: { value: '' } })
+        expect(input.value).toBe('')
+
+        fireEvent.change(input, { target: { value: '2400' } })
+        expect(input.value).toBe('2400')
+    })
+
+    it('高级设置会按项目持久化并在重新进入后沿用', () => {
+        const { unmount } = renderPage()
+        const chapterInput = screen.getByLabelText('章节数') as HTMLInputElement
+        const wordsInput = screen.getByLabelText('每章目标字数') as HTMLInputElement
+        const bookBtn = screen.getByText('整本')
+        const quickBtn = screen.getByText('快速')
+        const autoApprove = screen.getByLabelText('无 P0 冲突自动审批') as HTMLInputElement
+
+        fireEvent.change(chapterInput, { target: { value: '16' } })
+        fireEvent.change(wordsInput, { target: { value: '2200' } })
+        fireEvent.click(bookBtn)
+        fireEvent.click(quickBtn)
+        fireEvent.click(autoApprove)
+
+        unmount()
+
+        renderPage()
+        expect((screen.getByLabelText('章节数') as HTMLInputElement).value).toBe('16')
+        expect((screen.getByLabelText('每章目标字数') as HTMLInputElement).value).toBe('2200')
+        expect(screen.getByText('整本').className).toContain('active')
+        expect(screen.getByText('快速').className).toContain('active')
+        expect((screen.getByLabelText('无 P0 冲突自动审批') as HTMLInputElement).checked).toBe(false)
+    })
+
+    it('初次加载不会弹出高级设置已保存提示', () => {
+        vi.useFakeTimers()
+        try {
+            renderPage()
+            vi.advanceTimersByTime(800)
+            expect(mockAddToast).not.toHaveBeenCalledWith('info', '高级设置已保存')
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('修改高级设置后会弹出已保存提示', () => {
+        vi.useFakeTimers()
+        try {
+            renderPage()
+            const input = screen.getByLabelText('章节数') as HTMLInputElement
+            fireEvent.change(input, { target: { value: '12' } })
+            fireEvent.blur(input)
+
+            vi.advanceTimersByTime(600)
+            expect(mockAddToast).toHaveBeenCalledWith('info', '高级设置已保存')
+        } finally {
+            vi.useRealTimers()
+        }
     })
 })

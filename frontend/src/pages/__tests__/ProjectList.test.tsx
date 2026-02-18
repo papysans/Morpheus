@@ -75,6 +75,20 @@ describe('ProjectListPage', () => {
         expect(screen.getByText(/还没有项目/)).toBeInTheDocument()
     })
 
+    it('shows timeout error state with reload action when projects request fails', () => {
+        const fetchProjects = vi.fn()
+        useProjectStore.setState({
+            loading: false,
+            projects: [],
+            projectsError: '请求超时：后端可能正在生成中，请稍后重试',
+            fetchProjects,
+        } as any)
+        renderPage()
+        expect(screen.getByText('请求超时：后端可能正在生成中，请稍后重试')).toBeInTheDocument()
+        fireEvent.click(screen.getByText('重新加载'))
+        expect(fetchProjects).toHaveBeenCalledWith({ force: true })
+    })
+
     it('renders project cards with correct data', () => {
         useProjectStore.setState({ projects: sampleProjects, loading: false })
         renderPage()
@@ -99,6 +113,38 @@ describe('ProjectListPage', () => {
         renderPage()
         fireEvent.click(screen.getByText('霜城编年史'))
         expect(mockNavigate).toHaveBeenCalledWith('/project/p1')
+    })
+
+    it('shows story template selector in create modal', () => {
+        useProjectStore.setState({ projects: [], loading: false })
+        renderPage()
+        fireEvent.click(screen.getByText('新建项目'))
+        expect(screen.getByText('创作模板')).toBeInTheDocument()
+        expect(screen.getByText('不使用模板（自由创作）')).toBeInTheDocument()
+    })
+
+    it('keeps focus on edited genre/style fields without jumping back to name', async () => {
+        useProjectStore.setState({ projects: [], loading: false })
+        renderPage()
+
+        fireEvent.click(screen.getByText('新建项目'))
+        const nameInput = screen.getByPlaceholderText('例如：霜城编年史')
+        const genreInput = screen.getByPlaceholderText('例如：赛博修仙 / 太空歌剧 / 克苏鲁')
+        const styleInput = screen.getByDisplayValue('冷峻现实主义')
+
+        await waitFor(() => expect(nameInput).toHaveFocus())
+
+        genreInput.focus()
+        expect(genreInput).toHaveFocus()
+        fireEvent.change(genreInput, { target: { value: '赛博修仙' } })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(genreInput).toHaveFocus()
+
+        styleInput.focus()
+        expect(styleInput).toHaveFocus()
+        fireEvent.change(styleInput, { target: { value: '硬核纪实' } })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        expect(styleInput).toHaveFocus()
     })
 
     it('shows toast on successful project creation', async () => {
@@ -138,6 +184,48 @@ describe('ProjectListPage', () => {
         })
     })
 
+    it('submits custom genre when creating project', async () => {
+        const createProject = vi.fn().mockResolvedValue('new-id')
+        useProjectStore.setState({ projects: [], loading: false, createProject } as any)
+        renderPage()
+
+        fireEvent.click(screen.getByText('新建项目'))
+        fireEvent.change(screen.getByPlaceholderText('例如：霜城编年史'), {
+            target: { value: '不靠谱事务所' },
+        })
+        fireEvent.change(screen.getByPlaceholderText('例如：赛博修仙 / 太空歌剧 / 克苏鲁'), {
+            target: { value: '赛博修仙' },
+        })
+        fireEvent.click(screen.getByText('创建项目'))
+
+        await waitFor(() => {
+            expect(createProject).toHaveBeenCalled()
+        })
+        expect(createProject).toHaveBeenCalledWith(
+            expect.objectContaining({
+                name: '不靠谱事务所',
+                genre: '赛博修仙',
+            }),
+        )
+    })
+
+    it('allows clearing and retyping target length without forcing 0', async () => {
+        useProjectStore.setState({ projects: [], loading: false })
+        renderPage()
+
+        fireEvent.click(screen.getByText('新建项目'))
+        const dialog = screen.getByRole('dialog')
+        const targetInput = dialog.querySelector('input[type="number"]') as HTMLInputElement
+        expect(targetInput).toBeTruthy()
+        expect(targetInput.value).toBe('300000')
+
+        fireEvent.change(targetInput, { target: { value: '' } })
+        expect(targetInput.value).toBe('')
+
+        fireEvent.change(targetInput, { target: { value: '80000' } })
+        expect(targetInput.value).toBe('80000')
+    })
+
     it('shows toast on successful project deletion', async () => {
         const deleteProject = vi.fn().mockResolvedValue(undefined)
         useProjectStore.setState({ projects: sampleProjects, loading: false, deleteProject } as any)
@@ -152,6 +240,52 @@ describe('ProjectListPage', () => {
             expect(toasts[0].type).toBe('success')
             expect(toasts[0].message).toBe('项目已删除')
         })
+    })
+
+    it('supports bulk selection and batch delete', async () => {
+        const deleteProjects = vi.fn().mockResolvedValue({
+            requested_count: 1,
+            deleted_count: 1,
+            missing_count: 0,
+            failed_count: 0,
+            deleted_ids: ['p1'],
+            missing_ids: [],
+            failed_ids: [],
+        })
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+        useProjectStore.setState({ projects: sampleProjects, loading: false, deleteProjects } as any)
+        renderPage()
+
+        fireEvent.click(screen.getByLabelText('选择项目 霜城编年史'))
+        fireEvent.click(screen.getByRole('button', { name: '批量删除 (1)' }))
+
+        await waitFor(() => {
+            expect(deleteProjects).toHaveBeenCalledWith(['p1'])
+        })
+        await waitFor(() => {
+            const toasts = useToastStore.getState().toasts
+            expect(toasts).toHaveLength(1)
+            expect(toasts[0].type).toBe('success')
+            expect(toasts[0].message).toContain('批量删除完成')
+        })
+        confirmSpy.mockRestore()
+    })
+
+    it('selects only filtered projects when using select-all action', () => {
+        useProjectStore.setState({ projects: sampleProjects, loading: false })
+        renderPage()
+
+        fireEvent.change(screen.getByLabelText('搜索项目'), {
+            target: { value: '星际' },
+        })
+        fireEvent.click(screen.getByRole('button', { name: '全选当前筛选 (1)' }))
+        fireEvent.click(screen.getByText('清空筛选'))
+
+        const p1Checkbox = screen.getByLabelText('选择项目 霜城编年史') as HTMLInputElement
+        const p2Checkbox = screen.getByLabelText('选择项目 星际迷途') as HTMLInputElement
+        expect(p1Checkbox.checked).toBe(false)
+        expect(p2Checkbox.checked).toBe(true)
+        expect(screen.getByRole('button', { name: '批量删除 (1)' })).toBeEnabled()
     })
 
     it('wraps content in PageTransition (framer-motion div)', () => {

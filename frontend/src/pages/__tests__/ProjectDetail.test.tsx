@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ProjectDetail from '../ProjectDetail'
 import { useProjectStore } from '../../stores/useProjectStore'
@@ -92,6 +92,31 @@ describe('ProjectDetailPage', () => {
         renderPage()
         expect(screen.getByText('项目不存在或加载失败')).toBeInTheDocument()
         expect(screen.getByText('返回项目列表')).toBeInTheDocument()
+    })
+
+    it('shows request error and allows retry when project request times out', () => {
+        const fetchProject = vi.fn()
+        useProjectStore.setState({
+            loading: false,
+            currentProject: null,
+            projectError: '请求超时：后端可能正在生成中，请稍后重试',
+            fetchProject,
+        } as any)
+        renderPage()
+        expect(screen.getByText('请求超时：后端可能正在生成中，请稍后重试')).toBeInTheDocument()
+        fireEvent.click(screen.getByText('重试加载'))
+        expect(fetchProject).toHaveBeenCalledWith('p1', { force: true })
+    })
+
+    it('does not render stale project when route projectId differs from currentProject.id', () => {
+        useProjectStore.setState({
+            loading: false,
+            currentProject: { ...sampleProject, id: 'p-other', name: '其他小说' } as any,
+            chapters: sampleChapters,
+        })
+        const { container } = renderPage('p1')
+        expect(screen.queryByText('其他小说')).not.toBeInTheDocument()
+        expect(container.querySelectorAll('.skeleton').length).toBeGreaterThan(0)
     })
 
     it('renders project details correctly', () => {
@@ -206,6 +231,15 @@ describe('ProjectDetailPage', () => {
             expect(screen.getByText('范围：1-999')).toBeInTheDocument()
         })
 
+        it('allows chapter_number input to clear then retype', () => {
+            const modal = openModal()
+            const numberInput = modal.querySelector('input[type="number"]') as HTMLInputElement
+            fireEvent.change(numberInput, { target: { value: '' } })
+            expect(numberInput.value).toBe('')
+            fireEvent.change(numberInput, { target: { value: '8' } })
+            expect(numberInput.value).toBe('8')
+        })
+
         it('does not show error when title has value on blur', () => {
             const modal = openModal()
             const titleInput = modal.querySelectorAll('input.input')[1] as HTMLInputElement
@@ -297,103 +331,25 @@ describe('ProjectDetailPage', () => {
         })
     })
 
-    describe('batch form field validation', () => {
+    describe('quick start entry', () => {
         beforeEach(() => {
             useProjectStore.setState({ currentProject: sampleProject, chapters: sampleChapters, loading: false })
         })
 
-        function getBatchSection() {
+        it('renders quick start section with synopsis textarea', () => {
             renderPage()
-            return screen.getByText('一句话整卷 / 整本').closest('section') as HTMLElement
-        }
-
-        it('shows hint on chapter_count focus', () => {
-            const section = getBatchSection()
-            const chapterInput = section.querySelector('input[type="number"][min="1"][max="60"]') as HTMLInputElement
-            fireEvent.focus(chapterInput)
-            expect(screen.getByText('推荐 8-12 章')).toBeInTheDocument()
+            expect(screen.getByText('创作起点')).toBeInTheDocument()
+            expect(screen.getByPlaceholderText('先写一句话梗概，带着它进入创作控制台继续生成。')).toBeInTheDocument()
         })
 
-        it('clears hint on chapter_count blur', () => {
-            const section = getBatchSection()
-            const chapterInput = section.querySelector('input[type="number"][min="1"][max="60"]') as HTMLInputElement
-            fireEvent.focus(chapterInput)
-            expect(screen.getByText('推荐 8-12 章')).toBeInTheDocument()
-            fireEvent.blur(chapterInput)
-            // Hint from batchFieldHints is cleared; validateField returns hint-type FieldError
-            // but the template renders fieldErrors with --error class, not --hint class
-            // So the focus hint disappears and no error shows for valid value
-            expect(section.querySelector('.field-message--hint')).not.toBeInTheDocument()
-        })
-
-        it('shows hint on words_per_chapter focus', () => {
-            const section = getBatchSection()
-            const wordsInput = section.querySelector('input[type="number"][min="300"][max="12000"]') as HTMLInputElement
-            fireEvent.focus(wordsInput)
-            expect(screen.getByText('推荐 1200-2000 字')).toBeInTheDocument()
-        })
-
-        it('clears hint on words_per_chapter blur', () => {
-            const section = getBatchSection()
-            const wordsInput = section.querySelector('input[type="number"][min="300"][max="12000"]') as HTMLInputElement
-            fireEvent.focus(wordsInput)
-            expect(screen.getByText('推荐 1200-2000 字')).toBeInTheDocument()
-            fireEvent.blur(wordsInput)
-            expect(section.querySelector('.field-message--hint')).not.toBeInTheDocument()
-        })
-
-        it('does not apply field-error class for valid chapter_count', () => {
-            const section = getBatchSection()
-            const chapterInput = section.querySelector('input[type="number"][min="1"][max="60"]') as HTMLInputElement
-            fireEvent.blur(chapterInput)
-            // Default value 8 is valid, validateField returns hint not error
-            expect(chapterInput.classList.contains('field-error')).toBe(false)
-        })
-
-        it('does not apply field-error class for valid words_per_chapter', () => {
-            const section = getBatchSection()
-            const wordsInput = section.querySelector('input[type="number"][min="300"][max="12000"]') as HTMLInputElement
-            fireEvent.blur(wordsInput)
-            // Default value 1600 is valid
-            expect(wordsInput.classList.contains('field-error')).toBe(false)
-        })
-    })
-
-    describe('BatchStateMachine integration', () => {
-        beforeEach(() => {
-            useProjectStore.setState({ currentProject: sampleProject, chapters: sampleChapters, loading: false })
-        })
-
-        it('does not render BatchStateMachine when batch state is idle', () => {
+        it('builds writing console link with prompt and scope', () => {
             renderPage()
-            expect(screen.queryByRole('region', { name: '批量生成状态' })).not.toBeInTheDocument()
-        })
-
-        it('renders BatchStateMachine when batch state is generating', async () => {
-            // Mock API to hang (never resolve) so we stay in generating state
-            mockApiPost.mockReturnValue(new Promise(() => { }))
-            renderPage()
-            const section = screen.getByText('一句话整卷 / 整本').closest('section') as HTMLElement
-            const textarea = section.querySelector('textarea') as HTMLTextAreaElement
+            const textarea = screen.getByPlaceholderText('先写一句话梗概，带着它进入创作控制台继续生成。')
             fireEvent.change(textarea, { target: { value: '测试梗概' } })
-            fireEvent.click(screen.getByText('一键生成'))
-            await waitFor(() => {
-                expect(screen.getByRole('region', { name: '批量生成状态' })).toBeInTheDocument()
-            })
-        })
+            fireEvent.change(screen.getByDisplayValue('整卷模式'), { target: { value: 'book' } })
 
-        it('renders BatchStateMachine with interrupted state on error', async () => {
-            mockApiPost.mockRejectedValue({ response: { data: { detail: '生成超时' } } })
-            renderPage()
-            const section = screen.getByText('一句话整卷 / 整本').closest('section') as HTMLElement
-            const textarea = section.querySelector('textarea') as HTMLTextAreaElement
-            fireEvent.change(textarea, { target: { value: '测试梗概' } })
-            fireEvent.click(screen.getByText('一键生成'))
-            await waitFor(() => {
-                expect(screen.getByRole('region', { name: '批量生成状态' })).toBeInTheDocument()
-            })
-            // The error message should appear in the BatchStateMachine's alert
-            expect(screen.getByRole('alert')).toHaveTextContent('生成超时')
+            const link = screen.getByText('进入创作控制台').closest('a')
+            expect(link).toHaveAttribute('href', '/project/p1/write?prompt=%E6%B5%8B%E8%AF%95%E6%A2%97%E6%A6%82&scope=book')
         })
     })
 })

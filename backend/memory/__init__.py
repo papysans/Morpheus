@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -146,10 +147,13 @@ class MemoryStore:
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=10.0)
         except sqlite3.OperationalError as exc:
             raise sqlite3.OperationalError(f"{exc} (db_path={self.db_path})") from exc
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=10000")
         return conn
 
     @contextmanager
@@ -277,11 +281,75 @@ class MemoryStore:
             )
             conn.commit()
 
+    def _extract_search_terms(self, query: str, limit: int = 12) -> List[str]:
+        raw = str(query or "").strip()
+        if not raw:
+            return []
+
+        terms = [term.strip() for term in raw.split() if term.strip()]
+        if len(terms) <= 1:
+            # Chinese prompts often have no whitespace; split by punctuation and
+            # further chunk long fragments so FTS can match meaningful pieces.
+            fragments = [frag.strip() for frag in re.split(r"[^\w\u4e00-\u9fff]+", raw) if frag.strip()]
+            expanded: List[str] = []
+            for frag in fragments:
+                if len(frag) <= 8:
+                    expanded.append(frag)
+                    continue
+
+                pieces = [p for p in re.split(r"[的了和与在并及且将被把对从向为是有再又都而并且]", frag) if p]
+                if pieces:
+                    expanded.extend(piece[:8] for piece in pieces if len(piece) >= 2)
+                    continue
+
+                # Last resort: chunk to short windows to avoid a single giant token.
+                expanded.extend(frag[idx : idx + 6] for idx in range(0, min(len(frag), 30), 6))
+
+            terms.extend(expanded)
+
+        deduped: List[str] = []
+        for term in terms:
+            cleaned = term.strip()
+            if len(cleaned) < 2:
+                continue
+            if cleaned in deduped:
+                continue
+            deduped.append(cleaned)
+            if len(deduped) >= 12:
+                break
+
+        return deduped[: max(limit, 1)]
+
     def _fts_query(self, query: str) -> str:
-        terms = [term.strip() for term in query.split() if term.strip()]
+        terms = self._extract_search_terms(query)
         if not terms:
             return '""'
         return " OR ".join(f'"{term}"' for term in terms)
+
+    def _search_like_terms(self, cursor: sqlite3.Cursor, query: str, top_k: int):
+        terms = self._extract_search_terms(query)
+        if not terms:
+            terms = [str(query or "").strip()]
+        terms = [term for term in terms if term]
+        if not terms:
+            return []
+
+        where = " OR ".join("(summary LIKE ? OR content LIKE ?)" for _ in terms)
+        params: List[Any] = []
+        for term in terms:
+            like_term = f"%{term}%"
+            params.extend([like_term, like_term])
+        params.append(top_k)
+        cursor.execute(
+            f"""
+            SELECT id, layer, source_path, summary, content, 0.0 AS score, '' AS evidence
+            FROM memory_items
+            WHERE {where}
+            LIMIT ?
+            """,
+            params,
+        )
+        return cursor.fetchall()
 
     def search_fts(self, query: str, top_k: int = 30) -> List[Dict[str, Any]]:
         with self._connection() as conn:
@@ -294,7 +362,7 @@ class MemoryStore:
                     m.summary,
                     m.content,
                     bm25(memory_fts) AS score,
-                    snippet(memory_fts, 1, '[', ']', ' ... ', 24) AS evidence
+                    snippet(memory_fts, 1, '[[H]]', '[[/H]]', ' ... ', 24) AS evidence
                 FROM memory_fts
                 JOIN memory_items m ON m.rowid = memory_fts.rowid
                 WHERE memory_fts MATCH ?
@@ -303,19 +371,14 @@ class MemoryStore:
             """
             try:
                 cursor.execute(sql, (self._fts_query(query), top_k))
+                rows = cursor.fetchall()
+                if not rows:
+                    rows = self._search_like_terms(cursor, query, top_k)
             except sqlite3.OperationalError:
-                cursor.execute(
-                    """
-                    SELECT id, layer, source_path, summary, content, 0.0 AS score, '' AS evidence
-                    FROM memory_items
-                    WHERE summary LIKE ? OR content LIKE ?
-                    LIMIT ?
-                    """,
-                    (f"%{query}%", f"%{query}%", top_k),
-                )
+                rows = self._search_like_terms(cursor, query, top_k)
 
             results: List[Dict[str, Any]] = []
-            for row in cursor.fetchall():
+            for row in rows:
                 results.append(
                     {
                         "item_id": row["id"],
@@ -482,6 +545,37 @@ class MemoryStore:
     def get_all_events(self) -> List[EventEdge]:
         return self.get_events()
 
+    def delete_events_for_chapter(self, chapter: int):
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM events WHERE chapter = ?", (chapter,))
+            conn.commit()
+
+    def _count_rows(self, table: str) -> int:
+        sql = f"SELECT COUNT(*) AS total FROM {table}"
+        try:
+            with self._connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql)
+                row = cursor.fetchone()
+                return int(row["total"] if row and row["total"] is not None else 0)
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            # Self-heal older/broken DB files that miss required schema tables.
+            self._init_db()
+            with self._connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql)
+                row = cursor.fetchone()
+                return int(row["total"] if row and row["total"] is not None else 0)
+
+    def get_entity_count(self) -> int:
+        return self._count_rows("entities")
+
+    def get_event_count(self) -> int:
+        return self._count_rows("events")
+
     def sync_file_memories(self):
         now = datetime.now()
         source_files: List[tuple[Layer, Path]] = [
@@ -499,6 +593,19 @@ class MemoryStore:
             if not content:
                 continue
             summary_seed = content.splitlines()[0] if content.splitlines() else file_path.name
+            # L3 items use frontmatter; prefer its human-readable summary field.
+            if layer == Layer.L3 and content.startswith("---"):
+                try:
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        metadata = yaml.safe_load(parts[1]) or {}
+                        summary_seed = str(
+                            metadata.get("summary")
+                            or metadata.get("type")
+                            or file_path.stem
+                        )
+                except Exception:
+                    pass
             digest = hashlib.sha1(content.encode("utf-8")).hexdigest()[:10]
             item = MemoryItem(
                 id=self._file_item_id(file_path),

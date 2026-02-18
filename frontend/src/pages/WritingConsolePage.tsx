@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { motion, AnimatePresence } from 'framer-motion'
 import PageTransition from '../components/ui/PageTransition'
@@ -7,7 +7,7 @@ import DisabledTooltip from '../components/ui/DisabledTooltip'
 import { validateField, type FieldError } from '../utils/validation'
 import ChapterTOC from '../components/chapter/ChapterTOC'
 import ChapterExportMenu from '../components/chapter/ChapterExportMenu'
-import ReadingModeToolbar from '../components/ui/ReadingModeToolbar'
+import ReadingModeView from '../components/ui/ReadingModeView'
 import type { ChapterContent } from '../services/exportService'
 import { useSSEStream } from '../hooks/useSSEStream'
 import { useStreamStore, type GenerationForm, type StreamChapter } from '../stores/useStreamStore'
@@ -15,6 +15,7 @@ import { useProjectStore } from '../stores/useProjectStore'
 import { useToastStore } from '../stores/useToastStore'
 import { useActivityStore } from '../stores/useActivityStore'
 import { useUIStore } from '../stores/useUIStore'
+import { STORY_TEMPLATE_PRESETS, getStoryTemplateById } from '../config/storyTemplates'
 
 /* ── SVG 图标 ── */
 
@@ -39,6 +40,39 @@ const SCOPE_LABELS: Record<string, string> = {
     book: '整本',
 }
 
+const CHAPTER_COUNT_RULE = { min: 1, max: 60, hint: '推荐 8-12 章' } as const
+const WORDS_PER_CHAPTER_RULE = { min: 300, max: 12000, hint: '推荐 1200-2000 字' } as const
+
+type PersistedWritingSettings = Pick<
+    GenerationForm,
+    'mode' | 'scope' | 'chapter_count' | 'words_per_chapter' | 'auto_approve'
+>
+
+function isDigitsOnly(value: string) {
+    return /^\d*$/.test(value)
+}
+
+function normalizePersistedSettings(raw: unknown): PersistedWritingSettings | null {
+    if (!raw || typeof raw !== 'object') return null
+    const data = raw as Partial<Record<keyof PersistedWritingSettings, unknown>>
+
+    const mode = data.mode === 'studio' || data.mode === 'quick' || data.mode === 'cinematic' ? data.mode : null
+    const scope = data.scope === 'volume' || data.scope === 'book' ? data.scope : null
+    const chapterCountNum = typeof data.chapter_count === 'number' ? data.chapter_count : Number(data.chapter_count)
+    const wordsNum = typeof data.words_per_chapter === 'number' ? data.words_per_chapter : Number(data.words_per_chapter)
+    const autoApprove = typeof data.auto_approve === 'boolean' ? data.auto_approve : true
+
+    if (!mode || !scope || Number.isNaN(chapterCountNum) || Number.isNaN(wordsNum)) return null
+
+    return {
+        mode,
+        scope,
+        chapter_count: Math.max(CHAPTER_COUNT_RULE.min, Math.min(CHAPTER_COUNT_RULE.max, Math.floor(chapterCountNum))),
+        words_per_chapter: Math.max(WORDS_PER_CHAPTER_RULE.min, Math.min(WORDS_PER_CHAPTER_RULE.max, Math.floor(wordsNum))),
+        auto_approve: autoApprove,
+    }
+}
+
 /* ── 脉冲加载指示器 ── */
 
 function PulseIndicator({ generated, total }: { generated: number; total: number }) {
@@ -56,6 +90,7 @@ function PulseIndicator({ generated, total }: { generated: number; total: number
 
 export default function WritingConsolePage() {
     const { projectId } = useParams<{ projectId: string }>()
+    const [searchParams, setSearchParams] = useSearchParams()
     const { start, stop, generating } = useSSEStream()
     const addToast = useToastStore((s) => s.addToast)
     const addRecord = useActivityStore((s) => s.addRecord)
@@ -73,7 +108,6 @@ export default function WritingConsolePage() {
     const exitReadingMode = useUIStore((s) => s.exitReadingMode)
 
     const streamRef = useRef<HTMLElement | null>(null)
-    const readingRef = useRef<HTMLElement | null>(null)
     const logRef = useRef<HTMLDivElement | null>(null)
 
     const [activeChapterIdx, setActiveChapterIdx] = useState(0)
@@ -86,15 +120,149 @@ export default function WritingConsolePage() {
         words_per_chapter: 1600,
         auto_approve: true,
     })
+    const [chapterCountInput, setChapterCountInput] = useState('8')
+    const [wordsPerChapterInput, setWordsPerChapterInput] = useState('1600')
 
     const [advErrors, setAdvErrors] = useState<Record<string, FieldError | null>>({})
+    const prefillAppliedRef = useRef(false)
+    const settingsLoadedRef = useRef<string | null>(null)
+    const settingsHydratedRef = useRef(false)
+    const skipNextSettingsToastRef = useRef(true)
+    const lastSavedSettingsRef = useRef<string | null>(null)
+    const settingsToastTimerRef = useRef<number | null>(null)
+
+    const settingsStorageKey = useMemo(
+        () => (projectId ? `writing-console-settings:${projectId}` : null),
+        [projectId],
+    )
+    const projectTemplate = useMemo(
+        () => getStoryTemplateById(currentProject?.template_id),
+        [currentProject?.template_id],
+    )
 
     /* ── 加载项目信息 ── */
     useEffect(() => {
-        if (projectId && !currentProject) {
+        if (projectId && currentProject?.id !== projectId) {
             fetchProject(projectId)
         }
     }, [projectId, currentProject, fetchProject])
+
+    /* ── 读取并持久化高级设置（按项目） ── */
+    useEffect(() => {
+        if (!settingsStorageKey) return
+        if (settingsLoadedRef.current === settingsStorageKey) return
+        settingsLoadedRef.current = settingsStorageKey
+        settingsHydratedRef.current = false
+        skipNextSettingsToastRef.current = true
+        try {
+            const raw = localStorage.getItem(settingsStorageKey)
+            if (!raw) return
+            const parsed = normalizePersistedSettings(JSON.parse(raw))
+            if (!parsed) return
+            lastSavedSettingsRef.current = JSON.stringify(parsed)
+            setForm((prev) => ({
+                ...prev,
+                ...parsed,
+            }))
+        } catch {
+            // Ignore localStorage parse/access failures.
+        } finally {
+            settingsHydratedRef.current = true
+        }
+    }, [settingsStorageKey])
+
+    useEffect(() => {
+        if (!settingsStorageKey || !settingsHydratedRef.current) return
+        const payload: PersistedWritingSettings = {
+            mode: form.mode,
+            scope: form.scope,
+            chapter_count: form.chapter_count,
+            words_per_chapter: form.words_per_chapter,
+            auto_approve: form.auto_approve,
+        }
+        const serialized = JSON.stringify(payload)
+        if (lastSavedSettingsRef.current === serialized) return
+        try {
+            localStorage.setItem(settingsStorageKey, serialized)
+            lastSavedSettingsRef.current = serialized
+            if (skipNextSettingsToastRef.current) {
+                skipNextSettingsToastRef.current = false
+                return
+            }
+            if (settingsToastTimerRef.current !== null) {
+                window.clearTimeout(settingsToastTimerRef.current)
+            }
+            settingsToastTimerRef.current = window.setTimeout(() => {
+                addToast('info', '高级设置已保存')
+                settingsToastTimerRef.current = null
+            }, 500)
+        } catch {
+            // Ignore localStorage write failures.
+        }
+    }, [
+        addToast,
+        settingsStorageKey,
+        form.mode,
+        form.scope,
+        form.chapter_count,
+        form.words_per_chapter,
+        form.auto_approve,
+    ])
+
+    useEffect(() => {
+        return () => {
+            if (settingsToastTimerRef.current !== null) {
+                window.clearTimeout(settingsToastTimerRef.current)
+            }
+        }
+    }, [])
+
+    useEffect(() => {
+        setChapterCountInput(String(form.chapter_count))
+    }, [form.chapter_count])
+
+    useEffect(() => {
+        setWordsPerChapterInput(String(form.words_per_chapter))
+    }, [form.words_per_chapter])
+
+    /* ── 从项目概览接收快速启动参数 ── */
+    useEffect(() => {
+        if (prefillAppliedRef.current) return
+
+        const prompt = searchParams.get('prompt')?.trim() ?? ''
+        const scope = searchParams.get('scope')
+        const hasPrompt = prompt.length > 0
+        const hasScope = scope === 'volume' || scope === 'book'
+
+        if (!hasPrompt && !hasScope) {
+            prefillAppliedRef.current = true
+            return
+        }
+
+        setForm((prev) => {
+            const next = { ...prev }
+            if (hasPrompt && !prev.prompt.trim()) {
+                next.prompt = prompt
+            }
+            if (scope === 'volume' || scope === 'book') {
+                next.scope = scope
+                if (scope === 'book') {
+                    next.chapter_count = Math.max(next.chapter_count, 12)
+                } else {
+                    next.chapter_count = Math.min(next.chapter_count, 10)
+                }
+            }
+            return next
+        })
+
+        prefillAppliedRef.current = true
+        setSearchParams((prev) => {
+            const next = new URLSearchParams(prev)
+            next.delete('prompt')
+            next.delete('scope')
+            return next
+        }, { replace: true })
+    }, [searchParams, setSearchParams])
 
     /* ── Escape 退出阅读模式 ── */
     useEffect(() => {
@@ -116,7 +284,22 @@ export default function WritingConsolePage() {
         setActiveChapterIdx((i) => Math.min(sections.length - 1, i + 1))
     }, [sections.length])
 
+    const selectReadingChapter = useCallback((idx: number) => {
+        setActiveChapterIdx(Math.max(0, Math.min(idx, sections.length - 1)))
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+    }, [sections.length])
+
     const activeSection = sections[activeChapterIdx]
+    const readingTocItems = useMemo(
+        () =>
+            sections.map((section, idx) => ({
+                id: section.chapterId,
+                label: `第${section.chapterNumber}章 · ${section.title}`,
+                active: idx === activeChapterIdx,
+                onClick: () => selectReadingChapter(idx),
+            })),
+        [sections, activeChapterIdx, selectReadingChapter],
+    )
 
     /* ── Markdown 合成 ── */
     const markdownText = useMemo(() => {
@@ -181,6 +364,19 @@ export default function WritingConsolePage() {
         }
     }
 
+    function applyTemplatePreset(templateId: string) {
+        const template = getStoryTemplateById(templateId)
+        if (!template) return
+        setForm((prev) => ({
+            ...prev,
+            scope: template.recommended.scope,
+            mode: template.recommended.mode,
+            chapter_count: template.recommended.chapterCount,
+            words_per_chapter: template.recommended.wordsPerChapter,
+        }))
+        addToast('info', `已套用模板参数：${template.name}`)
+    }
+
     /* ── 开始生成 ── */
     function handleStart() {
         if (!projectId || !form.prompt.trim() || generating) return
@@ -239,29 +435,23 @@ export default function WritingConsolePage() {
             : markdownText
 
         return (
-            <div className="reading-content">
-                <AnimatePresence>
-                    <ReadingModeToolbar
-                        onExit={exitReadingMode}
-                        onPrevChapter={goToPrevChapter}
-                        onNextChapter={goToNextChapter}
-                        hasPrev={activeChapterIdx > 0}
-                        hasNext={activeChapterIdx < sections.length - 1}
-                        currentLabel={
-                            activeSection
-                                ? `第${activeSection.chapterNumber}章 ${activeSection.title}`
-                                : undefined
-                        }
-                    />
-                </AnimatePresence>
-                <article className="stream-paper" ref={readingRef}>
-                    {readingMarkdown ? (
-                        <ReactMarkdown>{readingMarkdown}</ReactMarkdown>
-                    ) : (
-                        <p className="placeholder-text">暂无内容可阅读</p>
-                    )}
-                </article>
-            </div>
+            <ReadingModeView
+                content={readingMarkdown}
+                contentType="markdown"
+                emptyText="暂无内容可阅读"
+                tocItems={readingTocItems}
+                tocTitle="章节选择"
+                onExit={exitReadingMode}
+                onPrevChapter={goToPrevChapter}
+                onNextChapter={goToNextChapter}
+                hasPrev={activeChapterIdx > 0}
+                hasNext={activeChapterIdx < sections.length - 1}
+                currentLabel={
+                    activeSection
+                        ? `第${activeSection.chapterNumber}章 ${activeSection.title}`
+                        : undefined
+                }
+            />
         )
     }
 
@@ -275,11 +465,33 @@ export default function WritingConsolePage() {
                         <p className="writing-header__sub">
                             {currentProject?.name || '加载中…'} · {SCOPE_LABELS[form.scope]} · {MODE_LABELS[form.mode]}
                         </p>
+                        <p className="muted" style={{ marginTop: 6, marginBottom: 0, fontSize: '0.82rem' }}>
+                            本页负责一句话拆章与整卷/整本生成。章节细修、审批和冲突处理请在章节工作台完成。
+                        </p>
                     </div>
                     <div className="writing-header__presets">
                         <button className="chip-btn" onClick={() => applyPreset('fast')}>试跑 4 章</button>
                         <button className="chip-btn" onClick={() => applyPreset('standard')}>标准整卷</button>
                         <button className="chip-btn" onClick={() => applyPreset('sprint')}>整本冲刺</button>
+                        {projectTemplate && (
+                            <button
+                                className="chip-btn"
+                                onClick={() => applyTemplatePreset(projectTemplate.id)}
+                                title={projectTemplate.description}
+                            >
+                                套用项目模板
+                            </button>
+                        )}
+                        {STORY_TEMPLATE_PRESETS.slice(0, 4).map((template) => (
+                            <button
+                                key={template.id}
+                                className="chip-btn"
+                                onClick={() => applyTemplatePreset(template.id)}
+                                title={template.description}
+                            >
+                                {template.name}
+                            </button>
+                        ))}
                         {sections.length > 0 && (
                             <button className="chip-btn" onClick={enterReadingMode} title="进入阅读模式" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                                 <IconBookOpen /> 阅读模式
@@ -368,6 +580,11 @@ export default function WritingConsolePage() {
                                 onChange={(e) => setForm((p) => ({ ...p, prompt: e.target.value }))}
                                 placeholder="一句话输入你的小说核心：主角是谁、冲突是什么、目标是什么。"
                             />
+                            {projectTemplate && (
+                                <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.8rem' }}>
+                                    当前项目模板：{projectTemplate.name}。{projectTemplate.promptHint}
+                                </p>
+                            )}
 
                             <div className="composer-actions">
                                 <div className="mode-group">
@@ -429,22 +646,32 @@ export default function WritingConsolePage() {
                                             type="number"
                                             min={1}
                                             max={60}
-                                            value={form.chapter_count}
-                                            onChange={(e) =>
-                                                setForm((p) => ({ ...p, chapter_count: Number(e.target.value) || 1 }))
-                                            }
+                                            value={chapterCountInput}
+                                            onChange={(e) => {
+                                                const raw = e.target.value
+                                                if (!isDigitsOnly(raw)) return
+                                                setChapterCountInput(raw)
+                                                if (raw === '') return
+                                                setForm((p) => ({ ...p, chapter_count: Number(raw) }))
+                                            }}
                                             onFocus={() =>
                                                 setAdvErrors((prev) => ({
                                                     ...prev,
-                                                    chapter_count: validateField(form.chapter_count, { min: 1, max: 60, hint: '推荐 8-12 章' }),
+                                                    chapter_count: validateField(form.chapter_count, CHAPTER_COUNT_RULE),
                                                 }))
                                             }
-                                            onBlur={() =>
+                                            onBlur={() => {
+                                                if (chapterCountInput.trim() === '') {
+                                                    setChapterCountInput(String(form.chapter_count))
+                                                }
                                                 setAdvErrors((prev) => ({
                                                     ...prev,
-                                                    chapter_count: validateField(form.chapter_count, { min: 1, max: 60, hint: '推荐 8-12 章' }),
+                                                    chapter_count: validateField(
+                                                        chapterCountInput.trim() === '' ? form.chapter_count : Number(chapterCountInput),
+                                                        CHAPTER_COUNT_RULE,
+                                                    ),
                                                 }))
-                                            }
+                                            }}
                                         />
                                         {advErrors.chapter_count && (
                                             <span className={`field-message--${advErrors.chapter_count.type}`}>
@@ -460,22 +687,32 @@ export default function WritingConsolePage() {
                                             type="number"
                                             min={300}
                                             max={12000}
-                                            value={form.words_per_chapter}
-                                            onChange={(e) =>
-                                                setForm((p) => ({ ...p, words_per_chapter: Number(e.target.value) || 1600 }))
-                                            }
+                                            value={wordsPerChapterInput}
+                                            onChange={(e) => {
+                                                const raw = e.target.value
+                                                if (!isDigitsOnly(raw)) return
+                                                setWordsPerChapterInput(raw)
+                                                if (raw === '') return
+                                                setForm((p) => ({ ...p, words_per_chapter: Number(raw) }))
+                                            }}
                                             onFocus={() =>
                                                 setAdvErrors((prev) => ({
                                                     ...prev,
-                                                    words_per_chapter: validateField(form.words_per_chapter, { min: 300, max: 12000, hint: '推荐 1200-2000 字' }),
+                                                    words_per_chapter: validateField(form.words_per_chapter, WORDS_PER_CHAPTER_RULE),
                                                 }))
                                             }
-                                            onBlur={() =>
+                                            onBlur={() => {
+                                                if (wordsPerChapterInput.trim() === '') {
+                                                    setWordsPerChapterInput(String(form.words_per_chapter))
+                                                }
                                                 setAdvErrors((prev) => ({
                                                     ...prev,
-                                                    words_per_chapter: validateField(form.words_per_chapter, { min: 300, max: 12000, hint: '推荐 1200-2000 字' }),
+                                                    words_per_chapter: validateField(
+                                                        wordsPerChapterInput.trim() === '' ? form.words_per_chapter : Number(wordsPerChapterInput),
+                                                        WORDS_PER_CHAPTER_RULE,
+                                                    ),
                                                 }))
-                                            }
+                                            }}
                                         />
                                         {advErrors.words_per_chapter && (
                                             <span className={`field-message--${advErrors.words_per_chapter.type}`}>

@@ -21,6 +21,7 @@ beforeEach(() => {
         currentProject: null,
         chapters: [],
         loading: false,
+        projectError: null,
     })
     useUIStore.setState({
         sidebarCollapsed: false,
@@ -108,6 +109,16 @@ describe('Sidebar', () => {
         it('shows fallback "当前项目" when no currentProject', () => {
             renderSidebar('/project/p1')
             expect(screen.getByText('当前项目')).toBeInTheDocument()
+        })
+
+        it('hides project sub-nav when project is not found', () => {
+            useProjectStore.setState({
+                currentProject: null,
+                projectError: 'Project not found',
+            })
+            renderSidebar('/project/p1')
+            expect(screen.queryByText('项目概览')).not.toBeInTheDocument()
+            expect(screen.queryByText('创作控制台')).not.toBeInTheDocument()
         })
     })
 

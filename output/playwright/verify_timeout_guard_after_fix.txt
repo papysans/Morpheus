@@ -1,0 +1,44 @@
+projectList.uiProbe={"skeletonCount":0,"hasRetry":true,"pageText":"编剧室\n‹\n导航\n项目列表\n全局\n评测看板\n操作历史\n0\n创作项目\n\n以多 Agent 编剧室驱动你的长篇小说，保持设定一致与叙事张力。\n\n新建项目\n项目总数\n0\n章节总数\n0\n角色实体\n0\n事件节点\n0\n全部状态\n显示 0 / 0\n\n请求超时：后端可能正在生成中，请稍后重试\n\n重新加载"}
+--- projectList logs ---
+[console:debug] [vite] connecting...
+[console:debug] [vite] connected.
+[console:info] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold
+[console:warning] ⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+[console:warning] ⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+[console:error] 获取项目列表失败 AxiosError: timeout of 8000ms exceeded
+    at XMLHttpRequest.handleTimeout (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1680:14)
+    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)
+    at async fetchProjects (http://localhost:3002/src/stores/useProjectStore.ts?t=1771335433943:56:26)
+[console:error] 获取项目列表失败 AxiosError: timeout of 8000ms exceeded
+    at XMLHttpRequest.handleTimeout (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1680:14)
+    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)
+    at async fetchProjects (http://localhost:3002/src/stores/useProjectStore.ts?t=1771335433943:56:26)
+[requestfailed] GET http://localhost:3002/api/projects :: net::ERR_ABORTED
+[requestfailed] GET http://localhost:3002/api/projects :: net::ERR_ABORTED
+projectDetail.uiProbe={"skeletonCount":0,"hasRetry":true,"pageText":"编剧室\n‹\n导航\n项目列表\n当前项目\n项目概览\n创作控制台\n章节工作台\n记忆浏览器\n知识图谱\n决策回放\n全局\n评测看板\n操作历史\n0\n\n请求超时：后端可能正在生成中，请稍后重试\n\n重试加载\n返回项目列表"}
+--- projectDetail logs ---
+[console:debug] [vite] connecting...
+[console:debug] [vite] connected.
+[console:info] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold
+[console:warning] ⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+[console:warning] ⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+[console:error] 获取项目详情失败 AxiosError: timeout of 8000ms exceeded
+    at XMLHttpRequest.handleTimeout (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1680:14)
+    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)
+    at async fetchProject (http://localhost:3002/src/stores/useProjectStore.ts?t=1771335433943:80:26)
+[console:error] 获取章节列表失败 AxiosError: timeout of 8000ms exceeded
+    at XMLHttpRequest.handleTimeout (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1680:14)
+    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)
+    at async fetchChapters (http://localhost:3002/src/stores/useProjectStore.ts?t=1771335433943:109:26)
+[requestfailed] GET http://localhost:3002/api/projects/p1 :: net::ERR_ABORTED
+[console:error] 获取项目详情失败 AxiosError: timeout of 8000ms exceeded
+    at XMLHttpRequest.handleTimeout (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1680:14)
+    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)
+    at async fetchProject (http://localhost:3002/src/stores/useProjectStore.ts?t=1771335433943:80:26)
+[console:error] 获取章节列表失败 AxiosError: timeout of 8000ms exceeded
+    at XMLHttpRequest.handleTimeout (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:1680:14)
+    at Axios.request (http://localhost:3002/node_modules/.vite/deps/axios.js?v=0f916d5d:2255:41)
+    at async fetchChapters (http://localhost:3002/src/stores/useProjectStore.ts?t=1771335433943:109:26)
+[requestfailed] GET http://localhost:3002/api/projects/p1/chapters :: net::ERR_ABORTED
+[requestfailed] GET http://localhost:3002/api/projects/p1 :: net::ERR_ABORTED
+[requestfailed] GET http://localhost:3002/api/projects/p1/chapters :: net::ERR_ABORTED

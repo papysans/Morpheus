@@ -39,7 +39,7 @@ FastAPI Backend
 ```
 
 运行时特点：
-- 支持 `minimax` 与 `openai` 两种 LLM provider
+- 支持 `minimax`、`openai`、`deepseek` 三种 LLM provider
 - 支持远程/离线回退策略（缺少 API Key 时可降级）
 - 流式生成通过 SSE 返回事件（`outline_ready`、`chapter_chunk`、`done` 等）
 
@@ -86,6 +86,12 @@ REMOTE_LLM_ENABLED=true
 MINIMAX_API_KEY=your-minimax-api-key
 MINIMAX_MODEL=MiniMax-M2.5
 
+# 若使用 DeepSeek：
+# LLM_PROVIDER=deepseek
+# DEEPSEEK_API_KEY=your-deepseek-api-key
+# DEEPSEEK_BASE_URL=https://api.deepseek.com
+# DEEPSEEK_MODEL=deepseek-chat
+
 EMBEDDING_MODEL=embo-01
 EMBEDDING_DIMENSION=1024
 REMOTE_EMBEDDING_ENABLED=false
@@ -95,7 +101,8 @@ REMOTE_EMBEDDING_ENABLED=false
 
 ```bash
 cd /Volumes/Work/Projects/Morpheus/backend
-venv/bin/python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+# 推荐多 worker（避免长时间生文阻塞读取接口）
+API_WORKERS=2 ./scripts/run_api.sh
 ```
 
 如未使用项目内 `venv`，可选使用 Poetry：
@@ -103,7 +110,7 @@ venv/bin/python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```bash
 cd /Volumes/Work/Projects/Morpheus/backend
 poetry install
-poetry run uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
+API_WORKERS=2 poetry run uvicorn api.main:app --host 127.0.0.1 --port 8000 --workers 2
 ```
 
 ### 5.2 前端
@@ -129,7 +136,15 @@ cd /Volumes/Work/Projects/Morpheus/frontend
 npm run dev
 npm run build
 npm run test
+npm run test:e2e
 ```
+
+E2E 说明：
+- 用例目录：`/Volumes/Work/Projects/Morpheus/frontend/e2e`
+- Playwright 配置：`/Volumes/Work/Projects/Morpheus/frontend/playwright.config.ts`
+- 默认要求前后端已启动（`3002` 与 `8000`）；可通过环境变量覆盖：
+  - `E2E_APP_BASE_URL`
+  - `E2E_API_BASE_URL`
 
 ### 后端
 

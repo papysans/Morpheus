@@ -7,13 +7,14 @@ import Skeleton from '../components/ui/Skeleton'
 import ProjectCreateModal from '../components/project/ProjectCreateModal'
 
 export default function ProjectList() {
-  const { projects, loading, fetchProjects, deleteProject } = useProjectStore()
+  const { projects, loading, projectsError, fetchProjects, deleteProject, deleteProjects } = useProjectStore()
   const addToast = useToastStore((s) => s.addToast)
   const navigate = useNavigate()
 
   const [showModal, setShowModal] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
 
   useEffect(() => {
     fetchProjects()
@@ -37,6 +38,12 @@ export default function ProjectList() {
     })
   }, [projects, searchKeyword, statusFilter])
 
+  const filteredProjectIds = useMemo(() => filteredProjects.map((project) => project.id), [filteredProjects])
+  const selectedInFilteredCount = useMemo(() => {
+    const filteredIdSet = new Set(filteredProjectIds)
+    return selectedProjectIds.filter((id) => filteredIdSet.has(id)).length
+  }, [filteredProjectIds, selectedProjectIds])
+
   const totals = useMemo(
     () => ({
       projects: filteredProjects.length,
@@ -47,6 +54,11 @@ export default function ProjectList() {
     [filteredProjects],
   )
 
+  useEffect(() => {
+    const existingIds = new Set(projects.map((project) => project.id))
+    setSelectedProjectIds((prev) => prev.filter((id) => existingIds.has(id)))
+  }, [projects])
+
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
     e.preventDefault()
@@ -55,6 +67,61 @@ export default function ProjectList() {
       addToast('success', '项目已删除')
     } catch {
       addToast('error', '删除项目失败，请重试')
+    }
+  }
+
+  const toggleProjectSelection = (id: string, selected: boolean) => {
+    setSelectedProjectIds((prev) => {
+      const current = new Set(prev)
+      if (selected) {
+        current.add(id)
+      } else {
+        current.delete(id)
+      }
+      return Array.from(current)
+    })
+  }
+
+  const handleSelectAllFiltered = () => {
+    const allFilteredSelected =
+      filteredProjectIds.length > 0 && filteredProjectIds.every((id) => selectedProjectIds.includes(id))
+    setSelectedProjectIds((prev) => {
+      const current = new Set(prev)
+      if (allFilteredSelected) {
+        filteredProjectIds.forEach((id) => current.delete(id))
+      } else {
+        filteredProjectIds.forEach((id) => current.add(id))
+      }
+      return Array.from(current)
+    })
+  }
+
+  const handleBatchDelete = async () => {
+    if (selectedProjectIds.length === 0) {
+      return
+    }
+    const confirmed = window.confirm(`确认删除已选中的 ${selectedProjectIds.length} 个项目？此操作不可恢复。`)
+    if (!confirmed) {
+      return
+    }
+    try {
+      const result = await deleteProjects(selectedProjectIds)
+      setSelectedProjectIds(result.failed_ids)
+
+      if (result.failed_count === 0 && result.deleted_count > 0) {
+        addToast('success', `批量删除完成：已删除 ${result.deleted_count} 个项目`)
+        return
+      }
+      if (result.deleted_count > 0 || result.missing_count > 0) {
+        addToast(
+          'warning',
+          `部分完成：删除 ${result.deleted_count}，缺失 ${result.missing_count}，失败 ${result.failed_count}`,
+        )
+        return
+      }
+      addToast('error', '批量删除失败，请重试')
+    } catch {
+      addToast('error', '批量删除失败，请重试')
     }
   }
 
@@ -131,13 +198,49 @@ export default function ProjectList() {
               </button>
             )}
           </div>
-          <span className="chip">显示 {filteredProjects.length} / {projects.length}</span>
+          <div className="list-toolbar__actions">
+            <button
+              className="btn btn-secondary"
+              onClick={handleSelectAllFiltered}
+              disabled={filteredProjects.length === 0}
+            >
+              {filteredProjects.length > 0 && selectedInFilteredCount === filteredProjects.length
+                ? '取消全选当前筛选'
+                : `全选当前筛选 (${filteredProjects.length})`}
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={() => setSelectedProjectIds([])}
+              disabled={selectedProjectIds.length === 0}
+            >
+              清空选择
+            </button>
+            <button
+              className="danger-btn"
+              onClick={handleBatchDelete}
+              disabled={selectedProjectIds.length === 0}
+            >
+              批量删除 ({selectedProjectIds.length})
+            </button>
+            <span className="chip">显示 {filteredProjects.length} / {projects.length}</span>
+          </div>
         </section>
 
         {/* 项目列表 */}
         <section className="project-list-grid">
           {loading && projects.length === 0 ? (
             <Skeleton variant="card" count={3} />
+          ) : projectsError && projects.length === 0 ? (
+            <div className="card" style={{ padding: 20 }}>
+              <p style={{ margin: 0 }}>{projectsError}</p>
+              <button
+                className="btn btn-secondary"
+                style={{ marginTop: 12 }}
+                onClick={() => void fetchProjects({ force: true })}
+              >
+                重新加载
+              </button>
+            </div>
           ) : projects.length === 0 ? (
             <div className="card" style={{ padding: 20 }}>
               <p className="muted" style={{ margin: 0 }}>
@@ -154,17 +257,32 @@ export default function ProjectList() {
             filteredProjects.map((project) => (
               <div
                 key={project.id}
-                className="card project-card"
+                className={`card project-card ${selectedProjectIds.includes(project.id) ? 'project-card--selected' : ''}`}
                 style={{ padding: 18, cursor: 'pointer' }}
                 onClick={() => navigate(`/project/${project.id}`)}
                 role="link"
                 tabIndex={0}
                 onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return
                   if (e.key === 'Enter' || e.key === ' ') navigate(`/project/${project.id}`)
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
                   <div>
+                    <label
+                      className="project-card__select"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedProjectIds.includes(project.id)}
+                        onChange={(e) => toggleProjectSelection(project.id, e.target.checked)}
+                        aria-label={`选择项目 ${project.name}`}
+                      />
+                      选择
+                    </label>
                     <h2
                       style={{
                         margin: 0,

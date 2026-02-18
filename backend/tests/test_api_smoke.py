@@ -1,6 +1,10 @@
 import unittest
 import os
+import shutil
+import json
+import sqlite3
 from pathlib import Path
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -8,7 +12,25 @@ from fastapi.testclient import TestClient
 os.environ["REMOTE_LLM_ENABLED"] = "false"
 os.environ["REMOTE_EMBEDDING_ENABLED"] = "false"
 
-from api.main import app, memory_stores
+from api.main import (
+    app,
+    extract_graph_role_names,
+    enforce_draft_target_words,
+    get_or_create_store,
+    trace_file,
+    memory_stores,
+    traces,
+    projects,
+    projects_root,
+    chapters,
+    data_root,
+    BACKEND_ROOT,
+    resolve_target_word_upper_bound,
+    settings,
+    upsert_graph_from_chapter,
+)
+from agents.studio import StudioWorkflow
+from models import AgentDecision, AgentRole, AgentTrace, EntityState, EventEdge, ProjectStatus, ChapterStatus, ChapterPlan, MemoryItem, Layer
 
 
 class NovelistApiSmokeTest(unittest.TestCase):
@@ -69,6 +91,231 @@ class NovelistApiSmokeTest(unittest.TestCase):
         self.assertEqual(trace_res.status_code, 200)
         self.assertGreaterEqual(len(trace_res.json()["decisions"]), 1)
 
+    def test_trace_replay_sanitizes_thinking_text(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=8)
+
+        traces[chapter_id] = AgentTrace(
+            id=f"trace-{uuid4().hex[:8]}",
+            chapter_id=8,
+            decisions=[
+                AgentDecision(
+                    id="decision-sanitize",
+                    agent_role=AgentRole.DIRECTOR,
+                    chapter_id=8,
+                    input_refs=[],
+                    decision_text="<think>internal</think>公开内容",
+                    reasoning="thinking: hidden\n可见解释",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            ],
+            memory_hits=[],
+            conflicts_detected=[],
+            final_draft="ok",
+        )
+
+        trace_res = self.client.get(f"/api/trace/{chapter_id}")
+        self.assertEqual(trace_res.status_code, 200)
+        decision = trace_res.json()["decisions"][0]
+        self.assertEqual(decision["decision_text"], "公开内容")
+        self.assertNotIn("<think>", decision["decision_text"])
+        self.assertIn("可见解释", decision["reasoning"])
+        self.assertNotIn("thinking:", decision["reasoning"].lower())
+
+    def test_graph_endpoints_sanitize_placeholder_role_names(self):
+        project_id = self._create_project()
+        store = get_or_create_store(project_id)
+        now = datetime.now(timezone.utc)
+
+        store.add_entity(
+            EntityState(
+                entity_id=f"entity-primary-{uuid4().hex[:8]}",
+                entity_type="character",
+                name="primary",
+                attrs={},
+                constraints=[],
+                first_seen_chapter=2,
+                last_seen_chapter=2,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        store.add_entity(
+            EntityState(
+                entity_id=f"entity-main-{uuid4().hex[:8]}",
+                entity_type="character",
+                name="主角",
+                attrs={},
+                constraints=[],
+                first_seen_chapter=1,
+                last_seen_chapter=3,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        store.add_entity(
+            EntityState(
+                entity_id=f"entity-secondary-{uuid4().hex[:8]}",
+                entity_type="character",
+                name="secondary",
+                attrs={},
+                constraints=[],
+                first_seen_chapter=2,
+                last_seen_chapter=2,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        store.add_entity(
+            EntityState(
+                entity_id=f"entity-hidden-{uuid4().hex[:8]}",
+                entity_type="character",
+                name="hidden",
+                attrs={},
+                constraints=[],
+                first_seen_chapter=2,
+                last_seen_chapter=2,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        store.add_event(
+            EventEdge(
+                event_id=f"event-placeholder-{uuid4().hex[:8]}",
+                subject="primary",
+                relation="progress",
+                object="secondary",
+                chapter=2,
+                timestamp=now,
+                confidence=0.6,
+                description="placeholder role names",
+            )
+        )
+        store.add_event(
+            EventEdge(
+                event_id=f"event-hidden-{uuid4().hex[:8]}",
+                subject="hidden",
+                relation="progress",
+                object="primary",
+                chapter=3,
+                timestamp=now,
+                confidence=0.6,
+                description="hidden should be dropped",
+            )
+        )
+
+        entities_res = self.client.get(f"/api/entities/{project_id}")
+        self.assertEqual(entities_res.status_code, 200)
+        names = [item["name"] for item in entities_res.json()]
+        self.assertIn("主角", names)
+        self.assertIn("关键配角", names)
+        self.assertNotIn("primary", names)
+        self.assertNotIn("secondary", names)
+        self.assertNotIn("hidden", names)
+        self.assertEqual(names.count("主角"), 1)
+
+        events_res = self.client.get(f"/api/events/{project_id}")
+        self.assertEqual(events_res.status_code, 200)
+        events_payload = events_res.json()
+        self.assertTrue(any(item["subject"] == "主角" and item.get("object") == "关键配角" for item in events_payload))
+        self.assertFalse(any(item["subject"] == "hidden" for item in events_payload))
+
+    def test_extract_plan_payload_handles_object_entries_and_role_goal_noise(self):
+        workflow = StudioWorkflow.__new__(StudioWorkflow)
+        chapter = chapters[self._create_chapter(self._create_project(), chapter_number=9)]
+        payload = """
+        {
+          "beats": [{"id":"b1","description":"陆仁甲在猪肉铺接单"}],
+          "conflicts": [{"type":"外部","description":"苏小柒与林晓阳意见冲突"}],
+          "foreshadowing": [{"item":"染血发卡"}],
+          "callback_targets": [{"target":"第一章笑脸留言","potential_use":"建立信任"}],
+          "role_goals": {"goal":"这不是角色名", "陆仁甲":"保护铺子", "苏小柒":"追查妹妹"}
+        }
+        """
+        parsed = workflow._extract_plan_payload(payload, chapter)
+        self.assertEqual(parsed["beats"], ["陆仁甲在猪肉铺接单"])
+        self.assertEqual(parsed["conflicts"], ["苏小柒与林晓阳意见冲突"])
+        self.assertEqual(parsed["foreshadowing"], ["染血发卡"])
+        self.assertEqual(parsed["callback_targets"], ["第一章笑脸留言"])
+        self.assertNotIn("goal", parsed["role_goals"])
+        self.assertEqual(parsed["role_goals"].get("陆仁甲"), "保护铺子")
+        self.assertEqual(parsed["role_goals"].get("苏小柒"), "追查妹妹")
+
+    def test_graph_upsert_extracts_names_when_role_goals_empty(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=10)
+        chapter = chapters[chapter_id]
+        chapter.plan = ChapterPlan(
+            id=f"plan-{uuid4().hex[:8]}",
+            chapter_id=chapter.chapter_number,
+            title=chapter.title,
+            goal=chapter.goal,
+            beats=[],
+            conflicts=[],
+            foreshadowing=[],
+            callback_targets=[],
+            role_goals={},
+        )
+        chapter.draft = (
+            "陆仁甲看着案板发呆。苏小柒低声说今天不对劲。"
+            "林晓阳问李教授是不是又来电话了。陆仁甲点头。"
+        )
+        store = get_or_create_store(project_id)
+        upsert_graph_from_chapter(store, chapter)
+
+        names = [item["name"] for item in self.client.get(f"/api/entities/{project_id}").json()]
+        self.assertIn("陆仁甲", names)
+        self.assertIn("苏小柒", names)
+        self.assertIn("林晓阳", names)
+        events = self.client.get(f"/api/events/{project_id}").json()
+        self.assertGreaterEqual(len(events), 2)
+
+    def test_graph_upsert_infers_non_progress_relation_with_conflict_text(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=11)
+        chapter = chapters[chapter_id]
+        chapter.goal = "陆仁甲与苏小柒产生正面冲突"
+        chapter.plan = ChapterPlan(
+            id=f"plan-{uuid4().hex[:8]}",
+            chapter_id=chapter.chapter_number,
+            title=chapter.title,
+            goal=chapter.goal,
+            beats=[],
+            conflicts=["两人冲突升级并产生对抗"],
+            foreshadowing=[],
+            callback_targets=[],
+            role_goals={},
+        )
+        chapter.draft = "陆仁甲与苏小柒在后巷激烈对抗，林晓阳试图劝阻。"
+        store = get_or_create_store(project_id)
+        upsert_graph_from_chapter(store, chapter)
+        events = self.client.get(f"/api/events/{project_id}").json()
+        self.assertTrue(any(event.get("relation") != "progress" for event in events))
+
+    def test_fts_query_splits_long_chinese_prompt_and_returns_hits(self):
+        project_id = self._create_project()
+        store = get_or_create_store(project_id)
+        now = datetime.now(timezone.utc)
+        store.add_memory_item(
+            MemoryItem(
+                id=f"memory-{uuid4().hex[:8]}",
+                layer=Layer.L3,
+                source_path="memory/L3/test.md",
+                summary="猪肉铺与万事屋线索",
+                content="陆仁甲在猪肉铺成立万事屋，苏小柒潜入后留下关键数据。",
+                entities=["陆仁甲", "苏小柒"],
+                importance=8,
+                recency=8,
+                created_at=now,
+                updated_at=now,
+                metadata={"kind": "test"},
+            )
+        )
+        query = "男主一在猪肉铺成立万事屋，首次接单帮邻居找猫后救下苏小柒"
+        results = store.search_fts(query, top_k=10)
+        self.assertGreaterEqual(len(results), 1)
+
     def test_memory_query_returns_results(self):
         project_id = self._create_project()
         chapter_id = self._create_chapter(project_id, chapter_number=3)
@@ -82,6 +329,56 @@ class NovelistApiSmokeTest(unittest.TestCase):
         )
         self.assertEqual(query_res.status_code, 200)
         self.assertGreaterEqual(query_res.json()["total"], 1)
+
+    def test_memory_source_file_endpoint(self):
+        project_id = self._create_project()
+        source_res = self.client.get(
+            f"/api/projects/{project_id}/memory/source",
+            params={"source_path": "memory/L1/IDENTITY.md"},
+        )
+        self.assertEqual(source_res.status_code, 200)
+        self.assertIn("IDENTITY", source_res.text)
+
+    def test_memory_source_file_rejects_path_traversal(self):
+        project_id = self._create_project()
+        source_res = self.client.get(
+            f"/api/projects/{project_id}/memory/source",
+            params={"source_path": "../project.json"},
+        )
+        self.assertEqual(source_res.status_code, 400)
+
+    def test_story_template_applies_to_project_identity(self):
+        templates_res = self.client.get("/api/story-templates")
+        self.assertEqual(templates_res.status_code, 200)
+        templates = templates_res.json().get("templates") or []
+        self.assertTrue(any(item.get("id") == "serial-gintama" for item in templates))
+
+        create_res = self.client.post(
+            "/api/projects",
+            json={
+                "name": f"模板项目-{uuid4().hex[:8]}",
+                "genre": "科幻喜剧",
+                "style": "吐槽热血",
+                "template_id": "serial-gintama",
+                "target_length": 320000,
+                "taboo_constraints": ["主角开局无敌"],
+            },
+        )
+        self.assertEqual(create_res.status_code, 200)
+        project_id = create_res.json()["id"]
+
+        project_res = self.client.get(f"/api/projects/{project_id}")
+        self.assertEqual(project_res.status_code, 200)
+        project_payload = project_res.json()
+        self.assertEqual(project_payload.get("template_id"), "serial-gintama")
+        self.assertIn("主角开局无敌", project_payload.get("taboo_constraints") or [])
+        self.assertIn("单章直接终结主线", project_payload.get("taboo_constraints") or [])
+
+        identity_res = self.client.get(f"/api/identity/{project_id}")
+        self.assertEqual(identity_res.status_code, 200)
+        identity = identity_res.json().get("content", "")
+        self.assertIn("Template Rules", identity)
+        self.assertIn("每章新增1个钩子", identity)
 
     def test_p0_conflict_blocks_approval(self):
         project_id = self._create_project(taboo_constraints=["禁词触发器"])
@@ -227,11 +524,13 @@ class NovelistApiSmokeTest(unittest.TestCase):
             "requested_provider",
             "effective_provider",
             "effective_model",
+            "effective_base_url",
             "remote_requested",
             "remote_effective",
             "remote_ready",
             "has_openai_key",
             "has_minimax_key",
+            "has_deepseek_key",
         ):
             self.assertIn(field, payload)
 
@@ -296,6 +595,243 @@ class NovelistApiSmokeTest(unittest.TestCase):
         target = next(item for item in projects_payload if item["id"] == project_id)
         self.assertEqual(target["entity_count"], 0)
         self.assertEqual(target["event_count"], 0)
+
+    def test_list_projects_self_heals_missing_graph_tables(self):
+        project_id = self._create_project()
+        store = get_or_create_store(project_id)
+
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute("DROP TABLE IF EXISTS entities")
+            conn.execute("DROP TABLE IF EXISTS events")
+            conn.commit()
+
+        res = self.client.get("/api/projects")
+        self.assertEqual(res.status_code, 200)
+        target = next(item for item in res.json() if item["id"] == project_id)
+        self.assertEqual(target["entity_count"], 0)
+        self.assertEqual(target["event_count"], 0)
+
+        repaired_store = get_or_create_store(project_id)
+        self.assertEqual(repaired_store.get_entity_count(), 0)
+        self.assertEqual(repaired_store.get_event_count(), 0)
+
+    def test_list_projects_purges_stale_in_memory_deleted_project(self):
+        project_id = self._create_project()
+        project_dir = projects_root() / project_id
+        self.assertTrue(project_dir.exists())
+
+        shutil.rmtree(project_dir)
+        self.assertFalse(project_dir.exists())
+        self.assertIn(project_id, projects)
+
+        res = self.client.get("/api/projects")
+        self.assertEqual(res.status_code, 200)
+        ids = [item["id"] for item in res.json()]
+        self.assertNotIn(project_id, ids)
+        self.assertNotIn(project_id, projects)
+
+    def test_delete_project_works_even_if_not_cached_in_worker(self):
+        project_id = self._create_project()
+        project_dir = projects_root() / project_id
+        self.assertTrue(project_dir.exists())
+
+        projects.pop(project_id, None)
+        res = self.client.delete(f"/api/projects/{project_id}")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "deleted")
+        self.assertFalse(project_dir.exists())
+
+    def test_batch_delete_projects_handles_deleted_and_missing_items(self):
+        project_a = self._create_project()
+        project_b = self._create_project()
+        dir_a = projects_root() / project_a
+        dir_b = projects_root() / project_b
+        self.assertTrue(dir_a.exists())
+        self.assertTrue(dir_b.exists())
+
+        missing_id = str(uuid4())
+        res = self.client.request(
+            "DELETE",
+            "/api/projects",
+            json={"project_ids": [project_a, project_b, missing_id, project_a]},
+        )
+        self.assertEqual(res.status_code, 200)
+        payload = res.json()
+        self.assertEqual(payload["requested_count"], 3)
+        self.assertEqual(payload["deleted_count"], 2)
+        self.assertEqual(payload["missing_count"], 1)
+        self.assertEqual(payload["failed_count"], 0)
+        self.assertFalse(dir_a.exists())
+        self.assertFalse(dir_b.exists())
+        self.assertNotIn(project_a, projects)
+        self.assertNotIn(project_b, projects)
+
+    def test_metrics_quality_rates_are_computed_from_chapters_and_traces(self):
+        project_id = self._create_project(taboo_constraints=["禁词触发器"])
+        chapter_a = self._create_chapter(project_id, chapter_number=1)
+        chapter_b = self._create_chapter(project_id, chapter_number=2)
+
+        res_a = self.client.put(
+            f"/api/chapters/{chapter_a}/draft",
+            json={"draft": "这是一段普通文本，不包含禁词。"},
+        )
+        self.assertEqual(res_a.status_code, 200)
+        self.assertEqual(res_a.json()["consistency"]["p0_count"], 0)
+
+        res_b = self.client.put(
+            f"/api/chapters/{chapter_b}/draft",
+            json={"draft": "这里包含禁词触发器，应当触发 P0。"},
+        )
+        self.assertEqual(res_b.status_code, 200)
+        self.assertGreaterEqual(res_b.json()["consistency"]["p0_count"], 1)
+
+        trace_a = AgentTrace(
+            id=f"trace-{uuid4().hex[:8]}",
+            chapter_id=1,
+            decisions=[],
+            memory_hits=[{"item_id": "m-1", "summary": "命中"}],
+            conflicts_detected=[],
+            final_draft="a",
+        )
+        trace_b = AgentTrace(
+            id=f"trace-{uuid4().hex[:8]}",
+            chapter_id=2,
+            decisions=[],
+            memory_hits=[],
+            conflicts_detected=[],
+            final_draft="b",
+        )
+        traces[chapter_a] = trace_a
+        traces[chapter_b] = trace_b
+        trace_file(project_id, chapter_a).write_text(
+            json.dumps(trace_a.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        trace_file(project_id, chapter_b).write_text(
+            json.dumps(trace_b.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        # Ensure endpoint can recover from disk traces, not only in-memory cache.
+        traces.pop(chapter_a, None)
+        traces.pop(chapter_b, None)
+
+        metrics_res = self.client.get("/api/metrics", params={"project_id": project_id})
+        self.assertEqual(metrics_res.status_code, 200)
+        payload = metrics_res.json()
+        self.assertEqual(payload["sample_size"], 2)
+        self.assertEqual(payload["chapters_with_p0"], 1)
+        self.assertEqual(payload["chapters_first_pass_ok"], 1)
+        self.assertEqual(payload["chapters_with_memory_hits"], 1)
+        self.assertAlmostEqual(payload["p0_ratio"], 0.5, places=3)
+        self.assertAlmostEqual(payload["first_pass_rate"], 0.5, places=3)
+        self.assertAlmostEqual(payload["recall_hit_rate"], 0.5, places=3)
+        details = payload.get("quality_details") or {}
+        self.assertEqual(len(details.get("p0_conflict_chapters") or []), 1)
+        self.assertEqual(len(details.get("first_pass_failed_chapters") or []), 1)
+        self.assertEqual(len(details.get("recall_missed_chapters") or []), 1)
+
+    def test_create_chapter_works_even_if_project_not_cached_in_worker(self):
+        project_id = self._create_project()
+        projects.pop(project_id, None)
+
+        res = self.client.post(
+            "/api/chapters",
+            json={
+                "project_id": project_id,
+                "chapter_number": 1,
+                "title": "缓存缺失章节",
+                "goal": "验证跨 worker 项目解析",
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        payload = res.json()
+        self.assertEqual(payload["project_id"], project_id)
+        self.assertEqual(payload["chapter_number"], 1)
+
+    def test_get_chapter_works_even_if_chapter_not_cached_in_worker(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=2)
+        chapters.pop(chapter_id, None)
+        projects.pop(project_id, None)
+
+        res = self.client.get(f"/api/chapters/{chapter_id}")
+        self.assertEqual(res.status_code, 200)
+        payload = res.json()
+        self.assertEqual(payload["id"], chapter_id)
+        self.assertEqual(payload["project_id"], project_id)
+
+    def test_get_project_refreshes_from_disk_when_cache_stale(self):
+        project_id = self._create_project()
+        project_json = projects_root() / project_id / "project.json"
+        payload = json.loads(project_json.read_text(encoding="utf-8"))
+        payload["style"] = "硬科幻纪实"
+        payload["status"] = "completed"
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        project_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        stale = projects[project_id].model_copy(deep=True)
+        stale.style = "旧文风"
+        stale.status = ProjectStatus.WRITING
+        projects[project_id] = stale
+
+        res = self.client.get(f"/api/projects/{project_id}")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["style"], "硬科幻纪实")
+        self.assertEqual(body["status"], "completed")
+
+    def test_get_chapter_refreshes_from_disk_when_cache_stale(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=3)
+        chapter_json = projects_root() / project_id / "chapters" / f"{chapter_id}.json"
+        payload = json.loads(chapter_json.read_text(encoding="utf-8"))
+        payload["title"] = "磁盘已更新标题"
+        payload["status"] = "reviewing"
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        chapter_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        stale = chapters[chapter_id].model_copy(deep=True)
+        stale.title = "旧标题"
+        stale.status = ChapterStatus.DRAFT
+        chapters[chapter_id] = stale
+
+        res = self.client.get(f"/api/chapters/{chapter_id}")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["title"], "磁盘已更新标题")
+        self.assertEqual(body["status"], "reviewing")
+
+    def test_get_chapter_returns_404_when_project_deleted_but_chapter_cached(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=4)
+        project_json = projects_root() / project_id / "project.json"
+        project_json.unlink()
+        projects.pop(project_id, None)
+
+        res = self.client.get(f"/api/chapters/{chapter_id}")
+        self.assertEqual(res.status_code, 404)
+
+    def test_data_root_resolves_relative_to_backend_root(self):
+        original = settings.data_dir
+        try:
+            settings.data_dir = "../data"
+            self.assertEqual(data_root(), (BACKEND_ROOT / "../data").resolve())
+        finally:
+            settings.data_dir = original
+
+    def test_enforce_draft_target_words_caps_runaway_output(self):
+        target_words = 1800
+        original = "段落。" * 3000  # ~9k chars
+        clipped = enforce_draft_target_words(original, target_words)
+        self.assertLessEqual(len(clipped), resolve_target_word_upper_bound(target_words))
+        self.assertGreaterEqual(len(clipped), int(target_words * 0.7))
+
+    def test_enforce_draft_target_words_keeps_normal_output(self):
+        target_words = 1800
+        normal = "内容。" * 500
+        clipped = enforce_draft_target_words(normal, target_words)
+        self.assertEqual(clipped, normal.strip())
 
 
 if __name__ == "__main__":

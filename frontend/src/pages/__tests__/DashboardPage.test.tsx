@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import DashboardPage, {
     CHART_THEME,
@@ -58,6 +58,51 @@ const sampleMetrics = {
     first_pass_rate: 0.82,
     exemption_rate: 0.05,
     recall_hit_rate: 0.91,
+    sample_size: 2,
+    quality_details: {
+        p0_conflict_chapters: [
+            {
+                project_id: 'p1',
+                project_name: '仙侠奇缘',
+                chapter_id: 'c-1',
+                chapter_number: 1,
+                chapter_title: '开局',
+                chapter_status: 'reviewing',
+                p0_count: 1,
+                first_pass_ok: false,
+                memory_hit_count: 2,
+                has_unresolved_p0: true,
+            },
+        ],
+        first_pass_failed_chapters: [
+            {
+                project_id: 'p2',
+                project_name: '都市传说',
+                chapter_id: 'c-2',
+                chapter_number: 2,
+                chapter_title: '对峙',
+                chapter_status: 'reviewing',
+                p0_count: 1,
+                first_pass_ok: false,
+                memory_hit_count: 1,
+                has_unresolved_p0: true,
+            },
+        ],
+        recall_missed_chapters: [
+            {
+                project_id: 'p2',
+                project_name: '都市传说',
+                chapter_id: 'c-3',
+                chapter_number: 3,
+                chapter_title: '转折',
+                chapter_status: 'reviewing',
+                p0_count: 0,
+                first_pass_ok: true,
+                memory_hit_count: 0,
+                has_unresolved_p0: false,
+            },
+        ],
+    },
 }
 
 const sampleProjects = [
@@ -146,10 +191,10 @@ describe('DashboardPage', () => {
             const summarySection = screen.getByTestId('summary-stats')
             expect(summarySection).toBeInTheDocument()
             // 2 projects, 15 chapters, 37 entities, 58 events
-            expect(screen.getByText('2')).toBeInTheDocument()
-            expect(screen.getByText('15')).toBeInTheDocument()
-            expect(screen.getByText('37')).toBeInTheDocument()
-            expect(screen.getByText('58')).toBeInTheDocument()
+            expect(within(summarySection).getByText('2')).toBeInTheDocument()
+            expect(within(summarySection).getByText('15')).toBeInTheDocument()
+            expect(within(summarySection).getByText('37')).toBeInTheDocument()
+            expect(within(summarySection).getByText('58')).toBeInTheDocument()
         })
     })
 
@@ -161,8 +206,9 @@ describe('DashboardPage', () => {
         })
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText('仙侠奇缘')).toBeInTheDocument()
-            expect(screen.getByText('都市传说')).toBeInTheDocument()
+            const table = screen.getByRole('table', { name: '项目快照表格' })
+            expect(within(table).getByText('仙侠奇缘')).toBeInTheDocument()
+            expect(within(table).getByText('都市传说')).toBeInTheDocument()
         })
     })
 
@@ -186,6 +232,33 @@ describe('DashboardPage', () => {
             expect(toasts).toHaveLength(1)
             expect(toasts[0].type).toBe('error')
             expect(toasts[0].message).toBe('获取看板数据失败')
+        })
+    })
+
+    it('renders quality drilldown and switches categories', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/metrics') return Promise.resolve({ data: sampleMetrics })
+            if (url === '/projects') return Promise.resolve({ data: sampleProjects })
+            return Promise.reject(new Error('unknown'))
+        })
+        renderPage()
+
+        await waitFor(() => {
+            expect(screen.getByTestId('quality-drilldown')).toBeInTheDocument()
+            expect(screen.getByText('当前列表：P0 冲突章节（1 章）')).toBeInTheDocument()
+            expect(screen.getByText('第 1 章 · 开局')).toBeInTheDocument()
+        })
+
+        fireEvent.click(screen.getByRole('button', { name: '一次通过失败章节' }))
+        await waitFor(() => {
+            expect(screen.getByText('当前列表：一次通过失败章节（1 章）')).toBeInTheDocument()
+            expect(screen.getByText('第 2 章 · 对峙')).toBeInTheDocument()
+        })
+
+        fireEvent.click(screen.getByRole('button', { name: '记忆召回未命中章节' }))
+        await waitFor(() => {
+            expect(screen.getByText('当前列表：记忆召回未命中章节（1 章）')).toBeInTheDocument()
+            expect(screen.getByText('第 3 章 · 转折')).toBeInTheDocument()
         })
     })
 })

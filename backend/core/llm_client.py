@@ -8,6 +8,7 @@ from enum import Enum
 class LLMProvider(str, Enum):
     OPENAI = "openai"
     MINIMAX = "minimax"
+    DEEPSEEK = "deepseek"
 
 
 class LLMConfig:
@@ -19,23 +20,81 @@ class LLMConfig:
         model: str = "gpt-4-turbo-preview",
         embedding_model: str = "text-embedding-3-small",
         embedding_dimension: int = 1536,
+        chat_max_tokens: Optional[int] = None,
+        chat_temperature: Optional[float] = None,
+        context_window_tokens: Optional[int] = None,
     ):
         self.provider = provider
         default_key = os.getenv("OPENAI_API_KEY")
         if provider == LLMProvider.MINIMAX:
             default_key = os.getenv("MINIMAX_API_KEY") or default_key
+        elif provider == LLMProvider.DEEPSEEK:
+            default_key = os.getenv("DEEPSEEK_API_KEY") or default_key
         self.api_key = default_key if api_key is None else api_key
         self.model = model
         self.embedding_model = embedding_model
         self.embedding_dimension = embedding_dimension
-        
+        default_chat_max_tokens = _safe_positive_int(os.getenv("LLM_MAX_TOKENS"), 4000)
+        default_chat_temperature = _safe_temperature(os.getenv("LLM_TEMPERATURE"), 0.7)
+        default_context_window_tokens = _safe_positive_int(
+            os.getenv("LLM_CONTEXT_WINDOW_TOKENS"),
+            32768,
+        )
+
         if provider == LLMProvider.MINIMAX:
             self.base_url = base_url or "https://api.minimaxi.com/v1"
             self.model = model or "MiniMax-M2.5"
             self.embedding_model = "embo-01"
             self.embedding_dimension = 1024
+        elif provider == LLMProvider.DEEPSEEK:
+            self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+            self.model = model or "deepseek-chat"
+            default_chat_max_tokens = _safe_positive_int(os.getenv("DEEPSEEK_MAX_TOKENS"), 8192)
+            default_chat_temperature = _safe_temperature(
+                os.getenv("DEEPSEEK_TEMPERATURE"),
+                default_chat_temperature,
+            )
+            default_context_window_tokens = _safe_positive_int(
+                os.getenv("DEEPSEEK_CONTEXT_WINDOW_TOKENS"),
+                131072,
+            )
         else:
             self.base_url = base_url or "https://api.openai.com/v1"
+
+        self.chat_max_tokens = _safe_positive_int(
+            chat_max_tokens,
+            default_chat_max_tokens,
+        )
+        self.chat_temperature = _safe_temperature(
+            chat_temperature,
+            default_chat_temperature,
+        )
+        self.context_window_tokens = _safe_positive_int(
+            context_window_tokens,
+            default_context_window_tokens,
+        )
+
+
+def _safe_positive_int(value: Any, fallback: int) -> int:
+    try:
+        parsed = int(value)
+        if parsed > 0:
+            return parsed
+    except Exception:
+        pass
+    return fallback
+
+
+def _safe_temperature(value: Any, fallback: float) -> float:
+    try:
+        parsed = float(value)
+        if parsed < 0:
+            return 0.0
+        if parsed > 2:
+            return 2.0
+        return parsed
+    except Exception:
+        return fallback
 
 
 class LLMClient:
@@ -70,8 +129,8 @@ class LLMClient:
     def chat(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 4000,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
         stream: bool = False,
     ) -> Union[str, Any]:
         if not self.config.api_key:
@@ -80,12 +139,14 @@ class LLMClient:
 
         started = time.perf_counter()
         try:
+            actual_max_tokens = _safe_positive_int(max_tokens, self.config.chat_max_tokens)
+            actual_temperature = _safe_temperature(temperature, self.config.chat_temperature)
             client = self._get_client()
             response = client.chat.completions.create(
                 model=self.config.model,
                 messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                temperature=actual_temperature,
+                max_tokens=actual_max_tokens,
                 stream=stream,
             )
             if stream:
@@ -117,8 +178,8 @@ class LLMClient:
     def chat_stream_text(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 4000,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
     ) -> Iterator[str]:
         if not self.config.api_key:
             self._warn_offline_once("missing_api_key")
@@ -163,14 +224,12 @@ class LLMClient:
     def embed_text(self, text: str) -> List[float]:
         if self.config.provider == LLMProvider.MINIMAX:
             return self._embed_minimax(text)
-        else:
-            return self._embed_openai(text)
+        return self._embed_openai(text)
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         if self.config.provider == LLMProvider.MINIMAX:
             return self._embed_batch_minimax(texts)
-        else:
-            return self._embed_batch_openai(texts)
+        return self._embed_batch_openai(texts)
 
     def _embed_openai(self, text: str) -> List[float]:
         if not self.config.api_key:
@@ -334,6 +393,14 @@ def create_llm_client(
     provider: str = "openai",
     **kwargs
 ) -> LLMClient:
-    llm_provider = LLMProvider(provider.lower())
+    candidate = (provider or "openai").strip().lower()
+    try:
+        llm_provider = LLMProvider(candidate)
+    except ValueError:
+        logging.getLogger("novelist.llm").warning(
+            "unknown llm provider=%s fallback=openai",
+            provider,
+        )
+        llm_provider = LLMProvider.OPENAI
     config = LLMConfig(provider=llm_provider, **kwargs)
     return LLMClient(config)

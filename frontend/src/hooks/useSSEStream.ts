@@ -189,6 +189,17 @@ export function useSSEStream() {
             return
         }
 
+        if (eventName === 'chapter_replace') {
+            flushBuffers()
+            const chapterNumber = Number(payload.chapter_number) || 0
+            const chapterId = String(payload.chapter_id || `chapter-${chapterNumber}`)
+            const title = String(payload.title || `章节${chapterNumber}`)
+            const body = String(payload.body || '')
+            setSections((prev) => upsertSection(prev, chapterId, chapterNumber, title, { body, waiting: false }))
+            appendLog(`第 ${chapterNumber} 章内容已用最终稿回填`)
+            return
+        }
+
         if (eventName === 'chapter_done') {
             flushBuffers()
             const ch: StreamChapter = {

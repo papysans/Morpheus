@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import ReactFlow, {
     type Node,
     type Edge,
+    type ReactFlowInstance,
     type NodeTypes,
     type NodeProps,
     useNodesState,
@@ -38,6 +39,11 @@ export interface EventEdge {
     description: string
 }
 
+export interface BuildGraphEdgeOptions {
+    includeProgress?: boolean
+    latestPerPair?: boolean
+}
+
 /* ── Style config ── */
 
 export const ENTITY_STYLES: Record<string, { color: string; borderColor: string; textColor: string; shape: string; label: string }> = {
@@ -47,6 +53,24 @@ export const ENTITY_STYLES: Record<string, { color: string; borderColor: string;
 }
 
 const DEFAULT_STYLE = { color: 'rgba(102, 124, 164, 0.08)', borderColor: 'rgba(102, 124, 164, 0.2)', textColor: '#5a6e8d', shape: 'square', label: '未知' }
+
+const ROLE_NAME_ALIASES: Record<string, string> = {
+    primary: '主角',
+    protagonist: '主角',
+    secondary: '关键配角',
+    supporting: '关键配角',
+    antagonist: '反派',
+}
+
+const ROLE_NAME_IGNORES = new Set(['hidden', 'secret', 'unknown', 'none', 'null'])
+
+function normalizeRoleName(name?: string) {
+    const raw = String(name || '').trim()
+    if (!raw) return ''
+    const key = raw.toLowerCase()
+    if (ROLE_NAME_IGNORES.has(key)) return ''
+    return ROLE_NAME_ALIASES[key] || raw
+}
 
 /* ── Custom Node Component ── */
 
@@ -96,11 +120,11 @@ function EntityNodeComponent({ data }: NodeProps<EntityNodeData>) {
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
         >
-            <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+            <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
             <div style={shapeStyle}>
                 <span style={labelStyle}>{data.label}</span>
             </div>
-            <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+            <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
 
             {/* Hover tooltip */}
             {hovered && (
@@ -163,6 +187,82 @@ const nodeTypes: NodeTypes = { entity: EntityNodeComponent }
 
 /* ── Graph building helpers ── */
 
+let elkInstancePromise: Promise<{ layout: (graph: unknown) => Promise<any> }> | null = null
+
+async function getElkInstance() {
+    if (!elkInstancePromise) {
+        elkInstancePromise = import('elkjs/lib/elk.bundled.js').then((module) => {
+            const ELKConstructor = (module as { default?: new () => { layout: (graph: unknown) => Promise<any> } }).default
+            if (!ELKConstructor) {
+                throw new Error('ELK constructor is unavailable')
+            }
+            return new ELKConstructor()
+        })
+    }
+    return elkInstancePromise
+}
+
+function getNodeLayoutBox(node: Node<EntityNodeData>) {
+    const entityType = node.data?.entityType
+    if (entityType === 'character') return { width: 180, height: 120 }
+    if (entityType === 'location') return { width: 170, height: 100 }
+    if (entityType === 'item') return { width: 170, height: 100 }
+    return { width: 170, height: 100 }
+}
+
+export async function layoutGraphWithElk(
+    nodes: Node<EntityNodeData>[],
+    edges: Edge[],
+): Promise<{ nodes: Node<EntityNodeData>[]; edges: Edge[] }> {
+    if (nodes.length === 0) {
+        return { nodes, edges }
+    }
+    const elk = await getElkInstance()
+    const elkGraph = {
+        id: 'root',
+        layoutOptions: {
+            'elk.algorithm': 'layered',
+            'elk.direction': 'RIGHT',
+            'elk.layered.spacing.nodeNodeBetweenLayers': '180',
+            'elk.spacing.nodeNode': '120',
+            'elk.spacing.edgeNode': '70',
+            'elk.edgeRouting': 'SPLINES',
+            'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+        },
+        children: nodes.map((node) => {
+            const box = getNodeLayoutBox(node)
+            return { id: node.id, width: box.width, height: box.height }
+        }),
+        edges: edges.map((edge) => ({
+            id: edge.id,
+            sources: [edge.source],
+            targets: [edge.target],
+        })),
+    }
+    const layouted = await elk.layout(elkGraph)
+    const positioned = new Map<string, { x: number; y: number }>(
+        (layouted.children || []).map((child: { id: string; x?: number; y?: number }) => [
+            child.id,
+            { x: child.x ?? 0, y: child.y ?? 0 },
+        ]),
+    )
+    return {
+        nodes: nodes.map((node) => {
+            const nextPosition = positioned.get(node.id)
+            const fallbackPosition = node.position || { x: 0, y: 0 }
+            return {
+                ...node,
+                position: nextPosition
+                    ? { x: nextPosition.x, y: nextPosition.y }
+                    : { x: fallbackPosition.x, y: fallbackPosition.y },
+                sourcePosition: Position.Right,
+                targetPosition: Position.Left,
+            }
+        }),
+        edges,
+    }
+}
+
 export function buildGraphNodes(entities: EntityNode[]): Node<EntityNodeData>[] {
     const cols = 4
     const xGap = 200
@@ -188,22 +288,108 @@ export function buildGraphNodes(entities: EntityNode[]): Node<EntityNodeData>[] 
     })
 }
 
-export function buildGraphEdges(events: EventEdge[], entities: EntityNode[]): Edge[] {
+function isProgressRelation(relation: string) {
+    const value = String(relation || '').trim().toLowerCase()
+    return value === 'progress' || value === '推进'
+}
+
+export function buildGraphEdges(
+    events: EventEdge[],
+    entities: EntityNode[],
+    options: BuildGraphEdgeOptions = {},
+): Edge[] {
+    const includeProgress = options.includeProgress ?? false
+    const latestPerPair = options.latestPerPair ?? true
     const entityNameToId = new Map<string, string>()
     for (const e of entities) {
         entityNameToId.set(e.name, e.entity_id)
     }
 
-    const edges: Edge[] = []
+    type EdgeCandidate = {
+        source: string
+        target: string
+        relation: string
+        chapter: number
+        eventId: string
+    }
+    const candidates: EdgeCandidate[] = []
     for (const event of events) {
+        if (!includeProgress && isProgressRelation(event.relation)) continue
         const sourceId = entityNameToId.get(event.subject)
         const targetId = event.object ? entityNameToId.get(event.object) : undefined
         if (sourceId && targetId) {
-            edges.push({
-                id: event.event_id,
+            candidates.push({
                 source: sourceId,
                 target: targetId,
-                label: event.relation,
+                relation: event.relation,
+                chapter: event.chapter,
+                eventId: event.event_id,
+            })
+        }
+    }
+
+    const aggregated = new Map<
+        string,
+        { source: string; target: string; relation: string; latestChapter: number; count: number; eventId: string }
+    >()
+    for (const item of candidates) {
+        const key = `${item.source}::${item.target}::${item.relation}`
+        const existing = aggregated.get(key)
+        if (!existing) {
+            aggregated.set(key, {
+                source: item.source,
+                target: item.target,
+                relation: item.relation,
+                latestChapter: item.chapter,
+                count: 1,
+                eventId: item.eventId,
+            })
+            continue
+        }
+        existing.count += 1
+        if (item.chapter >= existing.latestChapter) {
+            existing.latestChapter = item.chapter
+            existing.eventId = item.eventId
+        }
+    }
+
+    const edges: Edge[] = []
+    const relationPriority: Record<string, number> = {
+        背叛: 7,
+        冲突: 6,
+        揭露: 5,
+        交易: 4,
+        调查: 3,
+        合作: 2,
+        保护: 1,
+        关联: 1,
+        progress: 0,
+    }
+
+    if (latestPerPair) {
+        const byUndirectedPair = new Map<
+            string,
+            Array<{ source: string; target: string; relation: string; latestChapter: number; count: number; eventId: string }>
+        >()
+        for (const item of aggregated.values()) {
+            const pairKey = [item.source, item.target].sort().join('::')
+            const bucket = byUndirectedPair.get(pairKey) ?? []
+            bucket.push(item)
+            byUndirectedPair.set(pairKey, bucket)
+        }
+        for (const pairItems of byUndirectedPair.values()) {
+            const winner = [...pairItems].sort(
+                (a, b) =>
+                    b.latestChapter - a.latestChapter ||
+                    (relationPriority[b.relation] ?? 0) - (relationPriority[a.relation] ?? 0) ||
+                    a.relation.localeCompare(b.relation),
+            )[0]
+            edges.push({
+                id: `edge-${winner.source}-${winner.target}-${winner.relation}`,
+                source: winner.source,
+                target: winner.target,
+                type: 'default',
+                label: winner.count > 1 ? `${winner.relation} ×${winner.count}` : winner.relation,
                 animated: false,
                 style: { stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
                 labelStyle: { fill: '#5a6e8d', fontSize: 11 },
@@ -213,6 +399,43 @@ export function buildGraphEdges(events: EventEdge[], entities: EntityNode[]): Ed
                 markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(102, 124, 164, 0.3)' },
             })
         }
+        return edges
+    }
+
+    const byDirectionalPair = new Map<
+        string,
+        Array<{ source: string; target: string; relation: string; latestChapter: number; count: number; eventId: string }>
+    >()
+    for (const item of aggregated.values()) {
+        const pairKey = `${item.source}::${item.target}`
+        const bucket = byDirectionalPair.get(pairKey) ?? []
+        bucket.push(item)
+        byDirectionalPair.set(pairKey, bucket)
+    }
+
+    for (const pairItems of byDirectionalPair.values()) {
+        const bucket = [...pairItems].sort(
+            (a, b) =>
+                b.latestChapter - a.latestChapter ||
+                (relationPriority[b.relation] ?? 0) - (relationPriority[a.relation] ?? 0) ||
+                a.relation.localeCompare(b.relation),
+        )
+        bucket.forEach((item) => {
+            edges.push({
+                id: `edge-${item.source}-${item.target}-${item.relation}`,
+                source: item.source,
+                target: item.target,
+                type: 'default',
+                label: item.count > 1 ? `${item.relation} ×${item.count}` : item.relation,
+                animated: false,
+                style: { stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
+                labelStyle: { fill: '#5a6e8d', fontSize: 11 },
+                labelBgStyle: { fill: 'rgba(255, 255, 255, 0.9)', fillOpacity: 0.9 },
+                labelBgPadding: [6, 4] as [number, number],
+                labelBgBorderRadius: 4,
+                markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(102, 124, 164, 0.3)' },
+            })
+        })
     }
     return edges
 }
@@ -241,6 +464,46 @@ export function sortEventsByChapter(events: EventEdge[]): EventEdge[] {
     return [...events].sort((a, b) => a.chapter - b.chapter)
 }
 
+export function sanitizeGraphData(
+    entities: EntityNode[],
+    events: EventEdge[],
+): { entities: EntityNode[]; events: EventEdge[] } {
+    const merged = new Map<string, EntityNode>()
+    for (const entity of entities) {
+        const normalizedName = normalizeRoleName(entity.name)
+        if (!normalizedName) continue
+        const key = `${entity.entity_type}:${normalizedName}`
+        const existing = merged.get(key)
+        if (!existing) {
+            merged.set(key, { ...entity, name: normalizedName })
+            continue
+        }
+        merged.set(key, {
+            ...existing,
+            attrs: { ...(existing.attrs || {}), ...(entity.attrs || {}) },
+            first_seen_chapter: Math.min(existing.first_seen_chapter, entity.first_seen_chapter),
+            last_seen_chapter: Math.max(existing.last_seen_chapter, entity.last_seen_chapter),
+        })
+    }
+    const sanitizedEntities = [...merged.values()].sort(
+        (a, b) => b.last_seen_chapter - a.last_seen_chapter || a.name.localeCompare(b.name),
+    )
+
+    const sanitizedEvents: EventEdge[] = []
+    for (const event of events) {
+        const subject = normalizeRoleName(event.subject)
+        if (!subject) continue
+        const objectCandidate = event.object ? normalizeRoleName(event.object) : ''
+        sanitizedEvents.push({
+            ...event,
+            subject,
+            object: objectCandidate && objectCandidate !== subject ? objectCandidate : undefined,
+        })
+    }
+
+    return { entities: sanitizedEntities, events: sanitizedEvents }
+}
+
 /* ── Main Page Component ── */
 
 export default function KnowledgeGraphPage() {
@@ -254,13 +517,18 @@ export default function KnowledgeGraphPage() {
     const [loading, setLoading] = useState(true)
     const [tab, setTab] = useState<'graph' | 'timeline'>('graph')
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+    const [showProgressEdges, setShowProgressEdges] = useState(false)
+    const [showAllPairEdges, setShowAllPairEdges] = useState(false)
+    const [layoutLoading, setLayoutLoading] = useState(false)
+    const layoutRunRef = useRef(0)
+    const flowRef = useRef<ReactFlowInstance | null>(null)
 
     const [nodes, setNodes, onNodesChange] = useNodesState<EntityNodeData>([])
     const [edges, setEdges, onEdgesChange] = useEdgesState([])
 
     // Load project context
     useEffect(() => {
-        if (projectId && !currentProject) {
+        if (projectId && currentProject?.id !== projectId) {
             fetchProject(projectId)
         }
     }, [projectId, currentProject, fetchProject])
@@ -273,6 +541,10 @@ export default function KnowledgeGraphPage() {
 
     const loadData = async () => {
         setLoading(true)
+        setLayoutLoading(true)
+        setNodes([])
+        setEdges([])
+        setSelectedNodeId(null)
         try {
             const [entityRes, eventRes] = await Promise.all([
                 api.get(`/entities/${projectId}`),
@@ -280,18 +552,56 @@ export default function KnowledgeGraphPage() {
             ])
             const loadedEntities: EntityNode[] = entityRes.data ?? []
             const loadedEvents: EventEdge[] = eventRes.data ?? []
-            setEntities(loadedEntities)
-            setEvents(loadedEvents)
-            setNodes(buildGraphNodes(loadedEntities))
-            setEdges(buildGraphEdges(loadedEvents, loadedEntities))
-            setSelectedNodeId(null)
+            const sanitized = sanitizeGraphData(loadedEntities, loadedEvents)
+            setEntities(sanitized.entities)
+            setEvents(sanitized.events)
         } catch (error) {
             addToast('error', '加载知识图谱数据失败')
             console.error(error)
         } finally {
             setLoading(false)
+            setLayoutLoading(false)
         }
     }
+
+    useEffect(() => {
+        if (entities.length === 0) {
+            setNodes([])
+            setEdges([])
+            return
+        }
+        const currentRun = layoutRunRef.current + 1
+        layoutRunRef.current = currentRun
+        setLayoutLoading(true)
+
+        const baseNodes = buildGraphNodes(entities)
+        const baseEdges = buildGraphEdges(events, entities, {
+            includeProgress: showProgressEdges,
+            latestPerPair: !showAllPairEdges,
+        })
+
+        void layoutGraphWithElk(baseNodes, baseEdges)
+            .then((layouted) => {
+                if (layoutRunRef.current !== currentRun) return
+                setNodes(layouted.nodes)
+                setEdges(layouted.edges)
+                setSelectedNodeId(null)
+                requestAnimationFrame(() => {
+                    flowRef.current?.fitView({ padding: 0.18, duration: 280 })
+                })
+            })
+            .catch((error) => {
+                if (layoutRunRef.current !== currentRun) return
+                console.error('ELK layout failed, fallback to static positions', error)
+                setNodes(baseNodes)
+                setEdges(baseEdges)
+                setSelectedNodeId(null)
+            })
+            .finally(() => {
+                if (layoutRunRef.current !== currentRun) return
+                setLayoutLoading(false)
+            })
+    }, [events, entities, showProgressEdges, showAllPairEdges, setEdges, setNodes])
 
     // Handle node click → highlight neighbors
     const onNodeClick = useCallback(
@@ -413,32 +723,72 @@ export default function KnowledgeGraphPage() {
 
                 {/* Graph tab */}
                 {!loading && tab === 'graph' && (
-                    <div
-                        className="card"
-                        style={{
-                            padding: 0,
-                            height: 560,
-                            overflow: 'hidden',
-                            position: 'relative',
-                        }}
-                    >
-                        {entities.length === 0 ? (
-                            <p className="muted" style={{ padding: 24 }}>暂无实体数据，请先生成章节。</p>
-                        ) : (
-                            <ReactFlow
-                                nodes={nodes}
-                                edges={edges}
-                                onNodesChange={onNodesChange}
-                                onEdgesChange={onEdgesChange}
-                                onNodeClick={onNodeClick}
-                                onPaneClick={onPaneClick}
-                                nodeTypes={nodeTypes}
-                                fitView
-                                proOptions={{ hideAttribution: true }}
-                                style={{ background: 'transparent' }}
-                            />
-                        )}
-                    </div>
+                    <>
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                            <button
+                                className={`chip-btn ${showProgressEdges ? 'active' : ''}`}
+                                onClick={() => setShowProgressEdges((v) => !v)}
+                                aria-pressed={showProgressEdges}
+                            >
+                                {showProgressEdges ? 'progress 已显示' : 'progress 已隐藏'}
+                            </button>
+                            <button
+                                className={`chip-btn ${showAllPairEdges ? 'active' : ''}`}
+                                onClick={() => setShowAllPairEdges((v) => !v)}
+                                aria-pressed={showAllPairEdges}
+                            >
+                                {showAllPairEdges ? '显示全部历史边' : '仅显示最新关系'}
+                            </button>
+                        </div>
+                        <div
+                            className="card"
+                            style={{
+                                padding: 0,
+                                height: 560,
+                                overflow: 'hidden',
+                                position: 'relative',
+                            }}
+                        >
+                            {entities.length === 0 ? (
+                                <p className="muted" style={{ padding: 24 }}>暂无实体数据，请先生成章节。</p>
+                            ) : (
+                                <ReactFlow
+                                    nodes={nodes}
+                                    edges={edges}
+                                    onNodesChange={onNodesChange}
+                                    onEdgesChange={onEdgesChange}
+                                    onNodeClick={onNodeClick}
+                                    onPaneClick={onPaneClick}
+                                    nodeTypes={nodeTypes}
+                                    onInit={(instance) => {
+                                        flowRef.current = instance
+                                    }}
+                                    proOptions={{ hideAttribution: true }}
+                                    style={{ background: 'transparent' }}
+                                />
+                            )}
+                            {layoutLoading && entities.length > 0 && (
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        inset: 0,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        background: 'rgba(255, 255, 255, 0.55)',
+                                        backdropFilter: 'blur(2px)',
+                                        zIndex: 3,
+                                        pointerEvents: 'none',
+                                        color: 'var(--text-secondary)',
+                                        fontSize: '0.9rem',
+                                        fontWeight: 600,
+                                    }}
+                                >
+                                    正在自动布局关系图…
+                                </div>
+                            )}
+                        </div>
+                    </>
                 )}
 
                 {/* Timeline tab */}

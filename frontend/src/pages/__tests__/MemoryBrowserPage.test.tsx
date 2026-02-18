@@ -59,7 +59,7 @@ const sampleResults = [
     {
         item_id: 'mem-1',
         layer: 'L1',
-        source_path: '/identity/world.md',
+        source_path: 'memory/L1/IDENTITY.md',
         summary: '世界观设定：冰霜大陆',
         evidence: '冰霜大陆是一个被永恒寒冬笼罩的世界',
         combined_score: 0.95,
@@ -67,7 +67,7 @@ const sampleResults = [
     {
         item_id: 'mem-2',
         layer: 'L2',
-        source_path: '/chapters/ch1/decisions.md',
+        source_path: 'chapters/ch-1.md',
         summary: '第一章决策：主角出发',
         evidence: '主角决定离开家乡',
         combined_score: 0.82,
@@ -75,8 +75,9 @@ const sampleResults = [
     {
         item_id: 'mem-3',
         layer: 'L3',
-        source_path: '/summaries/ch1.md',
+        source_path: 'memory/L3/ch1-summary.md',
         summary: '第一章摘要',
+        content: '第一章中主角被迫离开家乡，踏上未知旅程，并与关键配角发生第一次冲突。',
         combined_score: 0.71,
     },
 ]
@@ -88,6 +89,13 @@ beforeEach(() => {
 })
 
 describe('MemoryBrowserPage', () => {
+    it('route 项目与 currentProject 不一致时会重新拉取项目', async () => {
+        renderPage('proj-2')
+        await waitFor(() => {
+            expect(mockFetchProject).toHaveBeenCalledWith('proj-2')
+        })
+    })
+
     it('renders page title and subtitle', () => {
         renderPage()
         expect(screen.getByText('记忆浏览器')).toBeInTheDocument()
@@ -250,8 +258,106 @@ describe('MemoryBrowserPage', () => {
         fireEvent.click(screen.getByText('世界观设定：冰霜大陆'))
 
         await waitFor(() => {
-            expect(screen.getByText(/来源: \/identity\/world\.md/)).toBeInTheDocument()
+            expect(screen.getByText(/来源: memory\/L1\/IDENTITY\.md/)).toBeInTheDocument()
             expect(screen.getByText(/冰霜大陆是一个被永恒寒冬笼罩的世界/)).toBeInTheDocument()
+        })
+    })
+
+    it('shows semantic snippet and open-source link for result without evidence', async () => {
+        mockApiGet
+            .mockResolvedValueOnce({ data: { content: '' } })
+            .mockResolvedValueOnce({ data: { results: sampleResults } })
+
+        renderPage()
+        fireEvent.click(screen.getByText('L2/L3 记忆搜索'))
+        await waitFor(() => {
+            expect(screen.getByPlaceholderText(/输入角色、事件/)).toBeInTheDocument()
+        })
+
+        fireEvent.change(screen.getByPlaceholderText(/输入角色、事件/), {
+            target: { value: '第一章' },
+        })
+        fireEvent.click(screen.getByText('检索'))
+
+        await waitFor(() => {
+            expect(screen.getByText('第一章摘要')).toBeInTheDocument()
+        })
+
+        fireEvent.click(screen.getByText('第一章摘要'))
+
+        await waitFor(() => {
+            expect(screen.getByText('语义命中片段')).toBeInTheDocument()
+            expect(screen.getByText(/第一章中主角被迫离开家乡/)).toBeInTheDocument()
+            const link = screen.getByText('打开原文 MD').closest('a')
+            expect(link).toHaveAttribute(
+                'href',
+                '/api/projects/proj-1/memory/source?source_path=memory%2FL3%2Fch1-summary.md',
+            )
+        })
+    })
+
+    it('shows chapter jump button when source maps to chapter markdown', async () => {
+        mockApiGet
+            .mockResolvedValueOnce({ data: { content: '' } })
+            .mockResolvedValueOnce({ data: { results: sampleResults } })
+
+        renderPage()
+        fireEvent.click(screen.getByText('L2/L3 记忆搜索'))
+        await waitFor(() => {
+            expect(screen.getByPlaceholderText(/输入角色、事件/)).toBeInTheDocument()
+        })
+
+        fireEvent.change(screen.getByPlaceholderText(/输入角色、事件/), {
+            target: { value: '决策' },
+        })
+        fireEvent.click(screen.getByText('检索'))
+        await waitFor(() => {
+            expect(screen.getByText('第一章决策：主角出发')).toBeInTheDocument()
+        })
+
+        fireEvent.click(screen.getByText('第一章决策：主角出发'))
+        await waitFor(() => {
+            expect(screen.getByText('跳到章节')).toBeInTheDocument()
+        })
+    })
+
+    it('renders bracketed evidence as highlight mark instead of raw [] text', async () => {
+        const highlightedResult = [
+            {
+                item_id: 'mem-hit-1',
+                layer: 'L2',
+                source_path: 'memory/L2/MEMORY.md',
+                summary: '命中测试',
+                evidence: '门外是昨晚那个中年女声：“[林七]？是我……”',
+                combined_score: 0.88,
+            },
+        ]
+
+        mockApiGet
+            .mockResolvedValueOnce({ data: { content: '' } })
+            .mockResolvedValueOnce({ data: { results: highlightedResult } })
+
+        renderPage()
+        fireEvent.click(screen.getByText('L2/L3 记忆搜索'))
+        await waitFor(() => {
+            expect(screen.getByPlaceholderText(/输入角色、事件/)).toBeInTheDocument()
+        })
+
+        fireEvent.change(screen.getByPlaceholderText(/输入角色、事件/), {
+            target: { value: '林七' },
+        })
+        fireEvent.click(screen.getByText('检索'))
+
+        await waitFor(() => {
+            expect(screen.getByText('命中测试')).toBeInTheDocument()
+        })
+
+        fireEvent.click(screen.getByText('命中测试'))
+        await waitFor(() => {
+            const mark = screen.getByText('林七')
+            expect(mark.tagName.toLowerCase()).toBe('mark')
+            expect(mark).toHaveClass('memory-hit-mark')
+            expect(screen.queryByText('[林七]')).not.toBeInTheDocument()
         })
     })
 

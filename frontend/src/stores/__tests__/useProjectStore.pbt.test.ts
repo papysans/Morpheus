@@ -23,6 +23,7 @@ function resetStore() {
         _projectsLastFetch: null,
         _projectLastFetch: {},
         _chaptersLastFetch: {},
+        _chaptersProjectId: null,
     })
 }
 

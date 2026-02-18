@@ -1,6 +1,8 @@
 import json
 import re
 import inspect
+import asyncio
+import threading
 from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 from uuid import uuid4
@@ -42,7 +44,7 @@ class Agent:
             {"role": "user", "content": json.dumps(context, ensure_ascii=False, indent=2, default=str)},
         ]
 
-        result = self.llm_client.chat(messages)
+        result = await asyncio.to_thread(self.llm_client.chat, messages)
         if not isinstance(result, str):
             result = str(result)
 
@@ -60,17 +62,42 @@ class Agent:
             {"role": "user", "content": json.dumps(context, ensure_ascii=False, indent=2, default=str)},
         ]
         chunks: List[str] = []
-        for text in self.llm_client.chat_stream_text(messages):
-            if not text:
-                continue
-            chunks.append(text)
-            if on_chunk:
-                maybe = on_chunk(text)
-                if inspect.isawaitable(maybe):
-                    await maybe
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        worker_errors: List[Exception] = []
+
+        def stream_worker():
+            try:
+                for text in self.llm_client.chat_stream_text(messages):
+                    if not text:
+                        continue
+                    loop.call_soon_threadsafe(queue.put_nowait, text)
+            except Exception as exc:
+                worker_errors.append(exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        worker = threading.Thread(target=stream_worker, daemon=True)
+        worker.start()
+        try:
+            while True:
+                text = await queue.get()
+                if text is None:
+                    break
+                chunks.append(text)
+                if on_chunk:
+                    maybe = on_chunk(text)
+                    if inspect.isawaitable(maybe):
+                        await maybe
+        finally:
+            await asyncio.to_thread(worker.join, 0.2)
+
+        if worker_errors:
+            raise worker_errors[0]
+
         result = "".join(chunks).strip()
         if not result:
-            fallback = self.llm_client.chat(messages)
+            fallback = await asyncio.to_thread(self.llm_client.chat, messages)
             if not isinstance(fallback, str):
                 fallback = str(fallback)
             result = fallback
@@ -165,9 +192,21 @@ class AgentStudio:
         provider: str = "minimax",
         model: Optional[str] = None,
         api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        chat_max_tokens: Optional[int] = None,
+        chat_temperature: Optional[float] = None,
+        context_window_tokens: Optional[int] = None,
     ):
         self.provider = provider
-        self.llm_client = create_llm_client(provider=provider, api_key=api_key, model=model)
+        self.llm_client = create_llm_client(
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            chat_max_tokens=chat_max_tokens,
+            chat_temperature=chat_temperature,
+            context_window_tokens=context_window_tokens,
+        )
         self.agents: Dict[AgentRole, Agent] = {}
         self.trace: Optional[AgentTrace] = None
         self._init_agents()
@@ -225,7 +264,8 @@ class StudioWorkflow:
     async def generate_plan(self, chapter: Chapter, context: Dict[str, Any]) -> ChapterPlan:
         director = self.studio.get_agent(AgentRole.DIRECTOR)
 
-        search_results = self.memory_search(chapter.goal, fts_top_k=20)
+        memory_query = f"{chapter.title} {chapter.goal}".strip()
+        search_results = self.memory_search(memory_query, fts_top_k=20)
         self.studio.add_memory_hits(search_results)
 
         ctx = {
@@ -262,8 +302,11 @@ class StudioWorkflow:
         setter = self.studio.get_agent(AgentRole.SETTER)
         stylist = self.studio.get_agent(AgentRole.STYLIST)
         arbiter = self.studio.get_agent(AgentRole.ARBITER)
+        target_words = context.get("target_words")
+        length_instruction = self._build_length_instruction(target_words)
 
-        memory_hits = self.memory_search(chapter.goal, fts_top_k=25)
+        memory_query = f"{chapter.title} {chapter.goal}".strip()
+        memory_hits = self.memory_search(memory_query, fts_top_k=25)
         self.studio.add_memory_hits(memory_hits)
 
         draft_context = {
@@ -280,7 +323,10 @@ class StudioWorkflow:
         director_text = await director.think(
             {
                 **draft_context,
-                "instruction": "请基于计划写出章节初稿，输出纯正文。",
+                "instruction": (
+                    "请基于计划写出章节初稿，输出纯正文。"
+                    f"{length_instruction}"
+                ),
             }
         )
         director_decision = director.decide(
@@ -307,7 +353,10 @@ class StudioWorkflow:
                 **draft_context,
                 "draft": director_text,
                 "setter_feedback": setter_text,
-                "instruction": "请在不改事实的前提下润色正文。",
+                "instruction": (
+                    "请在不改事实的前提下润色正文。"
+                    f"{length_instruction}"
+                ),
             }
         )
         stylist_decision = stylist.decide(
@@ -325,6 +374,7 @@ class StudioWorkflow:
                 "instruction": (
                     "请输出最终章节正文。要求：保留事实一致性，尽量吸收润色建议，"
                     "只输出正文，不要解释。"
+                    f"{length_instruction}"
                 ),
             }
         )
@@ -348,8 +398,11 @@ class StudioWorkflow:
         setter = self.studio.get_agent(AgentRole.SETTER)
         stylist = self.studio.get_agent(AgentRole.STYLIST)
         arbiter = self.studio.get_agent(AgentRole.ARBITER)
+        target_words = context.get("target_words")
+        length_instruction = self._build_length_instruction(target_words)
 
-        memory_hits = self.memory_search(chapter.goal, fts_top_k=25)
+        memory_query = f"{chapter.title} {chapter.goal}".strip()
+        memory_hits = self.memory_search(memory_query, fts_top_k=25)
         self.studio.add_memory_hits(memory_hits)
 
         draft_context = {
@@ -367,7 +420,10 @@ class StudioWorkflow:
         director_text = await director.think_stream(
             {
                 **draft_context,
-                "instruction": "请基于计划写出章节初稿，输出纯正文。",
+                "instruction": (
+                    "请基于计划写出章节初稿，输出纯正文。"
+                    f"{length_instruction}"
+                ),
             },
             on_chunk=on_chunk,
         )
@@ -395,7 +451,10 @@ class StudioWorkflow:
                 **draft_context,
                 "draft": director_text,
                 "setter_feedback": setter_text,
-                "instruction": "请在不改事实的前提下润色正文。",
+                "instruction": (
+                    "请在不改事实的前提下润色正文。"
+                    f"{length_instruction}"
+                ),
             }
         )
         stylist_decision = stylist.decide(
@@ -414,6 +473,7 @@ class StudioWorkflow:
                 "instruction": (
                     "请输出最终章节正文。要求：保留事实一致性，尽量吸收润色建议，"
                     "只输出正文，不要解释。"
+                    f"{length_instruction}"
                 ),
             },
         )
@@ -496,6 +556,32 @@ class StudioWorkflow:
             pass
         return []
 
+    def _strip_json_fence(self, text: str) -> str:
+        payload = (text or "").strip()
+        payload = re.sub(r"^```(?:json)?", "", payload).strip()
+        payload = re.sub(r"```$", "", payload).strip()
+        return payload
+
+    def _load_json_object_payload(self, text: str) -> Optional[Dict[str, Any]]:
+        payload = self._strip_json_fence(text)
+        if not payload:
+            return None
+
+        candidates = [payload]
+        start = payload.find("{")
+        end = payload.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(payload[start : end + 1])
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
     def _extract_dict(self, text: str, key: str) -> Dict[str, str]:
         try:
             import re
@@ -509,25 +595,47 @@ class StudioWorkflow:
             pass
         return {}
 
+    def _normalize_role_goals(self, value: Any) -> Dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        ignored_keys = {
+            "goal",
+            "goals",
+            "id",
+            "description",
+            "type",
+            "item",
+            "target",
+            "source_chapter",
+            "potential_use",
+        }
+        normalized: Dict[str, str] = {}
+        for raw_key, raw_goal in value.items():
+            key = str(raw_key).strip()
+            goal = str(raw_goal).strip() if raw_goal is not None else ""
+            if not key or not goal:
+                continue
+            if key.lower() in ignored_keys:
+                continue
+            normalized[key] = goal
+        return normalized
+
     def _extract_plan_payload(self, text: str, chapter: Chapter) -> Dict[str, Any]:
-        try:
-            payload = json.loads(text)
-            if isinstance(payload, dict):
-                return {
-                    "beats": self._normalize_list(payload.get("beats")),
-                    "conflicts": self._normalize_list(payload.get("conflicts")),
-                    "foreshadowing": self._normalize_list(payload.get("foreshadowing")),
-                    "callback_targets": self._normalize_list(payload.get("callback_targets")),
-                    "role_goals": payload.get("role_goals") if isinstance(payload.get("role_goals"), dict) else {},
-                }
-        except Exception:
-            pass
+        payload = self._load_json_object_payload(text)
+        if payload:
+            return {
+                "beats": self._normalize_list(payload.get("beats")),
+                "conflicts": self._normalize_list(payload.get("conflicts")),
+                "foreshadowing": self._normalize_list(payload.get("foreshadowing")),
+                "callback_targets": self._normalize_list(payload.get("callback_targets")),
+                "role_goals": self._normalize_role_goals(payload.get("role_goals")),
+            }
 
         beats = self._extract_list(text, "beats")
         conflicts = self._extract_list(text, "conflicts")
         foreshadowing = self._extract_list(text, "foreshadowing")
         callback_targets = self._extract_list(text, "callback_targets")
-        role_goals = self._extract_dict(text, "role_goals")
+        role_goals = self._normalize_role_goals(self._extract_dict(text, "role_goals"))
 
         if not beats:
             beats = [
@@ -554,7 +662,38 @@ class StudioWorkflow:
         if not value:
             return []
         if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
+            normalized: List[str] = []
+            for item in value:
+                text = ""
+                if isinstance(item, str):
+                    text = item.strip()
+                elif isinstance(item, dict):
+                    for key in (
+                        "description",
+                        "beat",
+                        "content",
+                        "text",
+                        "goal",
+                        "item",
+                        "target",
+                        "name",
+                        "potential_use",
+                    ):
+                        raw = item.get(key)
+                        if raw is None:
+                            continue
+                        candidate = str(raw).strip()
+                        if candidate:
+                            text = candidate
+                            break
+                else:
+                    candidate = str(item).strip()
+                    if candidate and candidate.lower() not in {"none", "null"}:
+                        text = candidate
+
+                if text and text not in normalized:
+                    normalized.append(text)
+            return normalized
         return []
 
     def _sanitize_draft(self, draft: str, chapter: Chapter, plan: ChapterPlan) -> str:
@@ -590,3 +729,14 @@ class StudioWorkflow:
             f"{beat_b}，旧有信任开始出现裂缝，话语与沉默同样锋利。\n\n"
             f"{beat_c}。他在最后一刻看见那个关键细节，知道真正的反转仍在下一章。"
         )
+
+    def _build_length_instruction(self, target_words: Any) -> str:
+        try:
+            target = int(target_words)
+        except Exception:
+            return ""
+        if target <= 0:
+            return ""
+        upper = max(target + 240, int(target * 1.35))
+        lower = max(300, int(target * 0.75))
+        return f" 目标字数约 {target}，建议区间 {lower}-{upper}，禁止明显超长。"

@@ -1,0 +1,14 @@
+{
+  "stamp": "2026-02-17T15-19-23-803Z",
+  "projectCount": 70,
+  "cardsVisible": 70,
+  "customGenreSupported": false,
+  "createdProjectName": "系统除虫回归-15-19-23",
+  "createdProjectIdFromUrl": null,
+  "openedCorrectDetail": false,
+  "deleteActionFound": false,
+  "deletedFromList": null,
+  "consoleErrors": [],
+  "pageErrors": [],
+  "fatal": "locator.fill: Timeout 30000ms exceeded.\nCall log:\n  - waiting for locator('.project-create-modal').first().getByLabel('项目名称')\n\n    at [stdin]:53:36"
+}

@@ -99,6 +99,7 @@ class Project(BaseModel):
     name: str
     genre: str
     style: str
+    template_id: Optional[str] = None
     target_length: int = 300000
     taboo_constraints: List[str] = Field(default_factory=list)
     status: ProjectStatus = ProjectStatus.INIT
@@ -130,6 +131,9 @@ class Chapter(BaseModel):
     final: Optional[str] = None
     status: ChapterStatus = ChapterStatus.DRAFT
     word_count: int = 0
+    first_pass_ok: Optional[bool] = None
+    memory_hit_count: int = 0
+    p0_conflict_count: int = 0
     conflicts: List[Conflict] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)

@@ -152,6 +152,28 @@ describe('TraceReplayPage', () => {
         })
     })
 
+    it('sanitizes leaked thinking tags in decision content', async () => {
+        mockApiGet.mockResolvedValueOnce({
+            data: {
+                ...sampleTrace,
+                decisions: [
+                    {
+                        ...sampleTrace.decisions[0],
+                        decision_text: '<think>private</think>公开内容',
+                        reasoning: 'thinking: secret\n可见推理',
+                    },
+                ],
+            },
+        })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getAllByText('公开内容').length).toBeGreaterThanOrEqual(2)
+            expect(screen.getByText('可见推理')).toBeInTheDocument()
+        })
+        expect(screen.queryByText(/private/i)).not.toBeInTheDocument()
+        expect(screen.queryByText(/thinking:/i)).not.toBeInTheDocument()
+    })
+
     it('switches decision on click', async () => {
         mockApiGet.mockResolvedValueOnce({ data: sampleTrace })
         renderPage()

@@ -42,7 +42,7 @@ export default function AppLayout() {
 
     const layoutClass = [
         'app-layout',
-        sidebarCollapsed ? 'app-layout--collapsed' : '',
+        sidebarCollapsed && !readingMode ? 'app-layout--collapsed' : '',
         readingMode ? 'app-layout--reading' : '',
     ]
         .filter(Boolean)

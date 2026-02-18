@@ -1,0 +1,123 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - navigation "主导航" [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: 编剧室
+      - button "收起侧边栏" [ref=e7] [cursor=pointer]: ‹
+    - navigation [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]: 导航
+        - link "项目列表" [ref=e11] [cursor=pointer]:
+          - /url: /
+          - img [ref=e13]
+          - generic [ref=e15]: 项目列表
+      - generic [ref=e16]:
+        - generic [ref=e17]: PW系统除虫-1771391454786-A
+        - link "项目概览" [ref=e18] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b
+          - img [ref=e20]
+          - generic [ref=e25]: 项目概览
+        - link "创作控制台" [ref=e26] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b/write
+          - img [ref=e28]
+          - generic [ref=e30]: 创作控制台
+        - link "章节工作台" [ref=e31] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b/chapter
+          - img [ref=e33]
+          - generic [ref=e36]: 章节工作台
+        - link "记忆浏览器" [ref=e37] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b/memory
+          - img [ref=e39]
+          - generic [ref=e42]: 记忆浏览器
+        - link "知识图谱" [ref=e43] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b/graph
+          - img [ref=e45]
+          - generic [ref=e51]: 知识图谱
+        - link "决策回放" [ref=e52] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b/trace
+          - img [ref=e54]
+          - generic [ref=e57]: 决策回放
+      - generic [ref=e58]:
+        - generic [ref=e59]: 最近访问
+        - link "PW系统除虫-1771391454786-A" [ref=e60] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b
+          - img [ref=e62]
+          - generic [ref=e64]: PW系统除虫-1771391454786-A
+      - generic [ref=e65]:
+        - generic [ref=e66]: 全局
+        - link "评测看板" [ref=e67] [cursor=pointer]:
+          - /url: /dashboard
+          - img [ref=e69]
+          - generic [ref=e70]: 评测看板
+    - complementary "操作历史" [ref=e71]:
+      - button "操作历史 0" [ref=e72] [cursor=pointer]:
+        - generic [ref=e73]: 操作历史
+        - generic [ref=e74]: "0"
+  - main [ref=e75]:
+    - generic [ref=e77]:
+      - generic [ref=e78]:
+        - generic [ref=e79]:
+          - link "← 返回项目列表" [ref=e80] [cursor=pointer]:
+            - /url: /
+          - heading "PW系统除虫-1771391454786-A" [level=1] [ref=e81]
+          - paragraph [ref=e82]: 太空歌剧 · 冷峻现实主义 · 目标 300,000 字
+        - generic [ref=e83]:
+          - button "整书导出" [ref=e84] [cursor=pointer]
+          - button "新建章节" [ref=e85] [cursor=pointer]
+      - generic [ref=e86]:
+        - generic [ref=e87]:
+          - generic [ref=e88]: 章节总数
+          - generic [ref=e89]: "0"
+        - generic [ref=e90]:
+          - generic [ref=e91]: 角色实体
+          - generic [ref=e92]: "0"
+        - generic [ref=e93]:
+          - generic [ref=e94]: 事件节点
+          - generic [ref=e95]: "0"
+        - generic [ref=e96]:
+          - generic [ref=e97]: 项目状态
+          - generic [ref=e98]: init
+      - generic [ref=e99]:
+        - link "创作控制台" [ref=e100] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b/write
+        - link "记忆浏览器" [ref=e101] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b/memory
+        - link "知识图谱" [ref=e102] [cursor=pointer]:
+          - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b/graph
+        - link "评测看板" [ref=e103] [cursor=pointer]:
+          - /url: /dashboard
+      - generic [ref=e104]:
+        - heading "创作起点" [level=2] [ref=e105]
+        - paragraph [ref=e106]: 项目概览只负责查看状态与章节管理。整卷/整本生成统一在创作控制台进行，避免入口重复。
+        - textbox "先写一句话梗概，带着它进入创作控制台继续生成。" [ref=e107]
+        - generic [ref=e108]:
+          - combobox [ref=e109]:
+            - option "整卷模式" [selected]
+            - option "整本模式"
+          - link "进入创作控制台" [ref=e110] [cursor=pointer]:
+            - /url: /project/a7f0d522-9eb9-409f-94ef-791c420bce9b/write?scope=volume
+      - generic [ref=e111]:
+        - generic [ref=e112]:
+          - heading "章节列表" [level=2] [ref=e113]
+          - generic [ref=e114] [cursor=pointer]: 共 0 章
+        - table [ref=e116]:
+          - rowgroup [ref=e117]:
+            - row "# 标题 章节目标 状态 字数 冲突数 操作" [ref=e118]:
+              - columnheader "#" [ref=e119]
+              - columnheader "标题" [ref=e120]
+              - columnheader "章节目标" [ref=e121]
+              - columnheader "状态" [ref=e122]
+              - columnheader "字数" [ref=e123]
+              - columnheader "冲突数" [ref=e124]
+              - columnheader "操作" [ref=e125]
+          - rowgroup [ref=e126]:
+            - row "暂无章节，先创建第一章并进入章节工作台生成蓝图。" [ref=e127]:
+              - cell "暂无章节，先创建第一章并进入章节工作台生成蓝图。" [ref=e128]
+  - status:
+    - alert [ref=e129]:
+      - generic [ref=e130]: ✓
+      - generic [ref=e131]: 项目创建成功
+      - button "关闭通知" [ref=e132] [cursor=pointer]: ×
+```

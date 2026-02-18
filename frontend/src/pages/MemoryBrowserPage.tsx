@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useEffect, useState, useCallback, type ReactNode } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { api } from '../lib/api'
 import { useProjectStore } from '../stores/useProjectStore'
@@ -13,6 +13,7 @@ interface MemoryResult {
     source_path: string
     summary: string
     evidence?: string
+    content?: string
     combined_score?: number
     score?: number
 }
@@ -32,8 +33,63 @@ const LAYER_BORDER_COLORS: Record<string, string> = {
     L3: 'rgba(173, 111, 27, 0.4)',
 }
 
+const COLLAPSED_SNIPPET_LIMIT = 96
+const EXPANDED_SNIPPET_LIMIT = 180
+const SNIPPET_HIT_PATTERN = /(\[\[H\]\][\s\S]*?\[\[\/H\]\]|\[[^\]\n]{1,80}\])/g
+
+function compactText(text: string | undefined): string {
+    return String(text || '').replace(/\s+/g, ' ').trim()
+}
+
+function getMemorySnippet(result: MemoryResult, limit: number): string {
+    const primary = compactText(result.evidence)
+    const fallback = compactText(result.content)
+    const raw = primary || fallback
+    if (!raw) return ''
+    if (raw.length <= limit) return raw
+    return `${raw.slice(0, limit)}…`
+}
+
+function renderSnippetWithHighlight(text: string, shouldHighlight: boolean): ReactNode {
+    if (!shouldHighlight || !text) return text
+
+    const parts = text.split(SNIPPET_HIT_PATTERN)
+    if (parts.length === 1) return text
+
+    return parts.map((part, index) => {
+        if (!part) return null
+
+        const taggedMatch = part.match(/^\[\[H\]\]([\s\S]*?)\[\[\/H\]\]$/)
+        if (taggedMatch) {
+            return (
+                <mark key={`mark-tagged-${index}`} className="memory-hit-mark">
+                    {taggedMatch[1]}
+                </mark>
+            )
+        }
+
+        const legacyMatch = part.match(/^\[([^\]\n]{1,80})\]$/)
+        if (legacyMatch) {
+            return (
+                <mark key={`mark-legacy-${index}`} className="memory-hit-mark">
+                    {legacyMatch[1]}
+                </mark>
+            )
+        }
+
+        return <span key={`text-${index}`}>{part}</span>
+    })
+}
+
+function resolveChapterIdFromSourcePath(sourcePath: string): string | null {
+    const match = sourcePath.match(/(?:^|\/)chapters\/([^/]+)\.md$/)
+    if (!match) return null
+    return match[1]
+}
+
 export default function MemoryBrowserPage() {
     const { projectId } = useParams<{ projectId: string }>()
+    const navigate = useNavigate()
     const fetchProject = useProjectStore((s) => s.fetchProject)
     const currentProject = useProjectStore((s) => s.currentProject)
     const addToast = useToastStore((s) => s.addToast)
@@ -51,7 +107,7 @@ export default function MemoryBrowserPage() {
 
     // Load project context
     useEffect(() => {
-        if (projectId && !currentProject) {
+        if (projectId && currentProject?.id !== projectId) {
             fetchProject(projectId)
         }
     }, [projectId, currentProject, fetchProject])
@@ -287,6 +343,13 @@ export default function MemoryBrowserPage() {
                                     {!searching &&
                                         filteredResults.map((result) => {
                                             const isExpanded = expandedId === result.item_id
+                                            const collapsedSnippet = getMemorySnippet(result, COLLAPSED_SNIPPET_LIMIT)
+                                            const expandedSnippet = getMemorySnippet(result, EXPANDED_SNIPPET_LIMIT)
+                                            const shouldHighlightSnippet = Boolean(result.evidence)
+                                            const sourceHref = projectId
+                                                ? `/api/projects/${encodeURIComponent(projectId)}/memory/source?source_path=${encodeURIComponent(result.source_path)}`
+                                                : '#'
+                                            const chapterId = resolveChapterIdFromSourcePath(result.source_path)
                                             return (
                                                 <motion.article
                                                     key={result.item_id}
@@ -371,7 +434,43 @@ export default function MemoryBrowserPage() {
                                                                 >
                                                                     来源: {result.source_path}
                                                                 </p>
-                                                                {result.evidence && (
+                                                                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                                                                    <a
+                                                                        href={sourceHref}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        className="chip-btn"
+                                                                        style={{ textDecoration: 'none' }}
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                    >
+                                                                        打开原文 MD
+                                                                    </a>
+                                                                    {chapterId && projectId && (
+                                                                        <button
+                                                                            type="button"
+                                                                            className="chip-btn"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation()
+                                                                                navigate(`/project/${projectId}/chapter/${chapterId}`)
+                                                                            }}
+                                                                        >
+                                                                            跳到章节
+                                                                        </button>
+                                                                    )}
+                                                                    {result.source_path === 'memory/L1/IDENTITY.md' && (
+                                                                        <button
+                                                                            type="button"
+                                                                            className="chip-btn"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation()
+                                                                                setActiveTab('identity')
+                                                                            }}
+                                                                        >
+                                                                            跳到身份设定
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                                {expandedSnippet && (
                                                                     <div
                                                                         className="card-strong"
                                                                         style={{
@@ -381,7 +480,10 @@ export default function MemoryBrowserPage() {
                                                                             lineHeight: 1.7,
                                                                         }}
                                                                     >
-                                                                        {result.evidence}
+                                                                        <div className="muted" style={{ marginBottom: 6, fontSize: '0.78rem' }}>
+                                                                            {result.evidence ? '关键词命中片段' : '语义命中片段'}
+                                                                        </div>
+                                                                        {renderSnippetWithHighlight(expandedSnippet, shouldHighlightSnippet)}
                                                                     </div>
                                                                 )}
                                                             </motion.div>
@@ -396,7 +498,9 @@ export default function MemoryBrowserPage() {
                                                                 fontSize: '0.78rem',
                                                             }}
                                                         >
-                                                            点击展开完整内容
+                                                            {collapsedSnippet
+                                                                ? renderSnippetWithHighlight(collapsedSnippet, shouldHighlightSnippet)
+                                                                : '点击展开查看来源与原文入口'}
                                                         </p>
                                                     )}
                                                 </motion.article>

@@ -6,6 +6,7 @@ import KnowledgeGraphPage, {
     buildGraphNodes,
     buildGraphEdges,
     getHighlightSets,
+    sanitizeGraphData,
     sortEventsByChapter,
     ENTITY_STYLES,
     type EntityNode,
@@ -158,6 +159,15 @@ describe('buildGraphNodes', () => {
     })
 })
 
+describe('KnowledgeGraphPage project fetch behavior', () => {
+    it('route 项目与 currentProject 不一致时会重新拉取项目', async () => {
+        renderPage('proj-2')
+        await waitFor(() => {
+            expect(mockFetchProject).toHaveBeenCalledWith('proj-2')
+        })
+    })
+})
+
 describe('buildGraphEdges', () => {
     it('creates edges for events with matching subject and object entities', () => {
         const edges = buildGraphEdges(sampleEvents, sampleEntities)
@@ -170,12 +180,24 @@ describe('buildGraphEdges', () => {
 
     it('skips events without matching object entity', () => {
         const edges = buildGraphEdges(sampleEvents, sampleEntities)
-        const ids = edges.map((e) => e.id)
-        expect(ids).not.toContain('ev3') // ev3 has no object
+        expect(edges.some((edge) => edge.label === '战斗')).toBe(false) // ev3 has no object
     })
 
     it('returns empty array when no entities', () => {
         expect(buildGraphEdges(sampleEvents, [])).toEqual([])
+    })
+
+    it('hides progress edges by default and can include them via option', () => {
+        const events: EventEdge[] = [
+            { event_id: 'ev-p', subject: '李明', relation: 'progress', object: '冰霜城', chapter: 1, description: '' },
+            { event_id: 'ev-c', subject: '李明', relation: '冲突', object: '火焰剑', chapter: 2, description: '' },
+        ]
+        const defaultEdges = buildGraphEdges(events, sampleEntities)
+        expect(defaultEdges.map((edge) => edge.label)).toEqual(['冲突'])
+
+        const withProgress = buildGraphEdges(events, sampleEntities, { includeProgress: true })
+        expect(withProgress.map((edge) => edge.label)).toContain('progress')
+        expect(withProgress.map((edge) => edge.label)).toContain('冲突')
     })
 })
 
@@ -185,7 +207,7 @@ describe('getHighlightSets', () => {
         const { highlightedNodeIds, highlightedEdgeIds } = getHighlightSets('e1', edges)
         // e1 connects to e2 (ev1) and e3 (ev2)
         expect(highlightedNodeIds).toEqual(new Set(['e1', 'e2', 'e3']))
-        expect(highlightedEdgeIds).toEqual(new Set(['ev1', 'ev2']))
+        expect(highlightedEdgeIds.size).toBe(2)
     })
 
     it('returns only clicked node when it has no edges', () => {
@@ -225,6 +247,34 @@ describe('sortEventsByChapter', () => {
 
     it('returns empty array for empty input', () => {
         expect(sortEventsByChapter([])).toEqual([])
+    })
+})
+
+describe('sanitizeGraphData', () => {
+    it('normalizes placeholder role names and drops hidden roles', () => {
+        const entities: EntityNode[] = [
+            { entity_id: 'a', entity_type: 'character', name: 'primary', attrs: {}, first_seen_chapter: 2, last_seen_chapter: 2 },
+            { entity_id: 'b', entity_type: 'character', name: 'secondary', attrs: {}, first_seen_chapter: 2, last_seen_chapter: 2 },
+            { entity_id: 'c', entity_type: 'character', name: 'hidden', attrs: {}, first_seen_chapter: 2, last_seen_chapter: 2 },
+            { entity_id: 'd', entity_type: 'character', name: '主角', attrs: {}, first_seen_chapter: 1, last_seen_chapter: 3 },
+        ]
+        const events: EventEdge[] = [
+            { event_id: 'ev-a', subject: 'primary', relation: 'progress', object: 'secondary', chapter: 2, description: '' },
+            { event_id: 'ev-b', subject: 'hidden', relation: 'progress', object: 'primary', chapter: 3, description: '' },
+        ]
+
+        const sanitized = sanitizeGraphData(entities, events)
+        const names = sanitized.entities.map((item) => item.name)
+        expect(names).toContain('主角')
+        expect(names).toContain('关键配角')
+        expect(names).not.toContain('primary')
+        expect(names).not.toContain('secondary')
+        expect(names).not.toContain('hidden')
+        expect(names.filter((name) => name === '主角')).toHaveLength(1)
+
+        expect(sanitized.events).toHaveLength(1)
+        expect(sanitized.events[0].subject).toBe('主角')
+        expect(sanitized.events[0].object).toBe('关键配角')
     })
 })
 
@@ -297,7 +347,7 @@ describe('KnowledgeGraphPage', () => {
     it('renders edges with relation labels', async () => {
         renderPage()
         await waitFor(() => {
-            expect(screen.getByTestId('rf-edge-ev1')).toBeInTheDocument()
+            expect(screen.getAllByTestId(/^rf-edge-/).length).toBeGreaterThan(0)
             expect(screen.getByText('前往')).toBeInTheDocument()
             expect(screen.getByText('获得')).toBeInTheDocument()
         })

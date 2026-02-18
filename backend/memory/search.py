@@ -223,6 +223,7 @@ class EmbeddingProvider:
         model_name: str = "embo-01",
         api_key: Optional[str] = None,
         provider: str = "minimax",
+        base_url: Optional[str] = None,
     ):
         self.model_name = model_name
         self.provider = provider
@@ -232,6 +233,7 @@ class EmbeddingProvider:
             provider=provider,
             api_key=api_key,
             embedding_model=model_name,
+            base_url=base_url,
         )
 
     def embed_text(self, text: str) -> List[float]:

@@ -48,6 +48,22 @@ EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIMENSION=1536
 ```
 
+### 使用 DeepSeek (流式友好)
+
+```bash
+# .env 配置
+LLM_PROVIDER=deepseek
+REMOTE_LLM_ENABLED=true
+DEEPSEEK_API_KEY=sk-your-deepseek-api-key
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+
+# Embedding 配置（建议仍用 MiniMax/OpenAI；未配置时自动离线回退）
+EMBEDDING_MODEL=embo-01
+EMBEDDING_DIMENSION=1024
+REMOTE_EMBEDDING_ENABLED=false
+```
+
 提示：如果你不写 `REMOTE_LLM_ENABLED`，后端会在检测到可用 API Key 时自动启用远程模式。
 
 ## 3. 获取 MiniMax API 密钥
@@ -60,8 +76,8 @@ EMBEDDING_DIMENSION=1536
 ## 4. 启动服务
 
 ```bash
-# 启动后端 (在 backend 目录，推荐使用项目内 venv)
-venv/bin/python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+# 启动后端 (在 backend 目录，推荐多 worker 防止生文阻塞读接口)
+API_WORKERS=2 ./scripts/run_api.sh
 
 # 启动前端 (在 frontend 目录)
 npm run dev
@@ -130,6 +146,9 @@ curl -X POST "http://127.0.0.1:8000/api/projects/<project_id>/prompt-preview" \
 - `gpt-4-turbo-preview`
 - `gpt-4`
 - `text-embedding-3-small`
+
+### DeepSeek
+- `deepseek-chat`
 
 ## 故障排除
 

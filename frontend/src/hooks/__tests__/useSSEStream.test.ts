@@ -139,6 +139,41 @@ describe('useSSEStream', () => {
         expect(useStreamStore.getState().error).toBe('模型超时')
     })
 
+    it('applies chapter_replace as final body after streamed chunks', async () => {
+        const frames = [
+            sseFrame('chapter_start', { chapter_id: 'ch-2', chapter_number: 2, title: '第二章' }),
+            sseFrame('chapter_chunk', { chapter_id: 'ch-2', chapter_number: 2, chunk: '半截初稿' }),
+            sseFrame('chapter_replace', { chapter_id: 'ch-2', chapter_number: 2, title: '第二章', body: '这是完整终稿' }),
+            sseFrame('chapter_done', {
+                id: 'ch-2', chapter_number: 2, title: '第二章',
+                status: 'done', word_count: 222, p0_count: 0,
+            }),
+            sseFrame('done', { generated_chapters: 1, elapsed_s: 1.2 }),
+        ]
+
+        vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(makeSseResponse(frames))
+
+        const { result } = renderHook(() => useSSEStream())
+
+        await act(async () => {
+            await result.current.start({
+                projectId: 'proj-2',
+                form: {
+                    prompt: '写一本小说',
+                    mode: 'studio',
+                    scope: 'volume',
+                    chapter_count: 1,
+                    words_per_chapter: 1600,
+                    auto_approve: true,
+                },
+            })
+        })
+
+        const section = useStreamStore.getState().sections.find((s) => s.chapterId === 'ch-2')
+        expect(section?.body).toBe('这是完整终稿')
+        expect(section?.waiting).toBe(false)
+    })
+
     it('handles HTTP error responses', async () => {
         const onError = vi.fn()
 

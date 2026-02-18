@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from 'vitest'
 import * as fc from 'fast-check'
-import { validateField, type ValidationRule } from '../validation'
+import { validateField } from '../validation'
 
 // === Smart Generators ===
 

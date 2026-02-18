@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ChapterWorkbenchPage from '../ChapterWorkbenchPage'
 
@@ -178,6 +178,18 @@ describe('ChapterWorkbenchPage', () => {
         })
     })
 
+    it('一句话整篇字数输入允许清空后重输', async () => {
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('一句话整篇')).toBeTruthy()
+        })
+        const wordInput = screen.getByDisplayValue('1600') as HTMLInputElement
+        fireEvent.change(wordInput, { target: { value: '' } })
+        expect(wordInput.value).toBe('')
+        fireEvent.change(wordInput, { target: { value: '2200' } })
+        expect(wordInput.value).toBe('2200')
+    })
+
     it('显示决策回放链接', async () => {
         renderPage()
         await waitFor(() => {
@@ -251,7 +263,7 @@ describe('ChapterWorkbenchPage', () => {
             expect(screen.getByText('章节蓝图')).toBeTruthy()
         })
         expect(screen.getByText('开场')).toBeTruthy()
-        expect(screen.getByText('冲突')).toBeTruthy()
+        expect(screen.getAllByText('冲突').length).toBeGreaterThan(0)
         expect(screen.getByText('高潮')).toBeTruthy()
     })
 

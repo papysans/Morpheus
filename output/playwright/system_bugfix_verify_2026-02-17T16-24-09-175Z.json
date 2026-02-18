@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "created": [
+    {
+      "id": "138cb39c-79b8-4f21-9efd-fbf4c3e61b23",
+      "name": "PW系统除虫-1771345449175-A"
+    },
+    {
+      "id": "2ca458c1-8e6a-45e9-ae85-188d7ffe8492",
+      "name": "PW系统除虫-1771345449175-B"
+    }
+  ],
+  "checks": {
+    "writeAProjectNameMatched": true,
+    "writeBSwitchedCorrectly": true,
+    "detailChapterNumberClearRetype": true,
+    "workbenchWordsClearRetype": true,
+    "sidebarHiddenOnNotFound": true
+  },
+  "errors": [],
+  "screenshots": {
+    "writeA": "/Volumes/Work/Projects/Morpheus/output/playwright/system_bugfix_verify_2026-02-17T16-24-09-175Z_01_write_a.png",
+    "writeB": "/Volumes/Work/Projects/Morpheus/output/playwright/system_bugfix_verify_2026-02-17T16-24-09-175Z_02_write_b.png",
+    "numbers": "/Volumes/Work/Projects/Morpheus/output/playwright/system_bugfix_verify_2026-02-17T16-24-09-175Z_03_numbers.png",
+    "notFound": "/Volumes/Work/Projects/Morpheus/output/playwright/system_bugfix_verify_2026-02-17T16-24-09-175Z_04_not_found.png"
+  }
+}

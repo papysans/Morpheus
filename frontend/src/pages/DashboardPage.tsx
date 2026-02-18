@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer, Legend,
@@ -27,6 +28,15 @@ interface Metrics {
     first_pass_rate: number
     exemption_rate: number
     recall_hit_rate: number
+    sample_size?: number
+    chapters_with_p0?: number
+    chapters_first_pass_ok?: number
+    chapters_with_memory_hits?: number
+    quality_details?: {
+        p0_conflict_chapters?: QualityDetailItem[]
+        first_pass_failed_chapters?: QualityDetailItem[]
+        recall_missed_chapters?: QualityDetailItem[]
+    }
 }
 
 interface ProjectItem {
@@ -38,6 +48,39 @@ interface ProjectItem {
     chapter_count: number
     entity_count: number
     event_count: number
+}
+
+interface QualityDetailItem {
+    project_id: string
+    project_name: string
+    chapter_id: string
+    chapter_number: number
+    chapter_title: string
+    chapter_status: string
+    p0_count: number
+    first_pass_ok: boolean
+    memory_hit_count: number
+    has_unresolved_p0: boolean
+}
+
+type QualityDrillKey = 'p0_ratio' | 'first_pass_rate' | 'recall_hit_rate'
+
+const QUALITY_DRILL_CONFIG: Record<
+    QualityDrillKey,
+    { label: string; accessor: (metrics: Metrics | null) => QualityDetailItem[] }
+> = {
+    p0_ratio: {
+        label: 'P0 冲突章节',
+        accessor: (metrics) => metrics?.quality_details?.p0_conflict_chapters ?? [],
+    },
+    first_pass_rate: {
+        label: '一次通过失败章节',
+        accessor: (metrics) => metrics?.quality_details?.first_pass_failed_chapters ?? [],
+    },
+    recall_hit_rate: {
+        label: '记忆召回未命中章节',
+        accessor: (metrics) => metrics?.quality_details?.recall_missed_chapters ?? [],
+    },
 }
 
 /** Metric card definitions for the top row */
@@ -80,9 +123,14 @@ export default function DashboardPage() {
     const [metrics, setMetrics] = useState<Metrics | null>(null)
     const [projects, setProjects] = useState<ProjectItem[]>([])
     const [loading, setLoading] = useState(true)
+    const [selectedDrillKey, setSelectedDrillKey] = useState<QualityDrillKey>('p0_ratio')
     const addToast = useToastStore((s) => s.addToast)
 
     const totals = useMemo(() => computeTotals(projects), [projects])
+    const selectedQualityRows = useMemo(
+        () => QUALITY_DRILL_CONFIG[selectedDrillKey].accessor(metrics),
+        [metrics, selectedDrillKey],
+    )
 
     useEffect(() => {
         loadData()
@@ -152,6 +200,71 @@ export default function DashboardPage() {
                             </div>
                         </div>
                     ))}
+                </section>
+                <p className="muted" style={{ marginTop: 10 }}>
+                    P0 冲突率 = 含未解决 P0 的章节占比；一次通过率 = 首轮可提交章节占比；记忆召回命中率 = 章节存在至少 1 条记忆命中占比。
+                    当前样本章节：{metrics?.sample_size ?? 0}。
+                </p>
+
+                <section className="card dashboard-section" data-testid="quality-drilldown">
+                    <h2 className="section-title">质量指标下钻</h2>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                        {(Object.keys(QUALITY_DRILL_CONFIG) as QualityDrillKey[]).map((key) => (
+                            <button
+                                key={key}
+                                className={`chip-btn ${selectedDrillKey === key ? 'active' : ''}`}
+                                onClick={() => setSelectedDrillKey(key)}
+                            >
+                                {QUALITY_DRILL_CONFIG[key].label}
+                            </button>
+                        ))}
+                    </div>
+                    <p className="muted" style={{ marginTop: 10, marginBottom: 12 }}>
+                        当前列表：{QUALITY_DRILL_CONFIG[selectedDrillKey].label}（{selectedQualityRows.length} 章）
+                    </p>
+                    <div className="table-wrap">
+                        <table aria-label="质量下钻表格">
+                            <thead>
+                                <tr>
+                                    <th>项目</th>
+                                    <th>章节</th>
+                                    <th>P0</th>
+                                    <th>记忆命中</th>
+                                    <th>状态</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {selectedQualityRows.length === 0 && (
+                                    <tr>
+                                        <td colSpan={6} className="muted">
+                                            当前指标下没有异常章节。
+                                        </td>
+                                    </tr>
+                                )}
+                                {selectedQualityRows.map((item) => (
+                                    <tr key={`${item.project_id}:${item.chapter_id}`}>
+                                        <td>{item.project_name}</td>
+                                        <td>
+                                            第 {item.chapter_number} 章 · {item.chapter_title}
+                                        </td>
+                                        <td>{item.p0_count}</td>
+                                        <td>{item.memory_hit_count}</td>
+                                        <td>{item.chapter_status}</td>
+                                        <td>
+                                            <Link
+                                                to={`/project/${item.project_id}/chapter/${item.chapter_id}`}
+                                                className="btn btn-secondary"
+                                                style={{ padding: '4px 10px', fontSize: '0.78rem', textDecoration: 'none' }}
+                                            >
+                                                查看
+                                            </Link>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </section>
 
                 {/* Charts */}

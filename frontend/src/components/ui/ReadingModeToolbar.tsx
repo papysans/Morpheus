@@ -19,36 +19,39 @@ export default function ReadingModeToolbar({
 }: ReadingModeToolbarProps) {
     return (
         <motion.div
-            className="reading-toolbar"
+            className="reading-mode-toolbar"
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: 0.2 }}
         >
             <button
-                className="reading-toolbar__btn reading-toolbar__exit"
+                className="reading-mode-toolbar__btn reading-mode-toolbar__btn--exit"
                 onClick={onExit}
+                type="button"
                 title="退出阅读模式 (Esc)"
             >
                 ✕ 退出阅读
             </button>
 
-            <div className="reading-toolbar__nav">
+            <div className="reading-mode-toolbar__nav">
                 <button
-                    className="reading-toolbar__btn"
+                    className="reading-mode-toolbar__btn"
                     onClick={onPrevChapter}
                     disabled={!hasPrev}
+                    type="button"
                     title="上一章"
                 >
                     ← 上一章
                 </button>
                 {currentLabel && (
-                    <span className="reading-toolbar__label">{currentLabel}</span>
+                    <span className="reading-mode-toolbar__label">{currentLabel}</span>
                 )}
                 <button
-                    className="reading-toolbar__btn"
+                    className="reading-mode-toolbar__btn"
                     onClick={onNextChapter}
                     disabled={!hasNext}
+                    type="button"
                     title="下一章"
                 >
                     下一章 →

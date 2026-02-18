@@ -3,15 +3,17 @@ import hashlib
 import shutil
 import asyncio
 import re
+import threading
 import time
 import logging
 import os
 import inspect
 import tempfile
+import sqlite3
 from enum import Enum
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4, uuid5, NAMESPACE_URL
 
 from fastapi import FastAPI, HTTPException, Request
@@ -22,6 +24,7 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agents.studio import AGENT_PROMPTS, AgentStudio, StudioWorkflow
+from core.story_templates import get_story_template, list_story_templates
 from memory import MemoryStore
 from memory.search import EmbeddingProvider, HybridSearchEngine, VectorStore
 from models import (
@@ -57,6 +60,14 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4-turbo-preview"
     minimax_api_key: Optional[str] = None
     minimax_model: str = "MiniMax-M2.5"
+    deepseek_api_key: Optional[str] = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
+    llm_temperature: float = 1.5
+    llm_max_tokens: int = 4000
+    deepseek_max_tokens: int = 8192
+    llm_context_window_tokens: int = 32768
+    deepseek_context_window_tokens: int = 131072
 
     embedding_model: str = "embo-01"
     embedding_dimension: int = 1024
@@ -110,9 +121,36 @@ SSE_HEADERS = {
 }
 
 
+THINK_BLOCK_PATTERN = re.compile(
+    r"(?is)<\s*think(?:ing)?\s*>.*?<\s*/\s*think(?:ing)?\s*>"
+)
+THINKING_BLOCK_PATTERN = re.compile(r"(?is)```(?:thinking|reasoning)\s*[\s\S]*?```")
+THINKING_LINE_PATTERN = re.compile(r"(?im)^\s*(thinking|thoughts?|reasoning)\s*[:：].*(?:\n|$)")
+
+
+def sanitize_trace_text(value: Optional[str]) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+
+    text = THINK_BLOCK_PATTERN.sub("", text)
+    text = THINKING_BLOCK_PATTERN.sub("", text)
+    text = THINKING_LINE_PATTERN.sub("", text)
+    return text.strip()
+
+
+def sanitize_trace_payload(trace: AgentTrace) -> Dict[str, Any]:
+    payload = trace.model_dump(mode="json")
+    decisions = payload.get("decisions") or []
+    for decision in decisions:
+        decision["decision_text"] = sanitize_trace_text(decision.get("decision_text"))
+        decision["reasoning"] = sanitize_trace_text(decision.get("reasoning"))
+    return payload
+
+
 def _normalize_provider(provider: str) -> str:
     candidate = (provider or "openai").strip().lower()
-    if candidate not in {"openai", "minimax"}:
+    if candidate not in {"openai", "minimax", "deepseek"}:
         logger.warning("invalid llm provider configured=%s fallback=openai", provider)
         return "openai"
     return candidate
@@ -122,33 +160,54 @@ def resolve_llm_runtime() -> Dict[str, Any]:
     requested_provider = _normalize_provider(settings.llm_provider)
     openai_key = (settings.openai_api_key or "").strip()
     minimax_key = (settings.minimax_api_key or "").strip()
+    deepseek_key = (settings.deepseek_api_key or "").strip()
     has_openai_key = bool(openai_key)
     has_minimax_key = bool(minimax_key)
+    has_deepseek_key = bool(deepseek_key)
 
     remote_requested = settings.remote_llm_enabled
     remote_env_raw = os.getenv("REMOTE_LLM_ENABLED")
     auto_enabled = False
     remote_effective = remote_requested
-    if remote_env_raw is None and not remote_requested and (has_openai_key or has_minimax_key):
+    if remote_env_raw is None and not remote_requested and (
+        has_openai_key or has_minimax_key or has_deepseek_key
+    ):
         # Auto-enable remote mode if keys are present and REMOTE_LLM_ENABLED was not explicitly set.
         remote_effective = True
         auto_enabled = True
 
+    provider_has_key = {
+        "openai": has_openai_key,
+        "minimax": has_minimax_key,
+        "deepseek": has_deepseek_key,
+    }
+    provider_fallback_order = {
+        "openai": ["deepseek", "minimax"],
+        "minimax": ["deepseek", "openai"],
+        "deepseek": ["openai", "minimax"],
+    }
+
     effective_provider = requested_provider
     provider_switch_reason = "configured"
-    if requested_provider == "minimax" and not has_minimax_key and has_openai_key:
-        effective_provider = "openai"
-        provider_switch_reason = "switched_to_openai_missing_minimax_key"
-    elif requested_provider == "openai" and not has_openai_key and has_minimax_key:
-        effective_provider = "minimax"
-        provider_switch_reason = "switched_to_minimax_missing_openai_key"
+    if not provider_has_key[requested_provider]:
+        for candidate in provider_fallback_order[requested_provider]:
+            if provider_has_key[candidate]:
+                effective_provider = candidate
+                provider_switch_reason = f"switched_to_{candidate}_missing_{requested_provider}_key"
+                break
 
     if effective_provider == "minimax":
         provider_key = minimax_key
         effective_model = settings.minimax_model
+        effective_base_url = "https://api.minimaxi.com/v1"
+    elif effective_provider == "deepseek":
+        provider_key = deepseek_key
+        effective_model = settings.deepseek_model
+        effective_base_url = settings.deepseek_base_url
     else:
         provider_key = openai_key
         effective_model = settings.openai_model
+        effective_base_url = "https://api.openai.com/v1"
 
     remote_ready = remote_effective and bool(provider_key)
     return {
@@ -156,6 +215,7 @@ def resolve_llm_runtime() -> Dict[str, Any]:
         "effective_provider": effective_provider,
         "provider_switch_reason": provider_switch_reason,
         "effective_model": effective_model,
+        "effective_base_url": effective_base_url,
         "provider_key": provider_key,
         "remote_requested": remote_requested,
         "remote_effective": remote_effective,
@@ -163,6 +223,35 @@ def resolve_llm_runtime() -> Dict[str, Any]:
         "remote_auto_enabled": auto_enabled,
         "has_openai_key": has_openai_key,
         "has_minimax_key": has_minimax_key,
+        "has_deepseek_key": has_deepseek_key,
+    }
+
+
+def resolve_embedding_runtime(runtime: Dict[str, Any]) -> Dict[str, str]:
+    provider_name = runtime["effective_provider"]
+    provider_key = runtime["provider_key"]
+    provider_base_url = runtime["effective_base_url"]
+
+    if provider_name == "deepseek":
+        minimax_key = (settings.minimax_api_key or "").strip()
+        openai_key = (settings.openai_api_key or "").strip()
+        if minimax_key:
+            return {
+                "provider_name": "minimax",
+                "provider_key": minimax_key,
+                "provider_base_url": "https://api.minimaxi.com/v1",
+            }
+        if openai_key:
+            return {
+                "provider_name": "openai",
+                "provider_key": openai_key,
+                "provider_base_url": "https://api.openai.com/v1",
+            }
+
+    return {
+        "provider_name": provider_name,
+        "provider_key": provider_key,
+        "provider_base_url": provider_base_url,
     }
 
 projects: Dict[str, Project] = {}
@@ -175,7 +264,7 @@ vector_index_signatures: Dict[str, str] = {}
 
 llm_runtime = resolve_llm_runtime()
 logger.info(
-    "llm runtime requested_provider=%s effective_provider=%s model=%s remote_requested=%s remote_effective=%s remote_ready=%s auto_enabled=%s keys(openai=%s,minimax=%s)",
+    "llm runtime requested_provider=%s effective_provider=%s model=%s remote_requested=%s remote_effective=%s remote_ready=%s auto_enabled=%s keys(openai=%s,minimax=%s,deepseek=%s)",
     llm_runtime["requested_provider"],
     llm_runtime["effective_provider"],
     llm_runtime["effective_model"],
@@ -185,6 +274,7 @@ logger.info(
     llm_runtime["remote_auto_enabled"],
     llm_runtime["has_openai_key"],
     llm_runtime["has_minimax_key"],
+    llm_runtime["has_deepseek_key"],
 )
 if llm_runtime["provider_switch_reason"] != "configured":
     logger.warning(
@@ -232,7 +322,13 @@ async def http_access_log_middleware(request: Request, call_next):
 
 
 def data_root() -> Path:
-    return Path(settings.data_dir).resolve()
+    configured = Path(settings.data_dir)
+    if configured.is_absolute():
+        root = configured.resolve()
+    else:
+        root = (BACKEND_ROOT / configured).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def projects_root() -> Path:
@@ -263,25 +359,40 @@ def trace_file(project_id: str, chapter_id: str) -> Path:
     return trace_dir / f"{chapter_id}.json"
 
 
+def atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding=encoding,
+        dir=str(path.parent),
+        delete=False,
+    ) as tmp:
+        tmp.write(content)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
+
+
 def save_project(project: Project):
-    project_file(project.id).write_text(
+    atomic_write_text(
+        project_file(project.id),
         json.dumps(project.model_dump(mode="json"), ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 
 def save_chapter(chapter: Chapter):
     chapter.updated_at = datetime.now()
-    chapter_file(chapter.project_id, chapter.id).write_text(
+    atomic_write_text(
+        chapter_file(chapter.project_id, chapter.id),
         json.dumps(chapter.model_dump(mode="json"), ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 
 def save_trace(project_id: str, chapter_id: str, trace: AgentTrace):
-    trace_file(project_id, chapter_id).write_text(
+    atomic_write_text(
+        trace_file(project_id, chapter_id),
         json.dumps(trace.model_dump(mode="json"), ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 
@@ -313,6 +424,145 @@ def purge_project_state(project_id: str):
         traces.pop(chapter_id, None)
 
     metrics_history = [metric for metric in metrics_history if metric.project_id != project_id]
+
+
+def project_dir_path(project_id: str) -> Path:
+    return projects_root() / project_id
+
+
+def project_json_path(project_id: str) -> Path:
+    return project_dir_path(project_id) / "project.json"
+
+
+def chapter_dir_path(project_id: str) -> Path:
+    return project_dir_path(project_id) / "chapters"
+
+
+def chapter_json_path(project_id: str, chapter_id: str) -> Path:
+    return chapter_dir_path(project_id) / f"{chapter_id}.json"
+
+
+def load_project_from_disk(project_id: str) -> Optional[Project]:
+    path = project_json_path(project_id)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return Project.model_validate(payload)
+    except Exception:
+        return None
+
+
+def load_chapter_from_disk(project_id: str, chapter_id: str) -> Optional[Chapter]:
+    path = chapter_json_path(project_id, chapter_id)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        chapter = Chapter.model_validate(payload)
+    except Exception:
+        return None
+    if chapter.project_id != project_id or chapter.id != chapter_id:
+        return None
+    return chapter
+
+
+def sync_project_chapters_from_disk(project_id: str) -> None:
+    if not project_json_path(project_id).exists():
+        purge_project_state(project_id)
+        return
+
+    chapter_dir = chapter_dir_path(project_id)
+    disk_chapters: Dict[str, Chapter] = {}
+    if chapter_dir.exists():
+        for file in chapter_dir.glob("*.json"):
+            try:
+                payload = json.loads(file.read_text(encoding="utf-8"))
+                chapter = Chapter.model_validate(payload)
+            except Exception:
+                continue
+            if chapter.project_id != project_id:
+                continue
+            disk_chapters[chapter.id] = chapter
+
+    stale_chapter_ids = [
+        chapter_id
+        for chapter_id, chapter in list(chapters.items())
+        if chapter.project_id == project_id and chapter_id not in disk_chapters
+    ]
+    for chapter_id in stale_chapter_ids:
+        chapters.pop(chapter_id, None)
+        traces.pop(chapter_id, None)
+
+    for chapter_id, disk_chapter in disk_chapters.items():
+        cached = chapters.get(chapter_id)
+        if (
+            cached
+            and cached.project_id == project_id
+            and cached.updated_at >= disk_chapter.updated_at
+        ):
+            continue
+        chapters[chapter_id] = disk_chapter
+
+
+def resolve_chapter(chapter_id: str) -> Optional[Chapter]:
+    chapter = chapters.get(chapter_id)
+    if chapter:
+        if not resolve_project(chapter.project_id):
+            chapters.pop(chapter_id, None)
+            traces.pop(chapter_id, None)
+            return None
+        disk_chapter = load_chapter_from_disk(chapter.project_id, chapter_id)
+        if disk_chapter:
+            chapters[chapter_id] = disk_chapter
+            return disk_chapter
+        chapters.pop(chapter_id, None)
+        traces.pop(chapter_id, None)
+
+    root = projects_root()
+    for file in root.glob(f"*/chapters/{chapter_id}.json"):
+        try:
+            payload = json.loads(file.read_text(encoding="utf-8"))
+            chapter = Chapter.model_validate(payload)
+        except Exception:
+            continue
+        if not resolve_project(chapter.project_id):
+            continue
+        chapters[chapter.id] = chapter
+        return chapter
+    return None
+
+
+def sync_projects_index_from_disk() -> None:
+    disk_projects: Dict[str, Project] = {}
+    root = projects_root()
+    for project_json in root.glob("*/project.json"):
+        try:
+            payload = json.loads(project_json.read_text(encoding="utf-8"))
+            project = Project.model_validate(payload)
+        except Exception:
+            continue
+        disk_projects[project.id] = project
+
+    stale_ids = [project_id for project_id in list(projects.keys()) if project_id not in disk_projects]
+    for stale_id in stale_ids:
+        logger.warning("purging stale in-memory project project_id=%s reason=missing_on_disk", stale_id)
+        purge_project_state(stale_id)
+
+    for project_id, project in disk_projects.items():
+        projects[project_id] = project
+
+
+def resolve_project(project_id: str) -> Optional[Project]:
+    disk_project = load_project_from_disk(project_id)
+    if disk_project:
+        projects[project_id] = disk_project
+        return disk_project
+    project = projects.get(project_id)
+    if project:
+        purge_project_state(project_id)
+    sync_projects_index_from_disk()
+    return projects.get(project_id)
 
 
 def bootstrap_state():
@@ -365,12 +615,184 @@ def get_or_create_store(project_id: str) -> MemoryStore:
     return memory_stores[project_id]
 
 
+GRAPH_ROLE_NAME_ALIASES = {
+    "primary": "主角",
+    "protagonist": "主角",
+    "secondary": "关键配角",
+    "supporting": "关键配角",
+    "antagonist": "反派",
+}
+
+GRAPH_ROLE_NAME_IGNORES = {
+    "hidden",
+    "secret",
+    "unknown",
+    "none",
+    "null",
+    "goal",
+    "goals",
+    "id",
+    "description",
+    "type",
+    "item",
+    "target",
+    "source_chapter",
+    "potential_use",
+}
+
+GRAPH_ROLE_TEXT_STOPWORDS = {
+    "主角",
+    "章节",
+    "章末",
+    "目标",
+    "冲突",
+    "线索",
+    "伏笔",
+    "回收",
+    "开场",
+    "结尾",
+    "剧情",
+    "故事",
+    "万事屋",
+    "猪肉铺",
+    "猪肉铺2号",
+    "长城路",
+    "长城路猪肉铺",
+    "长城路猪肉铺2号",
+    "黑衣人",
+    "器官库",
+    "数据碎片",
+}
+
+GRAPH_TITLE_SUFFIXES = ("教授", "医生", "老板", "队长", "先生", "小姐", "同学")
+GRAPH_COMMON_SURNAMES = set(
+    "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦许何吕施张孔曹严华金魏陶姜戚谢邹柏窦章云苏潘葛范彭鲁韦马苗凤方俞任袁柳鲍史唐费廉岑薛雷贺倪汤殷罗毕郝邬安常乐于傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路江童颜郭梅盛林钟徐邱骆高夏蔡田樊胡霍虞万支柯管卢莫房缪丁宣邓单杭洪包左石崔吉龚程邢裴陆荣翁荀惠甄曲封芮靳汲段富巫乌焦巴弓车侯班仰仲伊宫宁仇栾甘厉戎祖武符刘景詹龙叶司黎薄印白蒲从鄂索赖卓蔺屠蒙池乔阴胥闻党翟谭贡姬申扶堵冉宰郦桑桂濮牛寿通边扈燕冀郏浦尚农温别庄晏柴瞿阎连茹习艾鱼容向古易慎戈廖衡步都耿满弘匡文寇广禄阙欧殳沃利蔚越隆师巩聂晁勾敖融冷辛阚那简饶曾关蒯相查后荆红游竺权逯盖益桓公"
+)
+
+
+def normalize_graph_role_name(name: str) -> str:
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    key = raw.lower()
+    if key in GRAPH_ROLE_NAME_IGNORES:
+        return ""
+    return GRAPH_ROLE_NAME_ALIASES.get(key, raw)
+
+
+def extract_graph_role_names(text: str, max_names: int = 8) -> List[str]:
+    source = str(text or "").strip()
+    if not source:
+        return []
+
+    def _valid(candidate: str) -> str:
+        normalized = normalize_graph_role_name(candidate)
+        normalized = re.sub(r"^(?:连|那|这|把|对|向|跟|让|与|和)", "", normalized)
+        normalized = re.sub(r"(?:喊|问|说|看|听|追|知|苦|笑|道|叫|答|想|盯|望)$", "", normalized)
+        normalized = normalized.strip()
+        if not normalized:
+            return ""
+        if any(ch.isdigit() for ch in normalized):
+            return ""
+        if len(normalized) < 2 or len(normalized) > 8:
+            return ""
+        if "第" in normalized and "章" in normalized:
+            return ""
+        if normalized in GRAPH_ROLE_TEXT_STOPWORDS:
+            return ""
+        matched_title = next((suffix for suffix in GRAPH_TITLE_SUFFIXES if normalized.endswith(suffix)), None)
+        if matched_title:
+            stem = normalized[: -len(matched_title)]
+            if not stem or len(stem) > 3:
+                return ""
+            if stem[0] not in GRAPH_COMMON_SURNAMES:
+                return ""
+            return normalized
+        if normalized[0] not in GRAPH_COMMON_SURNAMES:
+            return ""
+        if len(normalized) > 4:
+            return ""
+        return normalized
+
+    names: List[str] = []
+    patterns = [
+        r"([\u4e00-\u9fff]{2,6})[（(](?:男主(?:一)?|女主(?:一)?|男二|女二|反派|配角|导师|主角|老板娘|角色)[^）)]*[）)]",
+        r"(?:男主(?:一)?|女主(?:一)?|男二|女二|导师|老板娘|反派|主角)[：:是为]\s*([\u4e00-\u9fff]{2,6})",
+        r"(?:^|[，。！？、“”\\s])([\u4e00-\u9fff]{2,4})(?:低声|轻声|冷声)?(?:说|问|道|喊|笑|看着|看向|盯着|回答|嘀咕|点头)",
+        r"(?:^|[，。！？、“”\\s])([\u4e00-\u9fff]{1,3}(?:教授|医生|老板|队长|先生|小姐|同学))",
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, source):
+            candidate = _valid(match)
+            if not candidate or candidate in names:
+                continue
+            names.append(candidate)
+            if len(names) >= max_names:
+                return names
+    return names
+
+
+def sanitize_graph_entities(entities: List[EntityState]) -> List[EntityState]:
+    merged: Dict[Tuple[str, str], EntityState] = {}
+    for entity in entities:
+        normalized_name = normalize_graph_role_name(entity.name)
+        if not normalized_name:
+            continue
+        key = (entity.entity_type, normalized_name)
+        if key not in merged:
+            merged_entity = entity.model_copy(deep=True)
+            merged_entity.name = normalized_name
+            merged[key] = merged_entity
+            continue
+
+        existing = merged[key]
+        existing.first_seen_chapter = min(existing.first_seen_chapter, entity.first_seen_chapter)
+        existing.last_seen_chapter = max(existing.last_seen_chapter, entity.last_seen_chapter)
+        existing.updated_at = max(existing.updated_at, entity.updated_at)
+        existing.attrs = {**existing.attrs, **entity.attrs}
+        if entity.constraints:
+            existing.constraints = list(dict.fromkeys([*existing.constraints, *entity.constraints]))
+
+    return sorted(merged.values(), key=lambda item: (-item.last_seen_chapter, item.name))
+
+
+def sanitize_graph_events(events: List[EventEdge]) -> List[EventEdge]:
+    normalized: List[EventEdge] = []
+    for event in events:
+        subject = normalize_graph_role_name(event.subject)
+        if not subject:
+            continue
+        obj = normalize_graph_role_name(event.object) if event.object else None
+        if obj == subject:
+            obj = None
+        copied = event.model_copy(deep=True)
+        copied.subject = subject
+        copied.object = obj
+        normalized.append(copied)
+    return normalized
+
+
 def get_project_graph_counts(project_id: str) -> tuple[int, int]:
     try:
         store = get_or_create_store(project_id)
-        entities = store.get_all_entities()
-        events = store.get_all_events()
-        return len(entities), len(events)
+        return store.get_entity_count(), store.get_event_count()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            logger.warning(
+                "project graph count schema missing project_id=%s error=%s attempting_repair=true",
+                project_id,
+                exc,
+            )
+            memory_stores.pop(project_id, None)
+            try:
+                repaired = get_or_create_store(project_id)
+                return repaired.get_entity_count(), repaired.get_event_count()
+            except Exception as repair_exc:
+                logger.warning(
+                    "project graph count repair failed project_id=%s error=%s",
+                    project_id,
+                    repair_exc,
+                )
     except Exception as exc:
         # Keep project listing available even if one project's DB is broken/missing.
         logger.warning(
@@ -378,9 +800,8 @@ def get_project_graph_counts(project_id: str) -> tuple[int, int]:
             project_id,
             exc,
         )
-        logger.exception("project graph count failed project_id=%s", project_id)
         memory_stores.pop(project_id, None)
-        return 0, 0
+    return 0, 0
 
 
 def inspect_project_health(project: Project) -> Dict[str, Any]:
@@ -504,10 +925,21 @@ def get_or_create_studio(project_id: str) -> AgentStudio:
     if project_id not in studios:
         runtime = resolve_llm_runtime()
         provider_key = runtime["provider_key"] if runtime["remote_effective"] else ""
+        effective_provider = runtime["effective_provider"]
+        chat_max_tokens = settings.deepseek_max_tokens if effective_provider == "deepseek" else settings.llm_max_tokens
+        context_window_tokens = (
+            settings.deepseek_context_window_tokens
+            if effective_provider == "deepseek"
+            else settings.llm_context_window_tokens
+        )
         studios[project_id] = AgentStudio(
-            provider=runtime["effective_provider"],
+            provider=effective_provider,
             model=runtime["effective_model"],
             api_key=provider_key,
+            base_url=runtime["effective_base_url"],
+            chat_max_tokens=chat_max_tokens,
+            chat_temperature=settings.llm_temperature,
+            context_window_tokens=context_window_tokens,
         )
         logger.info(
             "studio initialized project_id=%s requested_provider=%s effective_provider=%s model=%s remote_requested=%s remote_effective=%s remote_ready=%s auto_enabled=%s",
@@ -535,35 +967,165 @@ def get_or_create_studio(project_id: str) -> AgentStudio:
 
 
 def chapter_list(project_id: str) -> List[Chapter]:
+    sync_project_chapters_from_disk(project_id)
     return sorted(
         [chapter for chapter in chapters.values() if chapter.project_id == project_id],
         key=lambda ch: ch.chapter_number,
     )
 
 
+def load_trace_from_disk(project_id: str, chapter_id: str) -> Optional[AgentTrace]:
+    file = trace_file(project_id, chapter_id)
+    if not file.exists():
+        return None
+    try:
+        payload = json.loads(file.read_text(encoding="utf-8"))
+        return AgentTrace.model_validate(payload)
+    except Exception:
+        return None
+
+
+def resolve_trace_for_chapter(chapter: Chapter) -> Optional[AgentTrace]:
+    trace = traces.get(chapter.id)
+    if trace:
+        return trace
+    trace = load_trace_from_disk(chapter.project_id, chapter.id)
+    if trace:
+        traces[chapter.id] = trace
+    return trace
+
+
+def is_generated_chapter(chapter: Chapter) -> bool:
+    return (
+        bool(chapter.draft)
+        or bool(chapter.final)
+        or chapter.word_count > 0
+        or chapter.status in {ChapterStatus.REVIEWING, ChapterStatus.REVISED, ChapterStatus.APPROVED}
+    )
+
+
 def collect_project_metrics(project_id: Optional[str] = None) -> Dict[str, Any]:
-    selected = metrics_history
+    selected_runtime_metrics = metrics_history
     if project_id:
-        selected = [m for m in metrics_history if m.project_id == project_id]
-    if not selected:
-        return {
-            "chapter_generation_time": 0,
-            "search_time": 0,
-            "conflicts_per_chapter": 0,
-            "p0_ratio": 0,
-            "first_pass_rate": 0,
-            "exemption_rate": 0,
-            "recall_hit_rate": 0,
+        selected_runtime_metrics = [m for m in metrics_history if m.project_id == project_id]
+
+    project_name_map: Dict[str, str] = {}
+    if project_id:
+        resolved = resolve_project(project_id)
+        project_ids = [project_id] if resolved else []
+        if resolved:
+            project_name_map[project_id] = resolved.name
+    else:
+        sync_projects_index_from_disk()
+        project_ids = list(projects.keys())
+        project_name_map = {item.id: item.name for item in projects.values()}
+
+    generated_chapters: List[Chapter] = []
+    for pid in project_ids:
+        for chapter in chapter_list(pid):
+            if is_generated_chapter(chapter):
+                generated_chapters.append(chapter)
+
+    generated_total = len(generated_chapters)
+    p0_chapter_count = 0
+    first_pass_ok_count = 0
+    recall_hit_count = 0
+    total_conflicts = 0
+    p1_exempted = 0
+    p1_total = 0
+    p0_conflict_chapters: List[Dict[str, Any]] = []
+    first_pass_failed_chapters: List[Dict[str, Any]] = []
+    recall_missed_chapters: List[Dict[str, Any]] = []
+
+    for chapter in generated_chapters:
+        chapter_conflicts = chapter.conflicts or []
+        total_conflicts += len(chapter_conflicts)
+        p0_count = len(
+            [
+                conflict
+                for conflict in chapter_conflicts
+                if conflict.severity.value == "P0" and not conflict.exempted
+            ]
+        )
+        has_unresolved_p0 = any(
+            conflict.severity.value == "P0" and not conflict.exempted
+            for conflict in chapter_conflicts
+        )
+        if has_unresolved_p0:
+            p0_chapter_count += 1
+
+        first_pass_ok = chapter.first_pass_ok
+        if first_pass_ok is None:
+            first_pass_ok = not has_unresolved_p0
+        if first_pass_ok:
+            first_pass_ok_count += 1
+
+        p1_total += len([conflict for conflict in chapter_conflicts if conflict.severity.value == "P1"])
+        p1_exempted += len(
+            [
+                conflict
+                for conflict in chapter_conflicts
+                if conflict.severity.value == "P1" and conflict.exempted
+            ]
+        )
+
+        trace = resolve_trace_for_chapter(chapter)
+        memory_hit_count = len(trace.memory_hits or []) if trace else 0
+        has_memory_hits = memory_hit_count > 0
+        if has_memory_hits:
+            recall_hit_count += 1
+
+        detail = {
+            "project_id": chapter.project_id,
+            "project_name": project_name_map.get(chapter.project_id, chapter.project_id),
+            "chapter_id": chapter.id,
+            "chapter_number": chapter.chapter_number,
+            "chapter_title": chapter.title,
+            "chapter_status": chapter.status.value,
+            "p0_count": p0_count,
+            "first_pass_ok": bool(first_pass_ok),
+            "memory_hit_count": memory_hit_count,
+            "has_unresolved_p0": bool(has_unresolved_p0),
         }
-    total = len(selected)
+        if has_unresolved_p0:
+            p0_conflict_chapters.append(detail)
+        if not first_pass_ok:
+            first_pass_failed_chapters.append(detail)
+        if not has_memory_hits:
+            recall_missed_chapters.append(detail)
+
+    runtime_total = len(selected_runtime_metrics)
+    chapter_generation_time = 0.0
+    search_time = 0.0
+    if runtime_total > 0:
+        chapter_generation_time = (
+            sum(m.chapter_generation_time for m in selected_runtime_metrics) / runtime_total
+        )
+        search_time = sum(m.search_time for m in selected_runtime_metrics) / runtime_total
+
+    conflicts_per_chapter = (total_conflicts / generated_total) if generated_total else 0.0
+    p0_ratio = (p0_chapter_count / generated_total) if generated_total else 0.0
+    first_pass_rate = (first_pass_ok_count / generated_total) if generated_total else 0.0
+    recall_hit_rate = (recall_hit_count / generated_total) if generated_total else 0.0
+    exemption_rate = (p1_exempted / p1_total) if p1_total else 0.0
+
     return {
-        "chapter_generation_time": sum(m.chapter_generation_time for m in selected) / total,
-        "search_time": sum(m.search_time for m in selected) / total,
-        "conflicts_per_chapter": sum(m.conflicts_per_chapter for m in selected) / total,
-        "p0_ratio": sum(m.p0_ratio for m in selected) / total,
-        "first_pass_rate": sum(m.first_pass_rate for m in selected) / total,
-        "exemption_rate": sum(m.exemption_rate for m in selected) / total,
-        "recall_hit_rate": sum(m.recall_hit_rate for m in selected) / total,
+        "chapter_generation_time": chapter_generation_time,
+        "search_time": search_time,
+        "conflicts_per_chapter": conflicts_per_chapter,
+        "p0_ratio": p0_ratio,
+        "first_pass_rate": first_pass_rate,
+        "exemption_rate": exemption_rate,
+        "recall_hit_rate": recall_hit_rate,
+        "sample_size": generated_total,
+        "chapters_with_p0": p0_chapter_count,
+        "chapters_first_pass_ok": first_pass_ok_count,
+        "chapters_with_memory_hits": recall_hit_count,
+        "quality_details": {
+            "p0_conflict_chapters": p0_conflict_chapters,
+            "first_pass_failed_chapters": first_pass_failed_chapters,
+            "recall_missed_chapters": recall_missed_chapters,
+        },
     }
 
 
@@ -576,12 +1138,60 @@ def build_memory_signature(items: List[MemoryItem]) -> str:
     return hashlib.sha1(digest_source.encode("utf-8")).hexdigest()
 
 
+GRAPH_RELATION_MARKERS: List[Tuple[str, List[str]]] = [
+    ("背叛", ["背叛", "出卖", "反叛"]),
+    ("冲突", ["冲突", "对抗", "追击", "威胁", "围攻", "交锋"]),
+    ("合作", ["合作", "联手", "同盟", "并肩", "协作", "结盟"]),
+    ("调查", ["调查", "追查", "寻找", "线索", "潜入", "侦查"]),
+    ("保护", ["保护", "营救", "救下", "掩护", "守住"]),
+    ("交易", ["交易", "委托", "订单", "买卖", "交换"]),
+    ("揭露", ["揭露", "曝光", "真相", "证据"]),
+]
+
+
+def infer_graph_relation(text: str, fallback: str = "关联") -> str:
+    source = str(text or "")
+    for relation, markers in GRAPH_RELATION_MARKERS:
+        if any(marker in source for marker in markers):
+            return relation
+    return fallback
+
+
+def pick_relation_context(text: str, subject: str, target: Optional[str]) -> str:
+    source = str(text or "")
+    if not source:
+        return ""
+    if not subject or not target:
+        return source
+    segments = [seg.strip() for seg in re.split(r"[。！？\n]", source) if seg.strip()]
+    for seg in segments:
+        if subject in seg and target in seg:
+            return seg
+    for seg in segments:
+        if target in seg:
+            return seg
+    return source
+
+
 def upsert_graph_from_chapter(store: MemoryStore, chapter: Chapter):
     if not chapter.draft:
         return
     now = datetime.now()
 
-    role_names = list((chapter.plan.role_goals or {}).keys()) if chapter.plan else []
+    role_names_raw = list((chapter.plan.role_goals or {}).keys()) if chapter.plan else []
+    role_names: List[str] = []
+    for role_name in role_names_raw:
+        normalized = normalize_graph_role_name(role_name)
+        if normalized and normalized not in role_names:
+            role_names.append(normalized)
+    for text_source in (chapter.title, chapter.goal, chapter.draft):
+        for candidate in extract_graph_role_names(text_source, max_names=8):
+            if candidate not in role_names:
+                role_names.append(candidate)
+            if len(role_names) >= 10:
+                break
+        if len(role_names) >= 10:
+            break
     if not role_names:
         role_names = ["主角"]
 
@@ -607,25 +1217,46 @@ def upsert_graph_from_chapter(store: MemoryStore, chapter: Chapter):
             )
         )
 
-    draft = chapter.draft
+    store.delete_events_for_chapter(chapter.chapter_number)
+
     subject = role_names[0]
-    conflict_markers = ["对抗", "背叛", "冲突", "追击", "谈判"]
-    relation = "progress"
-    for marker in conflict_markers:
-        if marker in draft:
-            relation = marker
-            break
-    event = EventEdge(
-        event_id=str(uuid5(NAMESPACE_URL, f"{chapter.id}:{relation}:{chapter.chapter_number}")),
-        subject=subject,
-        relation=relation,
-        object=role_names[1] if len(role_names) > 1 else None,
-        chapter=chapter.chapter_number,
-        timestamp=now,
-        confidence=0.6,
-        description=summarize_event_description(draft),
+    targets = [name for name in role_names[1:5] if name != subject]
+    if not targets:
+        targets = [None]
+
+    conflict_hint = " ".join(chapter.plan.conflicts or []) if chapter.plan else ""
+    combined_text = "\n".join(
+        part
+        for part in (
+            chapter.title,
+            chapter.goal,
+            conflict_hint,
+            chapter.draft[:3600],
+        )
+        if part
     )
-    store.add_event(event)
+
+    for idx, target in enumerate(targets):
+        ctx = pick_relation_context(combined_text, subject, target)
+        if idx == 0 and conflict_hint:
+            ctx = f"{conflict_hint}\n{ctx}"
+        relation = infer_graph_relation(ctx, fallback="关联")
+        event = EventEdge(
+            event_id=str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"{chapter.id}:{chapter.chapter_number}:{idx}:{subject}:{target or ''}:{relation}",
+                )
+            ),
+            subject=subject,
+            relation=relation,
+            object=target,
+            chapter=chapter.chapter_number,
+            timestamp=now,
+            confidence=0.65,
+            description=summarize_event_description(ctx or combined_text),
+        )
+        store.add_event(event)
 
 
 def summarize_event_description(text: str, max_len: int = 140) -> str:
@@ -787,7 +1418,11 @@ def build_chapter_outline(
         project=project,
         identity=identity,
     )
-    raw = studio.llm_client.chat(messages, temperature=0.5, max_tokens=3000)
+    raw = studio.llm_client.chat(
+        messages,
+        temperature=resolve_llm_temperature(studio.llm_client),
+        max_tokens=3000,
+    )
     if not isinstance(raw, str):
         raw = str(raw)
     outline = parse_outline_json(raw)
@@ -831,6 +1466,47 @@ async def emit_progress(reporter: ProgressReporter, event: str, payload: Dict[st
             await maybe
     except Exception:
         logger.exception("progress reporter failed event=%s", event)
+
+
+async def stream_chat_text_async(
+    llm_client: Any,
+    messages: List[Dict[str, str]],
+    *,
+    temperature: float,
+    max_tokens: int,
+):
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+    worker_errors: List[Exception] = []
+
+    def stream_worker():
+        try:
+            for delta in llm_client.chat_stream_text(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ):
+                if not delta:
+                    continue
+                loop.call_soon_threadsafe(queue.put_nowait, delta)
+        except Exception as exc:
+            worker_errors.append(exc)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    worker = threading.Thread(target=stream_worker, daemon=True)
+    worker.start()
+    try:
+        while True:
+            delta = await queue.get()
+            if delta is None:
+                break
+            yield delta
+    finally:
+        await asyncio.to_thread(worker.join, 0.2)
+
+    if worker_errors:
+        raise worker_errors[0]
 
 
 def build_one_shot_messages(
@@ -883,6 +1559,90 @@ def iter_text_chunks(text: str, chunk_size: int = 260):
         yield idx, text[idx : idx + chunk_size]
 
 
+def resolve_draft_max_tokens(llm_client: Any, target_words: int) -> int:
+    target = max(int(target_words or 0), 300)
+    # Chinese long-form drafts typically need >1 token per target "word"/character.
+    desired = max(1024, target * 2)
+    configured_cap = 4096
+    config = getattr(llm_client, "config", None)
+    if config is not None:
+        configured_cap = max(512, int(getattr(config, "chat_max_tokens", 4096) or 4096))
+    return min(desired, configured_cap)
+
+
+def resolve_target_word_upper_bound(target_words: int) -> int:
+    target = max(int(target_words or 0), 300)
+    # Keep a moderate tolerance to absorb model variance while preventing runaway output.
+    return max(target + 240, int(target * 1.35))
+
+
+def _clip_text_at_sentence_boundary(text: str, upper_bound: int) -> str:
+    if len(text) <= upper_bound:
+        return text
+    clipped = text[:upper_bound]
+    # Prefer clipping on paragraph/sentence boundary to reduce abrupt truncation artifacts.
+    boundary = max(
+        clipped.rfind("\n\n"),
+        clipped.rfind("。"),
+        clipped.rfind("！"),
+        clipped.rfind("？"),
+        clipped.rfind("."),
+        clipped.rfind("!"),
+        clipped.rfind("?"),
+    )
+    if boundary >= int(upper_bound * 0.7):
+        clipped = clipped[: boundary + 1]
+    return clipped.rstrip()
+
+
+def enforce_draft_target_words(draft: str, target_words: int) -> str:
+    text = (draft or "").strip()
+    if not text:
+        return text
+    upper_bound = resolve_target_word_upper_bound(target_words)
+    if len(text) <= upper_bound:
+        return text
+    return _clip_text_at_sentence_boundary(text, upper_bound)
+
+
+def resolve_llm_temperature(llm_client: Any) -> float:
+    configured = 1.5
+    config = getattr(llm_client, "config", None)
+    if config is not None:
+        try:
+            configured = float(getattr(config, "chat_temperature", configured) or configured)
+        except Exception:
+            configured = 1.5
+    return max(0.0, min(configured, 2.0))
+
+
+def resolve_context_window_tokens(llm_client: Any) -> int:
+    configured = 32768
+    config = getattr(llm_client, "config", None)
+    if config is not None:
+        configured = max(4096, int(getattr(config, "context_window_tokens", configured) or configured))
+    return configured
+
+
+def compact_previous_chapters(previous: List[str], max_total_chars: int) -> List[str]:
+    if max_total_chars <= 0:
+        return []
+    kept: List[str] = []
+    remaining = max_total_chars
+    for raw in reversed(previous):
+        text = (raw or "").strip()
+        if not text:
+            continue
+        if remaining <= 0:
+            break
+        if len(text) > remaining:
+            text = text[-remaining:]
+        kept.append(text)
+        remaining -= len(text)
+    kept.reverse()
+    return kept
+
+
 def finalize_generated_draft(
     *,
     chapter: Chapter,
@@ -910,6 +1670,9 @@ def finalize_generated_draft(
         },
     )
     chapter.conflicts = [Conflict.model_validate(item) for item in consistency["conflicts"]]
+    chapter.first_pass_ok = bool(consistency["can_submit"])
+    chapter.memory_hit_count = len(trace.memory_hits or [])
+    chapter.p0_conflict_count = int(consistency["p0_count"])
     for conflict in chapter.conflicts:
         studio.add_conflict(conflict)
 
@@ -929,6 +1692,7 @@ def finalize_generated_draft(
             conflicts_per_chapter=float(consistency["total_conflicts"]),
             p0_ratio=float(consistency["p0_count"] > 0),
             first_pass_rate=1.0 if consistency["can_submit"] else 0.0,
+            recall_hit_rate=1.0 if (trace.memory_hits and len(trace.memory_hits) > 0) else 0.0,
             chapter_id=chapter.chapter_number,
             project_id=chapter.project_id,
         )
@@ -977,6 +1741,11 @@ async def generate_one_shot_draft_text(
     workflow = StudioWorkflow(
         studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20))
     )
+    draft_max_tokens = resolve_draft_max_tokens(studio.llm_client, req.target_words)
+    draft_temperature = resolve_llm_temperature(studio.llm_client)
+    context_window_tokens = resolve_context_window_tokens(studio.llm_client)
+    # Reserve completion + safety buffer, then spend the rest on prior chapter context.
+    input_budget = max(4096, context_window_tokens - draft_max_tokens - 2048)
 
     if req.mode == GenerationMode.STUDIO:
         await emit_progress(
@@ -1005,11 +1774,15 @@ async def generate_one_shot_draft_text(
         draft_context = {
             "identity": store.three_layer.get_identity(),
             "project_style": project.style,
-            "previous_chapters": [
-                c.final or c.draft or ""
-                for c in chapter_list(chapter.project_id)
-                if c.chapter_number < chapter.chapter_number
-            ][-5:],
+            "target_words": req.target_words,
+            "previous_chapters": compact_previous_chapters(
+                [
+                    c.final or c.draft or ""
+                    for c in chapter_list(chapter.project_id)
+                    if c.chapter_number < chapter.chapter_number
+                ][-5:],
+                max_total_chars=int(input_budget * 0.55),
+            ),
         }
         if stream_chunk:
             draft = await workflow.generate_draft_stream(
@@ -1020,6 +1793,18 @@ async def generate_one_shot_draft_text(
             )
         else:
             draft = await workflow.generate_draft(chapter, chapter.plan, draft_context)
+        draft_before = draft
+        draft = enforce_draft_target_words(draft_before, req.target_words)
+        if len(draft_before) != len(draft):
+            logger.warning(
+                "draft length clipped chapter_id=%s chapter_no=%s mode=%s target_words=%d before=%d after=%d",
+                chapter.id,
+                chapter.chapter_number,
+                req.mode.value,
+                req.target_words,
+                len(draft_before),
+                len(draft),
+            )
         await emit_progress(
             progress,
             "chapter_stage",
@@ -1034,6 +1819,10 @@ async def generate_one_shot_draft_text(
         for c in chapter_list(chapter.project_id)
         if c.chapter_number < chapter.chapter_number
     ][-3:]
+    previous_chapters = compact_previous_chapters(
+        previous_chapters,
+        max_total_chars=int(input_budget * 0.65),
+    )
     messages = build_one_shot_messages(
         req=req,
         chapter=chapter,
@@ -1049,7 +1838,12 @@ async def generate_one_shot_draft_text(
     )
     if stream_chunk:
         streamed_parts: List[str] = []
-        for delta in studio.llm_client.chat_stream_text(messages, temperature=0.8, max_tokens=4096):
+        async for delta in stream_chat_text_async(
+            studio.llm_client,
+            messages,
+            temperature=draft_temperature,
+            max_tokens=draft_max_tokens,
+        ):
             if not delta:
                 continue
             streamed_parts.append(delta)
@@ -1058,13 +1852,35 @@ async def generate_one_shot_draft_text(
                 await maybe
         raw = "".join(streamed_parts)
         if not raw:
-            fallback_raw = studio.llm_client.chat(messages, temperature=0.8, max_tokens=4096)
+            fallback_raw = await asyncio.to_thread(
+                studio.llm_client.chat,
+                messages,
+                temperature=draft_temperature,
+                max_tokens=draft_max_tokens,
+            )
             raw = fallback_raw if isinstance(fallback_raw, str) else str(fallback_raw)
     else:
-        raw = studio.llm_client.chat(messages, temperature=0.8, max_tokens=4096)
+        raw = await asyncio.to_thread(
+            studio.llm_client.chat,
+            messages,
+            temperature=draft_temperature,
+            max_tokens=draft_max_tokens,
+        )
         if not isinstance(raw, str):
             raw = str(raw)
     draft = workflow._sanitize_draft(raw, chapter, chapter.plan)
+    draft_before = draft
+    draft = enforce_draft_target_words(draft_before, req.target_words)
+    if len(draft_before) != len(draft):
+        logger.warning(
+            "draft length clipped chapter_id=%s chapter_no=%s mode=%s target_words=%d before=%d after=%d",
+            chapter.id,
+            chapter.chapter_number,
+            req.mode.value,
+            req.target_words,
+            len(draft_before),
+            len(draft),
+        )
     await emit_progress(
         progress,
         "chapter_stage",
@@ -1090,8 +1906,13 @@ class CreateProjectRequest(BaseModel):
     name: str
     genre: str
     style: str
+    template_id: Optional[str] = None
     target_length: int = 300000
     taboo_constraints: List[str] = Field(default_factory=list)
+
+
+class BatchDeleteProjectsRequest(BaseModel):
+    project_ids: List[str] = Field(default_factory=list)
 
 
 class CreateChapterRequest(BaseModel):
@@ -1173,8 +1994,14 @@ class ProjectHealthRepairRequest(BaseModel):
 bootstrap_state()
 
 
+@app.get("/api/story-templates")
+async def get_story_templates():
+    return {"templates": list_story_templates()}
+
+
 @app.get("/api/projects")
 async def list_projects():
+    sync_projects_index_from_disk()
     response = []
     for project in sorted(projects.values(), key=lambda p: p.created_at, reverse=True):
         entity_count, event_count = get_project_graph_counts(project.id)
@@ -1184,6 +2011,7 @@ async def list_projects():
                 "name": project.name,
                 "genre": project.genre,
                 "style": project.style,
+                "template_id": project.template_id,
                 "status": project.status.value,
                 "target_length": project.target_length,
                 "chapter_count": len(chapter_list(project.id)),
@@ -1197,6 +2025,7 @@ async def list_projects():
 
 @app.get("/api/projects/health")
 async def projects_health(only_unhealthy: bool = False):
+    sync_projects_index_from_disk()
     health_items: List[Dict[str, Any]] = []
     for project in sorted(projects.values(), key=lambda p: p.created_at, reverse=True):
         item = inspect_project_health(project)
@@ -1259,8 +2088,9 @@ async def projects_health(only_unhealthy: bool = False):
 
 @app.post("/api/projects/health/repair")
 async def repair_projects_health(req: ProjectHealthRepairRequest):
+    sync_projects_index_from_disk()
     if req.project_id:
-        project = projects.get(req.project_id)
+        project = resolve_project(req.project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         targets = [project]
@@ -1284,6 +2114,7 @@ async def llm_runtime_status():
         "requested_provider": runtime["requested_provider"],
         "effective_provider": runtime["effective_provider"],
         "effective_model": runtime["effective_model"],
+        "effective_base_url": runtime["effective_base_url"],
         "provider_switch_reason": runtime["provider_switch_reason"],
         "remote_requested": runtime["remote_requested"],
         "remote_effective": runtime["remote_effective"],
@@ -1291,12 +2122,18 @@ async def llm_runtime_status():
         "remote_auto_enabled": runtime["remote_auto_enabled"],
         "has_openai_key": runtime["has_openai_key"],
         "has_minimax_key": runtime["has_minimax_key"],
+        "has_deepseek_key": runtime["has_deepseek_key"],
+        "llm_temperature": settings.llm_temperature,
+        "llm_max_tokens": settings.llm_max_tokens,
+        "llm_context_window_tokens": settings.llm_context_window_tokens,
+        "deepseek_max_tokens": settings.deepseek_max_tokens,
+        "deepseek_context_window_tokens": settings.deepseek_context_window_tokens,
     }
 
 
 @app.post("/api/projects/{project_id}/prompt-preview")
 async def prompt_preview(project_id: str, req: PromptPreviewRequest):
-    project = projects.get(project_id)
+    project = resolve_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -1365,14 +2202,33 @@ async def prompt_preview(project_id: str, req: PromptPreviewRequest):
 
 @app.post("/api/projects")
 async def create_project(req: CreateProjectRequest):
+    selected_template = get_story_template(req.template_id)
+    if req.template_id and not selected_template:
+        raise HTTPException(status_code=400, detail="Unknown story template")
+
+    template_taboos = selected_template.get("default_taboos", []) if selected_template else []
+    merged_taboos = list(dict.fromkeys([*req.taboo_constraints, *template_taboos]))
+
+    recommended_target_length = (
+        selected_template.get("recommended", {}).get("target_length")
+        if selected_template
+        else None
+    )
+    resolved_target_length = (
+        int(recommended_target_length)
+        if isinstance(recommended_target_length, int) and req.target_length <= 0
+        else req.target_length
+    )
+
     project_id = str(uuid4())
     project = Project(
         id=project_id,
         name=req.name,
         genre=req.genre,
         style=req.style,
-        target_length=req.target_length,
-        taboo_constraints=req.taboo_constraints,
+        template_id=selected_template["id"] if selected_template else None,
+        target_length=resolved_target_length,
+        taboo_constraints=merged_taboos,
         status=ProjectStatus.INIT,
     )
     projects[project_id] = project
@@ -1393,26 +2249,39 @@ async def create_project(req: CreateProjectRequest):
         "## Character Hard Settings\n- (待补充)\n\n"
         "## Style Contract\n"
         f"- {req.style}\n\n"
+        "## Story Template\n"
+    )
+    if selected_template:
+        identity += f"- {selected_template['name']} ({selected_template['category']})\n\n"
+        identity += "## Template Rules\n"
+        identity += "".join(f"- {rule}\n" for rule in selected_template.get("identity_rules", []))
+        identity += "\n## Template Prompt Hint\n"
+        identity += f"- {selected_template.get('prompt_hint', '')}\n\n"
+    else:
+        identity += "- (未指定)\n\n"
+    identity += (
         "## Hard Taboos\n"
     )
-    if req.taboo_constraints:
-        identity += "".join(f"- {item}\n" for item in req.taboo_constraints)
+    if merged_taboos:
+        identity += "".join(f"- {item}\n" for item in merged_taboos)
     else:
         identity += "- (无)\n"
     store.three_layer.update_identity(identity)
     store.sync_file_memories()
     logger.info(
-        "project created project_id=%s name=%s genre=%s style=%s taboo_count=%d",
+        "project created project_id=%s name=%s genre=%s style=%s template=%s taboo_count=%d",
         project.id,
         project.name,
         project.genre,
         project.style,
+        project.template_id,
         len(project.taboo_constraints),
     )
 
     return {
         "id": project.id,
         "name": project.name,
+        "template_id": project.template_id,
         "status": project.status.value,
         "created_at": project.created_at.isoformat(),
     }
@@ -1420,7 +2289,7 @@ async def create_project(req: CreateProjectRequest):
 
 @app.get("/api/projects/{project_id}/export")
 async def export_project(project_id: str):
-    project = projects.get(project_id)
+    project = resolve_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -1449,11 +2318,17 @@ async def export_project(project_id: str):
 
 @app.delete("/api/projects/{project_id}")
 async def delete_project(project_id: str):
-    project = projects.get(project_id)
-    if not project:
+    return _delete_project_internal(project_id)
+
+
+def _delete_project_internal(project_id: str, *, allow_missing: bool = False) -> Dict[str, Any]:
+    project = resolve_project(project_id)
+    base = project_dir_path(project_id)
+    if not project and not base.exists():
+        if allow_missing:
+            return {"status": "missing", "project_id": project_id, "name": project_id}
         raise HTTPException(status_code=404, detail="Project not found")
 
-    base = projects_root() / project_id
     purge_project_state(project_id)
 
     try:
@@ -1463,8 +2338,56 @@ async def delete_project(project_id: str):
         logger.exception("project delete failed project_id=%s", project_id)
         raise HTTPException(status_code=500, detail=f"Failed to delete project files: {exc}") from exc
 
-    logger.info("project deleted project_id=%s name=%s", project_id, project.name)
-    return {"status": "deleted", "project_id": project_id, "name": project.name}
+    project_name = project.name if project else project_id
+    logger.info("project deleted project_id=%s name=%s", project_id, project_name)
+    return {"status": "deleted", "project_id": project_id, "name": project_name}
+
+
+@app.delete("/api/projects")
+async def batch_delete_projects(req: BatchDeleteProjectsRequest):
+    requested = [str(project_id).strip() for project_id in req.project_ids if str(project_id).strip()]
+    if not requested:
+        raise HTTPException(status_code=400, detail="project_ids is required")
+
+    unique_ids = list(dict.fromkeys(requested))
+    deleted: List[Dict[str, Any]] = []
+    missing: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+
+    for project_id in unique_ids:
+        try:
+            result = _delete_project_internal(project_id, allow_missing=True)
+            if result.get("status") == "deleted":
+                deleted.append(result)
+            else:
+                missing.append(result)
+        except HTTPException as exc:
+            failed.append(
+                {
+                    "project_id": project_id,
+                    "status": "failed",
+                    "detail": str(exc.detail),
+                }
+            )
+        except Exception as exc:
+            logger.exception("project batch delete failed project_id=%s", project_id)
+            failed.append(
+                {
+                    "project_id": project_id,
+                    "status": "failed",
+                    "detail": str(exc),
+                }
+            )
+
+    return {
+        "requested_count": len(unique_ids),
+        "deleted_count": len(deleted),
+        "missing_count": len(missing),
+        "failed_count": len(failed),
+        "deleted": deleted,
+        "missing": missing,
+        "failed": failed,
+    }
 
 
 @app.post("/api/projects/{project_id}/delete")
@@ -1473,9 +2396,15 @@ async def delete_project_compat(project_id: str):
     return await delete_project(project_id)
 
 
+@app.post("/api/projects/batch-delete")
+async def batch_delete_projects_compat(req: BatchDeleteProjectsRequest):
+    # Compatibility fallback for environments that do not pass through DELETE with request body.
+    return await batch_delete_projects(req)
+
+
 @app.get("/api/projects/{project_id}")
 async def get_project(project_id: str):
-    project = projects.get(project_id)
+    project = resolve_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -1486,6 +2415,7 @@ async def get_project(project_id: str):
         "name": project.name,
         "genre": project.genre,
         "style": project.style,
+        "template_id": project.template_id,
         "target_length": project.target_length,
         "taboo_constraints": project.taboo_constraints,
         "status": project.status.value,
@@ -1499,7 +2429,8 @@ async def get_project(project_id: str):
 
 @app.get("/api/projects/{project_id}/chapters")
 async def list_chapters(project_id: str):
-    if project_id not in projects:
+    project = resolve_project(project_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return [
         {
@@ -1553,7 +2484,8 @@ async def run_one_shot_book_generation(
         "outline_start",
         {"scope": req.scope.value, "chapter_count": chapter_count},
     )
-    outline = build_chapter_outline(
+    outline = await asyncio.to_thread(
+        build_chapter_outline,
         prompt=req.prompt.strip(),
         chapter_count=chapter_count,
         scope=req.scope.value,
@@ -1841,7 +2773,7 @@ async def run_one_shot_book_generation(
 
 @app.post("/api/projects/{project_id}/one-shot-book")
 async def generate_one_shot_book(project_id: str, req: OneShotBookRequest):
-    project = projects.get(project_id)
+    project = resolve_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -1872,7 +2804,7 @@ async def generate_one_shot_book(project_id: str, req: OneShotBookRequest):
 
 @app.post("/api/projects/{project_id}/one-shot-book/stream")
 async def generate_one_shot_book_stream(project_id: str, req: OneShotBookRequest):
-    project = projects.get(project_id)
+    project = resolve_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -1952,7 +2884,7 @@ async def generate_one_shot_book_stream(project_id: str, req: OneShotBookRequest
 
 @app.post("/api/chapters")
 async def create_chapter(req: CreateChapterRequest):
-    if req.project_id not in projects:
+    if not resolve_project(req.project_id):
         raise HTTPException(status_code=404, detail="Project not found")
 
     for existing in chapter_list(req.project_id):
@@ -1981,7 +2913,7 @@ async def create_chapter(req: CreateChapterRequest):
 
 @app.get("/api/chapters/{chapter_id}")
 async def get_chapter(chapter_id: str):
-    chapter = chapters.get(chapter_id)
+    chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
     return chapter.model_dump(mode="json")
@@ -1989,10 +2921,10 @@ async def get_chapter(chapter_id: str):
 
 @app.put("/api/chapters/{chapter_id}/draft")
 async def update_draft(chapter_id: str, payload: UpdateDraftRequest):
-    chapter = chapters.get(chapter_id)
+    chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
-    project = projects.get(chapter.project_id)
+    project = resolve_project(chapter.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -2012,6 +2944,9 @@ async def update_draft(chapter_id: str, payload: UpdateDraftRequest):
         },
     )
     chapter.conflicts = [Conflict.model_validate(item) for item in consistency["conflicts"]]
+    chapter.p0_conflict_count = int(consistency["p0_count"])
+    if chapter.first_pass_ok is None:
+        chapter.first_pass_ok = bool(consistency["can_submit"])
     save_chapter(chapter)
     logger.info(
         "draft updated manually chapter_id=%s project_id=%s words=%d conflicts_total=%d p0=%d",
@@ -2026,10 +2961,10 @@ async def update_draft(chapter_id: str, payload: UpdateDraftRequest):
 
 @app.post("/api/chapters/{chapter_id}/plan")
 async def generate_plan(chapter_id: str):
-    chapter = chapters.get(chapter_id)
+    chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
-    project = projects.get(chapter.project_id)
+    project = resolve_project(chapter.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -2077,10 +3012,10 @@ async def generate_draft(chapter_id: str):
 
 @app.post("/api/chapters/{chapter_id}/one-shot")
 async def generate_one_shot_draft(chapter_id: str, req: OneShotDraftRequest):
-    chapter = chapters.get(chapter_id)
+    chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
-    project = projects.get(chapter.project_id)
+    project = resolve_project(chapter.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -2124,10 +3059,10 @@ async def generate_one_shot_draft(chapter_id: str, req: OneShotDraftRequest):
 
 
 async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict[str, Any]:
-    chapter = chapters.get(chapter_id)
+    chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
-    project = projects.get(chapter.project_id)
+    project = resolve_project(chapter.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -2198,7 +3133,7 @@ async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict
 @app.get("/api/chapters/{chapter_id}/draft/stream")
 async def stream_draft(chapter_id: str, force: bool = False, resume_from: int = 0):
     result = await _generate_draft_internal(chapter_id, force=force)
-    chapter = chapters.get(chapter_id)
+    chapter = resolve_chapter(chapter_id)
     if not chapter or not chapter.draft:
         raise HTTPException(status_code=404, detail="Draft not found")
 
@@ -2241,7 +3176,7 @@ async def stream_draft(chapter_id: str, force: bool = False, resume_from: int = 
 
 @app.post("/api/consistency/check")
 async def check_consistency(req: ConsistencyCheckRequest):
-    project = projects.get(req.project_id)
+    project = resolve_project(req.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     store = get_or_create_store(req.project_id)
@@ -2261,7 +3196,7 @@ async def check_consistency(req: ConsistencyCheckRequest):
 
 @app.post("/api/memory/commit")
 async def commit_memory(req: MemoryCommitRequest):
-    chapter = chapters.get(req.chapter_id)
+    chapter = resolve_chapter(req.chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
     if not chapter.final:
@@ -2278,7 +3213,7 @@ async def commit_memory(req: MemoryCommitRequest):
 
 @app.get("/api/memory/query")
 async def query_memory(project_id: str, query: str, layers: Optional[str] = None):
-    if project_id not in projects:
+    if not resolve_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     store = get_or_create_store(project_id)
     store.sync_file_memories()
@@ -2299,14 +3234,17 @@ async def query_memory(project_id: str, query: str, layers: Optional[str] = None
     if os.getenv("REMOTE_EMBEDDING_ENABLED") is None and not embedding_remote_requested:
         embedding_remote_effective = runtime["remote_effective"]
 
-    provider_key = runtime["provider_key"] if embedding_remote_effective else ""
-    embedding_provider_name = runtime["effective_provider"]
+    embedding_runtime = resolve_embedding_runtime(runtime)
+    provider_key = embedding_runtime["provider_key"] if embedding_remote_effective else ""
+    embedding_provider_name = embedding_runtime["provider_name"]
+    embedding_provider_base_url = embedding_runtime["provider_base_url"]
     logger.info(
-        "memory query runtime project_id=%s embedding_remote_requested=%s embedding_remote_effective=%s provider=%s key_ready=%s",
+        "memory query runtime project_id=%s embedding_remote_requested=%s embedding_remote_effective=%s provider=%s llm_provider=%s key_ready=%s",
         project_id,
         embedding_remote_requested,
         embedding_remote_effective,
         embedding_provider_name,
+        runtime["effective_provider"],
         bool(provider_key),
     )
     if provider_key:
@@ -2314,6 +3252,7 @@ async def query_memory(project_id: str, query: str, layers: Optional[str] = None
             model_name=settings.embedding_model,
             api_key=provider_key,
             provider=embedding_provider_name,
+            base_url=embedding_provider_base_url,
         )
         query_embedding = embedding_provider.embed_text(query)
 
@@ -2323,6 +3262,7 @@ async def query_memory(project_id: str, query: str, layers: Optional[str] = None
             model_name=settings.embedding_model,
             api_key=provider_key,
             provider=embedding_provider_name,
+            base_url=embedding_provider_base_url,
         )
         for item in items:
             text_for_embedding = f"{item.summary}\n{item.content[:400]}"
@@ -2362,11 +3302,35 @@ async def query_memory(project_id: str, query: str, layers: Optional[str] = None
     return {"query": query, "results": results, "total": len(results)}
 
 
+@app.get("/api/projects/{project_id}/memory/source")
+async def get_memory_source_file(project_id: str, source_path: str):
+    if not resolve_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project_root = project_dir_path(project_id).resolve()
+    candidate = (project_root / source_path).resolve()
+    try:
+        candidate.relative_to(project_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid source_path") from exc
+
+    if candidate.suffix.lower() != ".md":
+        raise HTTPException(status_code=400, detail="only markdown sources are supported")
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="source file not found")
+
+    return FileResponse(
+        str(candidate),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'inline; filename="{candidate.name}"'},
+    )
+
+
 @app.get("/api/trace/{chapter_id}")
 async def get_trace(chapter_id: str):
     trace = traces.get(chapter_id)
     if not trace:
-        chapter = chapters.get(chapter_id)
+        chapter = resolve_chapter(chapter_id)
         if chapter:
             file = trace_file(chapter.project_id, chapter_id)
             if file.exists():
@@ -2375,12 +3339,12 @@ async def get_trace(chapter_id: str):
                 traces[chapter_id] = trace
     if not trace:
         raise HTTPException(status_code=404, detail="Trace not found")
-    return trace.model_dump(mode="json")
+    return sanitize_trace_payload(trace)
 
 
 @app.post("/api/review")
 async def review_chapter(req: ReviewRequest):
-    chapter = chapters.get(req.chapter_id)
+    chapter = resolve_chapter(req.chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
 
@@ -2430,21 +3394,25 @@ async def get_metrics(project_id: Optional[str] = None):
 
 @app.get("/api/entities/{project_id}")
 async def get_entities(project_id: str):
-    if project_id not in projects:
+    if not resolve_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
-    return [entity.model_dump(mode="json") for entity in get_or_create_store(project_id).get_all_entities()]
+    store = get_or_create_store(project_id)
+    entities = sanitize_graph_entities(store.get_all_entities())
+    return [entity.model_dump(mode="json") for entity in entities]
 
 
 @app.get("/api/events/{project_id}")
 async def get_events(project_id: str):
-    if project_id not in projects:
+    if not resolve_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
-    return [event.model_dump(mode="json") for event in get_or_create_store(project_id).get_all_events()]
+    store = get_or_create_store(project_id)
+    events = sanitize_graph_events(store.get_all_events())
+    return [event.model_dump(mode="json") for event in events]
 
 
 @app.get("/api/identity/{project_id}")
 async def get_identity(project_id: str):
-    if project_id not in projects:
+    if not resolve_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     store = get_or_create_store(project_id)
     return {"content": store.three_layer.get_identity()}
@@ -2452,7 +3420,7 @@ async def get_identity(project_id: str):
 
 @app.put("/api/identity/{project_id}")
 async def update_identity(project_id: str, payload: IdentityUpdateRequest):
-    if project_id not in projects:
+    if not resolve_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     store = get_or_create_store(project_id)
     store.three_layer.update_identity(payload.content)
