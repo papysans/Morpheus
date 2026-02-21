@@ -662,6 +662,20 @@ GRAPH_ROLE_TEXT_STOPWORDS = {
     "黑衣人",
     "器官库",
     "数据碎片",
+    "都市传",
+    "都市怪",
+}
+GRAPH_ROLE_PLACEHOLDER_NAMES = {"主角", "关键配角", "反派"}
+GRAPH_ROLE_COMPOUND_TOKEN_BLOCKLIST = {
+    "传说",
+    "都市传说",
+    "都市传闻",
+    "都市怪谈",
+    "神话传说",
+    "民间传说",
+    "江湖传说",
+    "据说",
+    "听说",
 }
 
 GRAPH_TITLE_SUFFIXES = ("教授", "医生", "老板", "队长", "先生", "小姐", "同学")
@@ -680,50 +694,70 @@ def normalize_graph_role_name(name: str) -> str:
     return GRAPH_ROLE_NAME_ALIASES.get(key, raw)
 
 
+def validate_graph_role_name(name: str, *, allow_placeholders: bool = True) -> str:
+    normalized = normalize_graph_role_name(name)
+    normalized = re.sub(r"^(?:连|那|这|把|对|向|跟|让|与|和)", "", normalized)
+    normalized = re.sub(r"(?:喊|问|说|看|听|追|知|苦|笑|道|叫|答|想|盯|望)$", "", normalized)
+    normalized = normalized.strip()
+    if not normalized:
+        return ""
+    if any(ch.isdigit() for ch in normalized):
+        return ""
+    if len(normalized) < 2 or len(normalized) > 8:
+        return ""
+    if "第" in normalized and "章" in normalized:
+        return ""
+    if normalized in GRAPH_ROLE_PLACEHOLDER_NAMES:
+        return normalized if allow_placeholders else ""
+    if normalized in GRAPH_ROLE_TEXT_STOPWORDS:
+        return ""
+    matched_title = next((suffix for suffix in GRAPH_TITLE_SUFFIXES if normalized.endswith(suffix)), None)
+    if matched_title:
+        stem = normalized[: -len(matched_title)]
+        if not stem or len(stem) > 3:
+            return ""
+        if stem[0] not in GRAPH_COMMON_SURNAMES:
+            return ""
+        return normalized
+    if normalized[0] not in GRAPH_COMMON_SURNAMES:
+        return ""
+    if len(normalized) > 4:
+        return ""
+    return normalized
+
+
 def extract_graph_role_names(text: str, max_names: int = 8) -> List[str]:
     source = str(text or "").strip()
     if not source:
         return []
 
-    def _valid(candidate: str) -> str:
-        normalized = normalize_graph_role_name(candidate)
-        normalized = re.sub(r"^(?:连|那|这|把|对|向|跟|让|与|和)", "", normalized)
-        normalized = re.sub(r"(?:喊|问|说|看|听|追|知|苦|笑|道|叫|答|想|盯|望)$", "", normalized)
-        normalized = normalized.strip()
-        if not normalized:
-            return ""
-        if any(ch.isdigit() for ch in normalized):
-            return ""
-        if len(normalized) < 2 or len(normalized) > 8:
-            return ""
-        if "第" in normalized and "章" in normalized:
-            return ""
-        if normalized in GRAPH_ROLE_TEXT_STOPWORDS:
-            return ""
-        matched_title = next((suffix for suffix in GRAPH_TITLE_SUFFIXES if normalized.endswith(suffix)), None)
-        if matched_title:
-            stem = normalized[: -len(matched_title)]
-            if not stem or len(stem) > 3:
-                return ""
-            if stem[0] not in GRAPH_COMMON_SURNAMES:
-                return ""
-            return normalized
-        if normalized[0] not in GRAPH_COMMON_SURNAMES:
-            return ""
-        if len(normalized) > 4:
-            return ""
-        return normalized
-
     names: List[str] = []
-    patterns = [
-        r"([\u4e00-\u9fff]{2,6})[（(](?:男主(?:一)?|女主(?:一)?|男二|女二|反派|配角|导师|主角|老板娘|角色)[^）)]*[）)]",
-        r"(?:男主(?:一)?|女主(?:一)?|男二|女二|导师|老板娘|反派|主角)[：:是为]\s*([\u4e00-\u9fff]{2,6})",
-        r"(?:^|[，。！？、“”\\s])([\u4e00-\u9fff]{2,4})(?:低声|轻声|冷声)?(?:说|问|道|喊|笑|看着|看向|盯着|回答|嘀咕|点头)",
-        r"(?:^|[，。！？、“”\\s])([\u4e00-\u9fff]{1,3}(?:教授|医生|老板|队长|先生|小姐|同学))",
+    patterns: List[Tuple[str, bool]] = [
+        (
+            r"([\u4e00-\u9fff]{2,6})[（(](?:男主(?:一)?|女主(?:一)?|男二|女二|反派|配角|导师|主角|老板娘|角色)[^）)]*[）)]",
+            False,
+        ),
+        (
+            r"(?:男主(?:一)?|女主(?:一)?|男二|女二|导师|老板娘|反派|主角)[：:是为]\s*([\u4e00-\u9fff]{2,6})",
+            False,
+        ),
+        (
+            r"(?:^|[，。！？、“”\\s])([\u4e00-\u9fff]{2,4})(?:低声|轻声|冷声)?(说|问|道|喊|笑|看着|看向|盯着|回答|嘀咕|点头)",
+            True,
+        ),
+        (
+            r"(?:^|[，。！？、“”\\s])([\u4e00-\u9fff]{1,3}(?:教授|医生|老板|队长|先生|小姐|同学))",
+            False,
+        ),
     ]
-    for pattern in patterns:
-        for match in re.findall(pattern, source):
-            candidate = _valid(match)
+    for pattern, has_action in patterns:
+        for match in re.finditer(pattern, source):
+            raw_candidate = match.group(1)
+            candidate = validate_graph_role_name(raw_candidate, allow_placeholders=False)
+            if has_action and candidate:
+                action = match.group(2)
+                if action and f"{candidate}{action}" in GRAPH_ROLE_COMPOUND_TOKEN_BLOCKLIST:
+                    continue
             if not candidate or candidate in names:
                 continue
             names.append(candidate)
@@ -735,7 +769,7 @@ def extract_graph_role_names(text: str, max_names: int = 8) -> List[str]:
 def sanitize_graph_entities(entities: List[EntityState]) -> List[EntityState]:
     merged: Dict[Tuple[str, str], EntityState] = {}
     for entity in entities:
-        normalized_name = normalize_graph_role_name(entity.name)
+        normalized_name = validate_graph_role_name(entity.name, allow_placeholders=True)
         if not normalized_name:
             continue
         key = (entity.entity_type, normalized_name)
@@ -759,10 +793,10 @@ def sanitize_graph_entities(entities: List[EntityState]) -> List[EntityState]:
 def sanitize_graph_events(events: List[EventEdge]) -> List[EventEdge]:
     normalized: List[EventEdge] = []
     for event in events:
-        subject = normalize_graph_role_name(event.subject)
+        subject = validate_graph_role_name(event.subject, allow_placeholders=True)
         if not subject:
             continue
-        obj = normalize_graph_role_name(event.object) if event.object else None
+        obj = validate_graph_role_name(event.object, allow_placeholders=True) if event.object else None
         if obj == subject:
             obj = None
         copied = event.model_copy(deep=True)
@@ -1181,7 +1215,7 @@ def upsert_graph_from_chapter(store: MemoryStore, chapter: Chapter):
     role_names_raw = list((chapter.plan.role_goals or {}).keys()) if chapter.plan else []
     role_names: List[str] = []
     for role_name in role_names_raw:
-        normalized = normalize_graph_role_name(role_name)
+        normalized = validate_graph_role_name(role_name, allow_placeholders=True)
         if normalized and normalized not in role_names:
             role_names.append(normalized)
     for text_source in (chapter.title, chapter.goal, chapter.draft):

@@ -272,6 +272,45 @@ class NovelistApiSmokeTest(unittest.TestCase):
         events = self.client.get(f"/api/events/{project_id}").json()
         self.assertGreaterEqual(len(events), 2)
 
+    def test_extract_graph_role_names_avoids_urban_legend_fragment(self):
+        text = "“都市传说”在这条街流传。陆仁甲低声说：别信。苏小柒看向他。"
+        names = extract_graph_role_names(text, max_names=8)
+        self.assertNotIn("都市传", names)
+        self.assertIn("陆仁甲", names)
+        self.assertIn("苏小柒", names)
+
+    def test_graph_upsert_ignores_role_goal_noise_like_urban_legend_fragment(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=12)
+        chapter = chapters[chapter_id]
+        chapter.goal = "陆仁甲和苏小柒调查都市传说背后的真相"
+        chapter.plan = ChapterPlan(
+            id=f"plan-{uuid4().hex[:8]}",
+            chapter_id=chapter.chapter_number,
+            title=chapter.title,
+            goal=chapter.goal,
+            beats=[],
+            conflicts=[],
+            foreshadowing=[],
+            callback_targets=[],
+            role_goals={
+                "都市传": "制造恐慌",
+                "陆仁甲": "护住万事屋",
+                "苏小柒": "追查数据源",
+            },
+        )
+        chapter.draft = (
+            "这只是都市传说，不是证词。陆仁甲低声说：先查监控。"
+            "苏小柒看向后巷，示意有人跟踪。"
+        )
+        store = get_or_create_store(project_id)
+        upsert_graph_from_chapter(store, chapter)
+
+        names = [item["name"] for item in self.client.get(f"/api/entities/{project_id}").json()]
+        self.assertNotIn("都市传", names)
+        self.assertIn("陆仁甲", names)
+        self.assertIn("苏小柒", names)
+
     def test_graph_upsert_infers_non_progress_relation_with_conflict_text(self):
         project_id = self._create_project()
         chapter_id = self._create_chapter(project_id, chapter_number=11)
