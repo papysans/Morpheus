@@ -166,11 +166,9 @@ describe('WritingConsolePage', () => {
         expect(screen.getByText('整本')).toBeTruthy()
     })
 
-    it('渲染预设按钮', () => {
+    it('渲染模板预设选择器', () => {
         renderPage()
-        expect(screen.getByText('试跑 4 章')).toBeTruthy()
-        expect(screen.getByText('标准整卷')).toBeTruthy()
-        expect(screen.getByText('整本冲刺')).toBeTruthy()
+        expect(screen.getByLabelText('模板预设')).toBeTruthy()
     })
 
     it('prompt 为空时禁用开始生成按钮', () => {
@@ -230,6 +228,8 @@ describe('WritingConsolePage', () => {
             { id: 'ch-1', chapter_number: 1, title: '序章', status: 'done', word_count: 1500, p0_count: 0 },
         ]
         renderPage()
+        fireEvent.click(screen.getByText('显示辅助面板'))
+        fireEvent.click(screen.getByText('统计'))
         expect(screen.getByText('1 章')).toBeTruthy()
     })
 
@@ -239,7 +239,8 @@ describe('WritingConsolePage', () => {
             { chapterId: 'ch-2', chapterNumber: 2, title: '觉醒', body: '更多内容', waiting: false },
         ]
         renderPage()
-        expect(screen.getByText('章节目录')).toBeTruthy()
+        fireEvent.click(screen.getByText('显示辅助面板'))
+        expect(screen.getAllByText('章节目录').length).toBeGreaterThan(0)
         expect(screen.getByText('第1章')).toBeTruthy()
         expect(screen.getByText('序章')).toBeTruthy()
         expect(screen.getByText('第2章')).toBeTruthy()
@@ -260,6 +261,8 @@ describe('WritingConsolePage', () => {
     it('渲染日志面板', () => {
         mockStreamStore.logs = ['10:00:00  开始流式生成']
         renderPage()
+        fireEvent.click(screen.getByText('显示辅助面板'))
+        fireEvent.click(screen.getByText('日志'))
         expect(screen.getByText('生成日志')).toBeTruthy()
         expect(screen.getByText(/10:00:00.*开始流式生成/)).toBeTruthy()
     })
@@ -453,18 +456,12 @@ describe('WritingConsolePage', () => {
         }
     })
 
-    it('修改高级设置后会弹出已保存提示', () => {
-        vi.useFakeTimers()
-        try {
-            renderPage()
-            const input = screen.getByLabelText('章节数') as HTMLInputElement
-            fireEvent.change(input, { target: { value: '12' } })
-            fireEvent.blur(input)
-
-            vi.advanceTimersByTime(600)
-            expect(mockAddToast).toHaveBeenCalledWith('info', '高级设置已保存')
-        } finally {
-            vi.useRealTimers()
-        }
+    it('修改高级设置后会静默持久化', () => {
+        renderPage()
+        const input = screen.getByLabelText('章节数') as HTMLInputElement
+        fireEvent.change(input, { target: { value: '12' } })
+        fireEvent.blur(input)
+        expect(localStorageMock.setItem).toHaveBeenCalled()
+        expect(mockAddToast).not.toHaveBeenCalledWith('info', '高级设置已保存')
     })
 })

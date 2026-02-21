@@ -969,7 +969,7 @@ pre {
 .writing-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: end;
   gap: 16px;
   flex-wrap: wrap;
 }
@@ -988,23 +988,39 @@ pre {
   font-size: 0.94rem;
 }
 
-.writing-header__presets {
+.writing-header__controls {
   display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.writing-template-picker {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.writing-template-picker select {
+  min-width: 220px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-primary);
+  font: inherit;
 }
 
 .writing-body {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  gap: 16px;
+  display: block;
   flex: 1;
 }
 
-.writing-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.writing-body--with-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
 }
 
 .writing-main {
@@ -1016,7 +1032,65 @@ pre {
 
 .writing-main .stream-paper {
   flex: 1;
-  min-height: 400px;
+  min-height: 460px;
+}
+
+.writing-main__tools {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.writing-main__tools-left,
+.writing-main__tools-right {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.writing-aux-panel {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+  padding: 12px;
+  min-height: 460px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.writing-aux-panel__title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.writing-composer-dock {
+  position: sticky;
+  bottom: 12px;
+  z-index: 12;
+}
+
+.writing-composer-dock__title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.writing-composer-dock__subtitle {
+  margin: 4px 0 10px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.writing-composer-dock__prompt {
+  margin-bottom: 10px;
 }
 
 /* ── ChapterTOC ── */
@@ -1277,16 +1351,17 @@ pre {
 }
 
 @media (max-width: 900px) {
-  .writing-body {
+  .writing-body--with-panel {
     grid-template-columns: 1fr;
   }
 
-  .writing-sidebar {
-    order: 1;
+  .writing-main .stream-paper,
+  .writing-aux-panel {
+    min-height: 320px;
   }
 
-  .writing-main {
-    order: 0;
+  .writing-composer-dock {
+    position: static;
   }
 }
 
@@ -2071,7 +2146,7 @@ tbody tr:hover {
     margin-left: 0;
   }
 
-  .writing-body {
+  .writing-body--with-panel {
     grid-template-columns: 1fr;
   }
 }
