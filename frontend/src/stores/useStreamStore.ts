@@ -24,6 +24,8 @@ export interface GenerationForm {
     chapter_count: number
     words_per_chapter: number
     auto_approve: boolean
+    continuation_mode?: boolean
+    start_chapter_number?: number
 }
 
 interface StreamStore {

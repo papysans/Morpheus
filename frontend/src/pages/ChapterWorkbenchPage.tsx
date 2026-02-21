@@ -195,6 +195,8 @@ export default function ChapterWorkbenchPage() {
     })
     const [showDraftRestore, setShowDraftRestore] = useState(false)
     const [showRejectConfirm, setShowRejectConfirm] = useState(false)
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+    const [deletingChapter, setDeletingChapter] = useState(false)
 
     /* ── 加载章节 ── */
     const loadChapter = useCallback(async () => {
@@ -509,6 +511,76 @@ export default function ChapterWorkbenchPage() {
 
     const projectName = currentProject?.name ?? '小说项目'
 
+    const deleteChapterRequest = async (targetChapterId: string) => {
+        try {
+            await api.delete(`/chapters/${targetChapterId}`)
+        } catch (error: any) {
+            if (error?.response?.status === 405) {
+                await api.post(`/chapters/${targetChapterId}/delete`)
+                return
+            }
+            throw error
+        }
+    }
+
+    const handleDeleteChapter = async (recreate: boolean) => {
+        if (!chapter || !chapterId || !projectId) return
+        setDeletingChapter(true)
+        const snapshot = {
+            chapter_number: chapter.chapter_number,
+            title: chapter.title,
+            goal: chapter.goal,
+        }
+        try {
+            await deleteChapterRequest(chapterId)
+            if (recreate) {
+                const created = await api.post('/chapters', {
+                    project_id: projectId,
+                    chapter_number: snapshot.chapter_number,
+                    title: snapshot.title,
+                    goal: snapshot.goal,
+                })
+                const newChapterId = created?.data?.id
+                if (!newChapterId) {
+                    throw new Error('章节重建失败：缺少新章节 ID')
+                }
+                if (projectId) {
+                    invalidateCache('project', projectId)
+                    invalidateCache('chapters', projectId)
+                    await fetchChapters(projectId, { force: true })
+                }
+                addToast('success', `第 ${snapshot.chapter_number} 章已重建`)
+                addRecord({ type: 'delete', description: `删除并重建章节: ${snapshot.title}`, status: 'success' })
+                navigate(`/project/${projectId}/chapter/${newChapterId}`)
+            } else {
+                if (projectId) {
+                    invalidateCache('project', projectId)
+                    invalidateCache('chapters', projectId)
+                }
+                addToast('success', `第 ${snapshot.chapter_number} 章已删除`)
+                addRecord({ type: 'delete', description: `删除章节: ${snapshot.title}`, status: 'success' })
+                navigate(`/project/${projectId}`)
+            }
+        } catch (error: any) {
+            addToast('error', recreate ? '删除并重建失败' : '删除章节失败', {
+                context: '章节删除',
+                detail: error?.response?.data?.detail || error?.message,
+                actions: [
+                    {
+                        label: '重试',
+                        onClick: () => {
+                            setShowDeleteConfirm(true)
+                        },
+                    },
+                ],
+            })
+            addRecord({ type: 'delete', description: recreate ? '删除并重建失败' : '删除章节失败', status: 'error' })
+        } finally {
+            setDeletingChapter(false)
+            setShowDeleteConfirm(false)
+        }
+    }
+
     /* ── 无 chapterId：显示章节选择列表 ── */
     if (!chapterId) {
         return (
@@ -586,7 +658,12 @@ export default function ChapterWorkbenchPage() {
     if (!chapter) {
         return (
             <PageTransition>
-                <div className="card" style={{ padding: 18 }}>章节数据不可用</div>
+                <div className="card" style={{ padding: 18 }}>
+                    <p style={{ marginTop: 0 }}>章节数据不可用</p>
+                    <Link to={`/project/${projectId}`} className="btn btn-secondary" style={{ textDecoration: 'none' }}>
+                        返回项目详情
+                    </Link>
+                </div>
             </PageTransition>
         )
     }
@@ -637,6 +714,9 @@ export default function ChapterWorkbenchPage() {
                         </p>
                     </div>
                     <div className="grid-actions">
+                        <button className="btn btn-secondary" onClick={() => setShowDeleteConfirm(true)} disabled={streaming || deletingChapter}>
+                            {deletingChapter ? '处理中...' : '删除本章'}
+                        </button>
                         <ChapterExportMenu
                             currentChapter={currentChapterExport}
                             allChapters={allChaptersExport.length > 0 ? allChaptersExport : undefined}
@@ -952,6 +1032,29 @@ export default function ChapterWorkbenchPage() {
                             <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
                                 <button className="btn btn-secondary" onClick={() => setShowRejectConfirm(false)}>取消</button>
                                 <button className="btn btn-primary" onClick={() => { setShowRejectConfirm(false); reviewDraft('reject') }}>确认退回</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 删除章节确认对话框 */}
+                {showDeleteConfirm && (
+                    <div className="modal-backdrop">
+                        <div className="card" style={{ padding: 20, textAlign: 'center', maxWidth: 420 }}>
+                            <p style={{ margin: '0 0 8px', fontWeight: 500 }}>删除当前章节？</p>
+                            <p className="muted" style={{ margin: '0 0 16px' }}>
+                                你可以直接删除，或删除后按相同章节号重建一个空白章节继续写。
+                            </p>
+                            <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                <button className="btn btn-secondary" onClick={() => setShowDeleteConfirm(false)} disabled={deletingChapter}>
+                                    取消
+                                </button>
+                                <button className="btn btn-secondary" onClick={() => void handleDeleteChapter(false)} disabled={deletingChapter}>
+                                    {deletingChapter ? '删除中...' : '仅删除并返回'}
+                                </button>
+                                <button className="btn btn-primary" onClick={() => void handleDeleteChapter(true)} disabled={deletingChapter}>
+                                    {deletingChapter ? '重建中...' : '删除并重建同编号'}
+                                </button>
                             </div>
                         </div>
                     </div>

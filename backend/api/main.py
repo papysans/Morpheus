@@ -1362,6 +1362,17 @@ def build_fallback_outline(prompt: str, chapter_count: int) -> List[Dict[str, st
     return result
 
 
+def build_serial_continuation_constraints() -> List[str]:
+    return [
+        "本批次为连载续写：禁止在单章或本批次内终结全书主线。",
+        "每章主线仅推进 1 个关键动作（推进但不完结）。",
+        "每章最多推进 1 条支线，且必须与当前主线因果相关。",
+        "每章最多回收 1 个伏笔，同时至少保留 2 个未决事项。",
+        "主线/支线叙事重心建议约 70/30，避免全是日常或全是主线宣讲。",
+        "每 3-5 章安排一次中等兑现（局部胜负、局部真相或关系位移）。",
+    ]
+
+
 def build_outline_messages(
     *,
     prompt: str,
@@ -1369,7 +1380,15 @@ def build_outline_messages(
     scope: str,
     project: Project,
     identity: str,
+    continuation_mode: bool = False,
 ) -> List[Dict[str, str]]:
+    constraints = [
+        "每章 title 简洁有辨识度",
+        "每章 goal 要推动主线并含冲突动作",
+        "章节之间有递进关系",
+    ]
+    if continuation_mode:
+        constraints.extend(build_serial_continuation_constraints())
     return [
         {
             "role": "system",
@@ -1389,11 +1408,8 @@ def build_outline_messages(
                     "genre": project.genre,
                     "style": project.style,
                     "identity": identity,
-                    "constraints": [
-                        "每章 title 简洁有辨识度",
-                        "每章 goal 要推动主线并含冲突动作",
-                        "章节之间有递进关系",
-                    ],
+                    "continuation_mode": continuation_mode,
+                    "constraints": constraints,
                 },
                 ensure_ascii=False,
             ),
@@ -1409,6 +1425,7 @@ def build_chapter_outline(
     project: Project,
     store: MemoryStore,
     studio: AgentStudio,
+    continuation_mode: bool = False,
 ) -> List[Dict[str, str]]:
     identity = store.three_layer.get_identity()[:2500]
     messages = build_outline_messages(
@@ -1417,6 +1434,7 @@ def build_chapter_outline(
         scope=scope,
         project=project,
         identity=identity,
+        continuation_mode=continuation_mode,
     )
     raw = studio.llm_client.chat(
         messages,
@@ -1522,12 +1540,14 @@ def build_one_shot_messages(
         GenerationMode.QUICK: "快速模式：直接产出完整章节，节奏紧凑，信息密度高。",
         GenerationMode.CINEMATIC: "电影模式：强调场景调度、对白张力和镜头感，篇幅更饱满。",
     }[req.mode]
+    continuation_constraints = build_serial_continuation_constraints() if req.continuation_mode else []
     return [
         {
             "role": "system",
             "content": (
                 "你是中文长篇小说写作助手。请只输出章节正文，不要输出解释、JSON、标题栏、提示词。"
                 "必须遵守世界规则与禁忌约束，保持人物行为一致。"
+                "若为续写模式，不得在单章内结束全书主线，章尾必须保留下一章触发点。"
             ),
         },
         {
@@ -1545,6 +1565,8 @@ def build_one_shot_messages(
                     "taboo_constraints": project.taboo_constraints,
                     "identity": store.three_layer.get_identity()[:2000],
                     "previous_chapters": previous_chapters,
+                    "continuation_mode": req.continuation_mode,
+                    "continuation_constraints": continuation_constraints,
                 },
                 ensure_ascii=False,
             ),
@@ -1958,6 +1980,7 @@ class OneShotDraftRequest(BaseModel):
     target_words: int = Field(default=1600, ge=300, le=12000)
     override_goal: bool = True
     rewrite_plan: bool = True
+    continuation_mode: bool = False
 
 
 class GenerationScope(str, Enum):
@@ -1973,6 +1996,7 @@ class OneShotBookRequest(BaseModel):
     words_per_chapter: int = Field(default=1600, ge=300, le=12000)
     start_chapter_number: Optional[int] = Field(default=None, ge=1)
     auto_approve: bool = False
+    continuation_mode: bool = False
 
 
 class PromptPreviewRequest(BaseModel):
@@ -2156,6 +2180,7 @@ async def prompt_preview(project_id: str, req: PromptPreviewRequest):
         target_words=req.target_words,
         override_goal=True,
         rewrite_plan=True,
+        continuation_mode=False,
     )
     outline_messages = build_outline_messages(
         prompt=req.prompt,
@@ -2163,6 +2188,7 @@ async def prompt_preview(project_id: str, req: PromptPreviewRequest):
         scope=req.scope.value,
         project=project,
         identity=identity[:2500],
+        continuation_mode=False,
     )
     one_shot_messages = build_one_shot_messages(
         req=one_shot_req,
@@ -2467,6 +2493,8 @@ async def run_one_shot_book_generation(
             "chapter_count": req.chapter_count,
             "words_per_chapter": req.words_per_chapter,
             "auto_approve": req.auto_approve,
+            "continuation_mode": req.continuation_mode,
+            "start_chapter_number": req.start_chapter_number,
         },
     )
 
@@ -2482,7 +2510,11 @@ async def run_one_shot_book_generation(
     await emit_progress(
         progress,
         "outline_start",
-        {"scope": req.scope.value, "chapter_count": chapter_count},
+        {
+            "scope": req.scope.value,
+            "chapter_count": chapter_count,
+            "continuation_mode": req.continuation_mode,
+        },
     )
     outline = await asyncio.to_thread(
         build_chapter_outline,
@@ -2492,6 +2524,7 @@ async def run_one_shot_book_generation(
         project=project,
         store=store,
         studio=studio,
+        continuation_mode=req.continuation_mode,
     )
     await emit_progress(
         progress,
@@ -2500,6 +2533,7 @@ async def run_one_shot_book_generation(
     )
 
     created: List[Dict[str, Any]] = []
+    first_assigned_number: Optional[int] = None
     started = datetime.now()
     for idx, item in enumerate(outline, start=1):
         while next_number in existing_numbers:
@@ -2514,6 +2548,8 @@ async def run_one_shot_book_generation(
         )
         chapters[chapter.id] = chapter
         save_chapter(chapter)
+        if first_assigned_number is None:
+            first_assigned_number = chapter.chapter_number
         existing_numbers.add(next_number)
         logger.info(
             "one-shot-book chapter created project_id=%s chapter_id=%s chapter_no=%d title=%s",
@@ -2639,6 +2675,7 @@ async def run_one_shot_book_generation(
             target_words=req.words_per_chapter,
             override_goal=True,
             rewrite_plan=True,
+            continuation_mode=req.continuation_mode,
         )
         chapter_started = datetime.now()
         draft, trace = await generate_one_shot_draft_text(
@@ -2763,6 +2800,8 @@ async def run_one_shot_book_generation(
         "scope": req.scope.value,
         "mode": req.mode.value,
         "prompt": req.prompt.strip(),
+        "continuation_mode": req.continuation_mode,
+        "start_chapter_number": first_assigned_number,
         "generated_chapters": len(created),
         "chapters": created,
         "elapsed_s": elapsed,
@@ -2785,13 +2824,15 @@ async def generate_one_shot_book(project_id: str, req: OneShotBookRequest):
     studio = get_or_create_studio(project_id)
     store.sync_file_memories()
     logger.info(
-        "one-shot-book start project_id=%s scope=%s mode=%s chapter_count=%s words_per_chapter=%d auto_approve=%s",
+        "one-shot-book start project_id=%s scope=%s mode=%s chapter_count=%s words_per_chapter=%d auto_approve=%s continuation_mode=%s start_chapter=%s",
         project_id,
         req.scope.value,
         req.mode.value,
         req.chapter_count if req.chapter_count is not None else "default",
         req.words_per_chapter,
         req.auto_approve,
+        req.continuation_mode,
+        req.start_chapter_number if req.start_chapter_number is not None else "auto",
     )
     return await run_one_shot_book_generation(
         project_id=project_id,
@@ -2816,13 +2857,15 @@ async def generate_one_shot_book_stream(project_id: str, req: OneShotBookRequest
     studio = get_or_create_studio(project_id)
     store.sync_file_memories()
     logger.info(
-        "one-shot-book stream start project_id=%s scope=%s mode=%s chapter_count=%s words_per_chapter=%d auto_approve=%s",
+        "one-shot-book stream start project_id=%s scope=%s mode=%s chapter_count=%s words_per_chapter=%d auto_approve=%s continuation_mode=%s start_chapter=%s",
         project_id,
         req.scope.value,
         req.mode.value,
         req.chapter_count if req.chapter_count is not None else "default",
         req.words_per_chapter,
         req.auto_approve,
+        req.continuation_mode,
+        req.start_chapter_number if req.start_chapter_number is not None else "auto",
     )
 
     queue: asyncio.Queue[tuple[str, Dict[str, Any]]] = asyncio.Queue()
@@ -2880,6 +2923,81 @@ async def generate_one_shot_book_stream(project_id: str, req: OneShotBookRequest
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
+
+
+def _delete_chapter_internal(chapter_id: str, *, allow_missing: bool = False) -> Dict[str, Any]:
+    chapter = resolve_chapter(chapter_id)
+    if not chapter:
+        if allow_missing:
+            return {"status": "missing", "chapter_id": chapter_id}
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    project_id = chapter.project_id
+    chapter_number = chapter.chapter_number
+    chapter_title = chapter.title
+
+    chapter_path = chapter_json_path(project_id, chapter_id)
+    trace_path = trace_file(project_id, chapter_id)
+
+    chapters.pop(chapter_id, None)
+    traces.pop(chapter_id, None)
+
+    for file_path in (chapter_path, trace_path):
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except Exception as exc:
+            logger.exception("chapter delete failed file=%s chapter_id=%s", file_path, chapter_id)
+            raise HTTPException(status_code=500, detail=f"Failed to delete chapter file: {exc}") from exc
+
+    try:
+        store = get_or_create_store(project_id)
+        store.delete_events_for_chapter(chapter_number)
+        store.delete_chapter_memory_artifacts(chapter_id, chapter_number)
+        deleted_l3 = store.three_layer.delete_l3_items_for_chapter(chapter_number)
+        store.sync_file_memories()
+    except Exception:
+        deleted_l3 = []
+        logger.exception(
+            "chapter delete memory cleanup failed project_id=%s chapter_id=%s chapter_no=%d",
+            project_id,
+            chapter_id,
+            chapter_number,
+        )
+
+    project = resolve_project(project_id)
+    if project:
+        if not chapter_list(project_id):
+            project.status = ProjectStatus.INIT
+        project.updated_at = datetime.now()
+        save_project(project)
+
+    logger.info(
+        "chapter deleted project_id=%s chapter_id=%s chapter_no=%d title=%s l3_deleted=%d",
+        project_id,
+        chapter_id,
+        chapter_number,
+        chapter_title,
+        len(deleted_l3),
+    )
+    return {
+        "status": "deleted",
+        "project_id": project_id,
+        "chapter_id": chapter_id,
+        "chapter_number": chapter_number,
+        "title": chapter_title,
+    }
+
+
+@app.delete("/api/chapters/{chapter_id}")
+async def delete_chapter(chapter_id: str):
+    return _delete_chapter_internal(chapter_id)
+
+
+@app.post("/api/chapters/{chapter_id}/delete")
+async def delete_chapter_compat(chapter_id: str):
+    # Compatibility fallback for environments that do not pass through DELETE.
+    return await delete_chapter(chapter_id)
 
 
 @app.post("/api/chapters")

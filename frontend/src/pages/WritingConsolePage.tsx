@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import PageTransition from '../components/ui/PageTransition'
 import DisabledTooltip from '../components/ui/DisabledTooltip'
 import { validateField, type FieldError } from '../utils/validation'
+import { api } from '../lib/api'
 import ChapterTOC from '../components/chapter/ChapterTOC'
 import ChapterExportMenu from '../components/chapter/ChapterExportMenu'
 import ReadingModeView from '../components/ui/ReadingModeView'
@@ -42,6 +43,7 @@ const SCOPE_LABELS: Record<string, string> = {
 
 const CHAPTER_COUNT_RULE = { min: 1, max: 60, hint: '推荐 8-12 章' } as const
 const WORDS_PER_CHAPTER_RULE = { min: 300, max: 12000, hint: '推荐 1200-2000 字' } as const
+const CONTINUATION_FALLBACK_PROMPT = '延续当前故事，推进未决冲突与人物关系，章尾保留下一章触发点。'
 
 type PersistedWritingSettings = Pick<
     GenerationForm,
@@ -122,6 +124,7 @@ export default function WritingConsolePage() {
     })
     const [chapterCountInput, setChapterCountInput] = useState('8')
     const [wordsPerChapterInput, setWordsPerChapterInput] = useState('1600')
+    const [continuationPreparing, setContinuationPreparing] = useState(false)
 
     const [advErrors, setAdvErrors] = useState<Record<string, FieldError | null>>({})
     const prefillAppliedRef = useRef(false)
@@ -408,6 +411,62 @@ export default function WritingConsolePage() {
         })
     }
 
+    async function handleContinueFromLatest() {
+        if (!projectId || generating || continuationPreparing) return
+        setContinuationPreparing(true)
+        try {
+            const chapterRes = await api.get(`/projects/${projectId}/chapters`)
+            const chapterList = Array.isArray(chapterRes.data) ? chapterRes.data : []
+            const latestChapterNumber = chapterList.reduce((max, chapter) => {
+                const chapterNo = Number(chapter?.chapter_number || 0)
+                return Number.isFinite(chapterNo) ? Math.max(max, chapterNo) : max
+            }, 0)
+            const startChapterNumber = latestChapterNumber > 0 ? latestChapterNumber + 1 : 1
+            const continuationPrompt = form.prompt.trim() || CONTINUATION_FALLBACK_PROMPT
+            if (!form.prompt.trim()) {
+                addToast('info', '未填写梗概，已使用默认续写提示。')
+            }
+            addToast('info', `从第 ${startChapterNumber} 章开始续写。`)
+            start({
+                projectId,
+                form: {
+                    ...form,
+                    prompt: continuationPrompt,
+                    continuation_mode: true,
+                    start_chapter_number: startChapterNumber,
+                },
+                onChapterStart: (ch: StreamChapter) => {
+                    addToast('info', `开始第 ${ch.chapter_number} 章：${ch.title}`)
+                },
+                onChapterDone: (ch: StreamChapter) => {
+                    addToast('success', `第 ${ch.chapter_number} 章完成（${ch.word_count} 字）`)
+                },
+                onError: (err: string) => {
+                    addToast('error', '续写中断', {
+                        context: '续写任务',
+                        actions: [
+                            { label: '继续续写', onClick: () => void handleContinueFromLatest() },
+                            { label: '重新开始', onClick: () => { stop(); void handleContinueFromLatest() } },
+                        ],
+                        detail: err,
+                    })
+                    addRecord({ type: 'generate', description: '续写任务中断', status: 'error', retryAction: () => void handleContinueFromLatest() })
+                },
+                onComplete: () => {
+                    addToast('success', '续写批次完成！')
+                    addRecord({ type: 'generate', description: '续写批次完成', status: 'success' })
+                },
+            })
+        } catch (error: any) {
+            addToast('error', '准备续写失败', {
+                context: '续写任务',
+                detail: error?.response?.data?.detail || error?.message,
+            })
+        } finally {
+            setContinuationPreparing(false)
+        }
+    }
+
     /* ── 章节跳转 ── */
     function scrollToChapter(chapterId: string) {
         const idx = sections.findIndex((s) => s.chapterId === chapterId)
@@ -626,6 +685,27 @@ export default function WritingConsolePage() {
                                         disabled={startDisabled}
                                     >
                                         {generating ? '生成中…' : '开始生成'}
+                                    </button>
+                                </DisabledTooltip>
+
+                                <DisabledTooltip
+                                    reason={
+                                        !projectId
+                                            ? '缺少项目信息'
+                                            : generating
+                                                ? '正在生成中，请等待完成或停止当前任务'
+                                                : continuationPreparing
+                                                    ? '正在准备续写任务'
+                                                    : ''
+                                    }
+                                    disabled={!projectId || generating || continuationPreparing}
+                                >
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={() => void handleContinueFromLatest()}
+                                        disabled={!projectId || generating || continuationPreparing}
+                                    >
+                                        {continuationPreparing ? '准备续写...' : '从最新章节续写'}
                                     </button>
                                 </DisabledTooltip>
 

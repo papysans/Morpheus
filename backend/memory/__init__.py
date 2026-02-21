@@ -107,6 +107,36 @@ class ThreeLayerMemory:
             items = [item for item in items if item.get("type") == item_type]
         return items
 
+    def delete_l3_items_for_chapter(self, chapter_number: int) -> List[str]:
+        deleted: List[str] = []
+        summary_pattern = re.compile(rf"^Chapter\s+{int(chapter_number)}\s+summary$", re.IGNORECASE)
+        for file_path in sorted(self.l3_dir.glob("*.md")):
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            if not content.startswith("---"):
+                continue
+            parts = content.split("---", 2)
+            if len(parts) < 3:
+                continue
+            try:
+                metadata = yaml.safe_load(parts[1]) or {}
+            except Exception:
+                continue
+            item_type = str(metadata.get("type", "")).strip()
+            summary = str(metadata.get("summary", "")).strip()
+            if item_type != "chapter_summary":
+                continue
+            if not summary_pattern.match(summary):
+                continue
+            try:
+                file_path.unlink()
+                deleted.append(file_path.name)
+            except Exception:
+                continue
+        return deleted
+
     def reflect(self, chapter_content: str, chapter_id: int) -> Dict[str, List[str]]:
         summary = chapter_content[:500].strip()
         if len(chapter_content) > 500:
@@ -278,6 +308,33 @@ class MemoryStore:
                     item.updated_at.isoformat(),
                     json.dumps(item.metadata, ensure_ascii=False),
                 ),
+            )
+            conn.commit()
+
+    def delete_memory_items_by_ids(self, item_ids: List[str]):
+        cleaned = [str(item_id).strip() for item_id in item_ids if str(item_id).strip()]
+        if not cleaned:
+            return
+        placeholders = ",".join(["?"] * len(cleaned))
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"DELETE FROM memory_items WHERE id IN ({placeholders})", cleaned)
+            conn.commit()
+
+    def delete_chapter_memory_artifacts(self, chapter_id: str, chapter_number: int):
+        chapter_item_id = f"chapter-draft-{chapter_id}"
+        chapter_source = f"chapters/{chapter_id}.md"
+        summary_pattern = f"Chapter {int(chapter_number)} summary%"
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                DELETE FROM memory_items
+                WHERE id = ?
+                   OR source_path = ?
+                   OR summary LIKE ?
+                """,
+                (chapter_item_id, chapter_source, summary_pattern),
             )
             conn.commit()
 
@@ -622,3 +679,39 @@ class MemoryStore:
                 metadata={"synced_from_file": True},
             )
             self.add_memory_item(item)
+        self.purge_stale_synced_file_memories()
+
+    def purge_stale_synced_file_memories(self) -> int:
+        project_root = self.project_path.resolve()
+        stale_ids: List[str] = []
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, source_path, metadata FROM memory_items")
+            rows = cursor.fetchall()
+            for row in rows:
+                metadata_raw = row["metadata"]
+                if not metadata_raw:
+                    continue
+                try:
+                    metadata = json.loads(metadata_raw)
+                except Exception:
+                    continue
+                if not isinstance(metadata, dict) or not metadata.get("synced_from_file"):
+                    continue
+                source_path = str(row["source_path"] or "").strip()
+                if not source_path:
+                    stale_ids.append(row["id"])
+                    continue
+                candidate = (self.project_path / source_path).resolve()
+                try:
+                    candidate.relative_to(project_root)
+                except ValueError:
+                    stale_ids.append(row["id"])
+                    continue
+                if not candidate.exists() or not candidate.is_file():
+                    stale_ids.append(row["id"])
+            if stale_ids:
+                placeholders = ",".join(["?"] * len(stale_ids))
+                cursor.execute(f"DELETE FROM memory_items WHERE id IN ({placeholders})", stale_ids)
+                conn.commit()
+        return len(stale_ids)

@@ -27,6 +27,7 @@ Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock, wri
 
 const mockStart = vi.fn()
 const mockStop = vi.fn()
+const mockApiGet = vi.fn()
 
 vi.mock('../../hooks/useSSEStream', () => ({
     useSSEStream: () => ({
@@ -34,6 +35,12 @@ vi.mock('../../hooks/useSSEStream', () => ({
         stop: mockStop,
         generating: false,
     }),
+}))
+
+vi.mock('../../lib/api', () => ({
+    api: {
+        get: (...args: any[]) => mockApiGet(...args),
+    },
 }))
 
 vi.mock('framer-motion', () => ({
@@ -112,6 +119,7 @@ describe('WritingConsolePage', () => {
     beforeEach(() => {
         vi.clearAllMocks()
         localStorageMock.clear()
+        mockApiGet.mockResolvedValue({ data: [] })
         mockStreamStore.sections = []
         mockStreamStore.chapters = []
         mockStreamStore.logs = []
@@ -186,6 +194,22 @@ describe('WritingConsolePage', () => {
         fireEvent.click(screen.getByText('开始生成'))
         expect(mockStart).toHaveBeenCalledTimes(1)
         expect(mockAddToast).toHaveBeenCalledWith('info', '开始生成，请稍候…')
+    })
+
+    it('点击从最新章节续写时带 continuation 参数启动', async () => {
+        mockApiGet.mockResolvedValue({
+            data: [{ id: 'ch-3', chapter_number: 3 }],
+        })
+        renderPage()
+        fireEvent.click(screen.getByText('从最新章节续写'))
+
+        await waitFor(() => {
+            expect(mockStart).toHaveBeenCalledTimes(1)
+        })
+        const payload = mockStart.mock.calls[0][0]
+        expect(payload.form.continuation_mode).toBe(true)
+        expect(payload.form.start_chapter_number).toBe(4)
+        expect(String(payload.form.prompt)).toContain('延续当前故事')
     })
 
     it('有 sections 时渲染 Markdown 内容', () => {

@@ -33,6 +33,7 @@ export default function ProjectDetail() {
   const [showModal, setShowModal] = useState(false)
   const [creating, setCreating] = useState(false)
   const [exportingBook, setExportingBook] = useState(false)
+  const [deletingChapterId, setDeletingChapterId] = useState<string | null>(null)
   const [quickSynopsis, setQuickSynopsis] = useState('')
   const [quickScope, setQuickScope] = useState<OneShotScope>('volume')
   const [form, setForm] = useState({ chapter_number: 1, title: '', goal: '' })
@@ -170,6 +171,39 @@ export default function ProjectDetail() {
       addRecord({ type: 'export', description: '整书导出失败', status: 'error', retryAction: () => void handleExportBook() })
     } finally {
       setExportingBook(false)
+    }
+  }
+
+  const handleDeleteChapter = async (chapter: typeof chapters[number]) => {
+    if (!projectId) return
+    const confirmed = window.confirm(`确认删除第 ${chapter.chapter_number} 章《${chapter.title}》？此操作不可恢复。`)
+    if (!confirmed) return
+    setDeletingChapterId(chapter.id)
+    try {
+      try {
+        await api.delete(`/chapters/${chapter.id}`)
+      } catch (error: any) {
+        if (error?.response?.status === 405) {
+          await api.post(`/chapters/${chapter.id}/delete`)
+        } else {
+          throw error
+        }
+      }
+      addToast('success', `已删除第 ${chapter.chapter_number} 章`)
+      addRecord({ type: 'delete', description: `删除章节: ${chapter.title}`, status: 'success' })
+      invalidateCache('chapters', projectId)
+      invalidateCache('project', projectId)
+      await fetchProject(projectId, { force: true })
+      await fetchChapters(projectId, { force: true })
+    } catch (error: any) {
+      addToast('error', '删除章节失败', {
+        context: '章节删除',
+        detail: error?.response?.data?.detail || error?.message,
+        actions: [{ label: '重试', onClick: () => void handleDeleteChapter(chapter) }],
+      })
+      addRecord({ type: 'delete', description: '删除章节失败', status: 'error', retryAction: () => void handleDeleteChapter(chapter) })
+    } finally {
+      setDeletingChapterId(null)
     }
   }
 
@@ -352,7 +386,17 @@ export default function ProjectDetail() {
                     <td>{chapter.word_count}</td>
                     <td>{chapter.conflict_count}</td>
                     <td>
-                      <Link to={`/project/${projectId}/chapter/${chapter.id}`}>进入工作台</Link>
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <Link to={`/project/${projectId}/chapter/${chapter.id}`}>进入工作台</Link>
+                        <button
+                          className="btn btn-secondary"
+                          style={{ padding: '4px 10px', fontSize: '0.78rem' }}
+                          disabled={deletingChapterId === chapter.id}
+                          onClick={() => void handleDeleteChapter(chapter)}
+                        >
+                          {deletingChapterId === chapter.id ? '删除中...' : '删除'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

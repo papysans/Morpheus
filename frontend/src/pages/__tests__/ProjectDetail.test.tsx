@@ -1,15 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ProjectDetail from '../ProjectDetail'
 import { useProjectStore } from '../../stores/useProjectStore'
 import { useToastStore } from '../../stores/useToastStore'
 
 const mockApiPost = vi.fn()
+const mockApiDelete = vi.fn()
 vi.mock('../../lib/api', () => ({
     api: {
         get: vi.fn().mockResolvedValue({ data: {} }),
         post: (...args: any[]) => mockApiPost(...args),
+        delete: (...args: any[]) => mockApiDelete(...args),
     },
 }))
 
@@ -59,6 +61,8 @@ const sampleChapters = [
 
 beforeEach(() => {
     mockApiPost.mockReset()
+    mockApiDelete.mockReset()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     useToastStore.setState({ toasts: [] })
     useProjectStore.setState({
         projects: [],
@@ -188,6 +192,31 @@ describe('ProjectDetailPage', () => {
         const links = screen.getAllByText('进入工作台')
         expect(links[0].closest('a')).toHaveAttribute('href', '/project/p1/chapter/c1')
         expect(links[1].closest('a')).toHaveAttribute('href', '/project/p1/chapter/c2')
+    })
+
+    it('clicking 删除 removes chapter and refreshes project data', async () => {
+        const fetchProject = vi.fn()
+        const fetchChapters = vi.fn()
+        const invalidateCache = vi.fn()
+        mockApiDelete.mockResolvedValue({ data: { status: 'deleted' } })
+        useProjectStore.setState({
+            currentProject: sampleProject,
+            chapters: sampleChapters,
+            loading: false,
+            fetchProject,
+            fetchChapters,
+            invalidateCache,
+        } as any)
+        renderPage()
+        const deleteButtons = screen.getAllByText('删除')
+        fireEvent.click(deleteButtons[0])
+        await waitFor(() => {
+            expect(mockApiDelete).toHaveBeenCalledWith('/chapters/c1')
+        })
+        expect(invalidateCache).toHaveBeenCalledWith('chapters', 'p1')
+        expect(invalidateCache).toHaveBeenCalledWith('project', 'p1')
+        expect(fetchProject).toHaveBeenCalledWith('p1', { force: true })
+        expect(fetchChapters).toHaveBeenCalledWith('p1', { force: true })
     })
 
     describe('chapter creation modal field validation', () => {

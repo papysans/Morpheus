@@ -59,12 +59,14 @@ const sampleChapter = {
 const mockApiGet = vi.fn()
 const mockApiPost = vi.fn()
 const mockApiPut = vi.fn()
+const mockApiDelete = vi.fn()
 
 vi.mock('../../lib/api', () => ({
     api: {
         get: (...args: any[]) => mockApiGet(...args),
         post: (...args: any[]) => mockApiPost(...args),
         put: (...args: any[]) => mockApiPut(...args),
+        delete: (...args: any[]) => mockApiDelete(...args),
     },
 }))
 
@@ -149,6 +151,7 @@ describe('ChapterWorkbenchPage', () => {
         mockApiGet.mockResolvedValue({ data: sampleChapter })
         mockApiPost.mockResolvedValue({ data: {} })
         mockApiPut.mockResolvedValue({ data: { chapter: sampleChapter } })
+        mockApiDelete.mockResolvedValue({ data: { status: 'deleted' } })
     })
 
     /* ── 骨架屏加载状态 ── */
@@ -176,6 +179,15 @@ describe('ChapterWorkbenchPage', () => {
         await waitFor(() => {
             expect(screen.getByText('← 返回项目')).toBeTruthy()
         })
+    })
+
+    it('显示删除本章按钮并可打开确认框', async () => {
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('删除本章')).toBeTruthy()
+        })
+        fireEvent.click(screen.getByText('删除本章'))
+        expect(screen.getByText('删除当前章节？')).toBeTruthy()
     })
 
     it('一句话整篇字数输入允许清空后重输', async () => {

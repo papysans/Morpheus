@@ -14,6 +14,7 @@ os.environ["REMOTE_EMBEDDING_ENABLED"] = "false"
 
 from api.main import (
     app,
+    build_outline_messages,
     extract_graph_role_names,
     enforce_draft_target_words,
     get_or_create_store,
@@ -483,6 +484,28 @@ class NovelistApiSmokeTest(unittest.TestCase):
         self.assertEqual(chapters_res.status_code, 200)
         self.assertGreaterEqual(len(chapters_res.json()), 3)
 
+    def test_one_shot_book_continuation_mode_uses_next_chapter_number(self):
+        project_id = self._create_project()
+        self._create_chapter(project_id, chapter_number=1)
+        self._create_chapter(project_id, chapter_number=2)
+
+        res = self.client.post(
+            f"/api/projects/{project_id}/one-shot-book",
+            json={
+                "prompt": "续写主线并留钩子。",
+                "scope": "book",
+                "mode": "quick",
+                "chapter_count": 1,
+                "words_per_chapter": 700,
+                "continuation_mode": True,
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+        payload = res.json()
+        self.assertTrue(payload["continuation_mode"])
+        self.assertEqual(payload["start_chapter_number"], 3)
+        self.assertEqual(payload["chapters"][0]["chapter_number"], 3)
+
     def test_one_shot_book_stream_generation(self):
         project_id = self._create_project()
         with self.client.stream(
@@ -748,6 +771,59 @@ class NovelistApiSmokeTest(unittest.TestCase):
         payload = res.json()
         self.assertEqual(payload["project_id"], project_id)
         self.assertEqual(payload["chapter_number"], 1)
+
+    def test_delete_chapter_removes_files_and_listing(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=6)
+        chapter_file = projects_root() / project_id / "chapters" / f"{chapter_id}.json"
+        self.assertTrue(chapter_file.exists())
+
+        store = get_or_create_store(project_id)
+        now = datetime.now(timezone.utc)
+        store.add_event(
+            EventEdge(
+                event_id=f"event-delete-{uuid4().hex[:8]}",
+                subject="主角",
+                relation="冲突",
+                object="反派",
+                chapter=6,
+                timestamp=now,
+                confidence=0.8,
+                description="删除章节前事件",
+            )
+        )
+
+        delete_res = self.client.delete(f"/api/chapters/{chapter_id}")
+        self.assertEqual(delete_res.status_code, 200)
+        self.assertEqual(delete_res.json()["status"], "deleted")
+        self.assertFalse(chapter_file.exists())
+
+        get_res = self.client.get(f"/api/chapters/{chapter_id}")
+        self.assertEqual(get_res.status_code, 404)
+        list_res = self.client.get(f"/api/projects/{project_id}/chapters")
+        self.assertEqual(list_res.status_code, 200)
+        self.assertFalse(any(item["id"] == chapter_id for item in list_res.json()))
+
+        events = self.client.get(f"/api/events/{project_id}").json()
+        self.assertFalse(any(event.get("chapter") == 6 for event in events))
+
+    def test_build_outline_messages_includes_continuation_constraints(self):
+        project_id = self._create_project()
+        project = projects[project_id]
+        messages = build_outline_messages(
+            prompt="继续写",
+            chapter_count=3,
+            scope="book",
+            project=project,
+            identity="IDENTITY",
+            continuation_mode=True,
+        )
+        self.assertEqual(len(messages), 2)
+        payload = json.loads(messages[1]["content"])
+        constraints = payload.get("constraints") or []
+        self.assertTrue(payload.get("continuation_mode"))
+        self.assertTrue(any("主线仅推进" in item for item in constraints))
+        self.assertTrue(any("最多回收 1 个伏笔" in item for item in constraints))
 
     def test_get_chapter_works_even_if_chapter_not_cached_in_worker(self):
         project_id = self._create_project()
