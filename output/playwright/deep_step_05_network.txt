@@ -1,2 +1,0 @@
-### Result
-- [Network](output/playwright/.playwright-cli/network-2026-02-14T15-55-04-444Z.log)

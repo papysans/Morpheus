@@ -1,6 +1,0 @@
-### Page
-- Page URL: http://127.0.0.1:3000/project/04811a28-0a05-4366-80da-b8d18a2dc554/chapter/5d8cad76-8c15-43ac-b321-7dcba533bb52
-- Page Title: 小说家 Agent
-- Console: 0 errors, 2 warnings
-### Snapshot
-- [Snapshot](.playwright-cli/page-2026-02-15T02-29-52-389Z.yml)
