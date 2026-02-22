@@ -1,0 +1,99 @@
+{
+  "urls": {
+    "writerHome": "https://fanqienovel.com/main/writer/?enter_from=author_zone",
+    "createBook": "https://fanqienovel.com/main/writer/create?enter_from=home_empty",
+    "recordEntry": "https://fanqienovel.com/main/writer/home",
+    "publishChapterEntryTemplate": "https://fanqienovel.com/main/writer/{bookId}/publish/?enter_from=newchapter_0"
+  },
+  "browser": {
+    "headless": false,
+    "slowMo": 50
+  },
+  "paths": {
+    "userDataDir": "./state/chromium-profile",
+    "networkLogDir": "./output/network"
+  },
+  "timeouts": {
+    "defaultMs": 15000,
+    "createResponseMs": 60000
+  },
+  "book": {
+    "title": "",
+    "intro": "",
+    "coverPath": "",
+    "autoSubmit": false
+  },
+  "chapter": {
+    "bookId": "",
+    "title": "",
+    "content": "",
+    "contentFile": "",
+    "autoPublish": false,
+    "clearBeforeInput": true,
+    "collapseParagraphBlankLines": true
+  },
+  "selectors": {
+    "bookTitle": [
+      "input[placeholder*='书名']",
+      "input[placeholder*='作品名']"
+    ],
+    "bookIntro": [
+      "textarea[placeholder*='简介']",
+      "textarea[placeholder*='作品简介']"
+    ],
+    "coverFileInput": [
+      "input[type='file']"
+    ],
+    "submitButton": [
+      "button:has-text('创建作品')",
+      "button:has-text('创建书本')",
+      "button:has-text('下一步')",
+      "button:has-text('提交')"
+    ],
+    "chapterTitle": [
+      "input.serial-editor-input-hint-area[placeholder='请输入标题']",
+      "input[placeholder='请输入标题']",
+      "input[placeholder*='章节标题']",
+      "input[placeholder*='请输入章节标题']",
+      "input[class*='title-input']",
+      "div[contenteditable='true'][data-placeholder*='标题']",
+      "div[contenteditable='true'][aria-label*='标题']",
+      "div[contenteditable='true']:has-text('请输入标题')"
+    ],
+    "chapterNumber": [
+      "input.serial-input.byte-input-size-default:not([placeholder])",
+      ".serial-input-wrap input.serial-input.byte-input-size-default",
+      "input.serial-input.byte-input-size-default"
+    ],
+    "chapterEditor": [
+      "div.syl-editor .ProseMirror",
+      "div.serial-editor-content .ProseMirror",
+      "div.serial-editor-container-inner .ProseMirror",
+      "div.ProseMirror",
+      "div[contenteditable='true']"
+    ],
+    "publishButton": [
+      "button:has-text('发布章节')",
+      "button:has-text('发布')",
+      "button:has-text('确认发布')"
+    ],
+    "publishConfirmButton": [
+      "button:has-text('确认')",
+      "button:has-text('确定发布')"
+    ]
+  },
+  "capture": {
+    "enabled": true,
+    "captureAll": true,
+    "urlIncludes": [],
+    "includeResponseBody": false,
+    "maxBodyChars": 8000,
+    "redactSensitiveQuery": true
+  },
+  "manual": {
+    "pauseAfterOpenCreate": true,
+    "pauseBeforeSubmit": true,
+    "pauseAfterOpenPublish": false,
+    "pauseBeforePublish": false
+  }
+}

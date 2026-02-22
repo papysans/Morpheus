@@ -1,0 +1,17 @@
+{
+  "name": "fanqie-playwright-automation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Semi-automated Fanqie creator flow with Playwright",
+  "type": "commonjs",
+  "scripts": {
+    "run": "node src/run.js",
+    "create-book": "node src/run.js create-book",
+    "publish-chapter": "node src/run.js publish-chapter",
+    "record": "node src/run.js record",
+    "inspect": "node src/run.js inspect"
+  },
+  "dependencies": {
+    "playwright": "^1.58.2"
+  }
+}
