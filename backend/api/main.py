@@ -1695,9 +1695,15 @@ def enforce_draft_target_words(draft: str, target_words: int) -> str:
     if not text:
         return text
     upper_bound = resolve_target_word_upper_bound(target_words)
-    if len(text) <= upper_bound:
-        return text
-    return _clip_text_at_sentence_boundary(text, upper_bound)
+    if len(text) > upper_bound:
+        logger.info(
+            "draft length exceeds soft target target_words=%d upper_bound=%d actual=%d",
+            int(target_words or 0),
+            upper_bound,
+            len(text),
+        )
+    # Soft limit only: do not hard-clip model output.
+    return text
 
 
 def resolve_llm_temperature(llm_client: Any) -> float:
@@ -1888,18 +1894,7 @@ async def generate_one_shot_draft_text(
             )
         else:
             draft = await workflow.generate_draft(chapter, chapter.plan, draft_context)
-        draft_before = draft
-        draft = enforce_draft_target_words(draft_before, req.target_words)
-        if len(draft_before) != len(draft):
-            logger.warning(
-                "draft length clipped chapter_id=%s chapter_no=%s mode=%s target_words=%d before=%d after=%d",
-                chapter.id,
-                chapter.chapter_number,
-                req.mode.value,
-                req.target_words,
-                len(draft_before),
-                len(draft),
-            )
+        draft = enforce_draft_target_words(draft, req.target_words)
         await emit_progress(
             progress,
             "chapter_stage",
@@ -1964,18 +1959,7 @@ async def generate_one_shot_draft_text(
         if not isinstance(raw, str):
             raw = str(raw)
     draft = workflow._sanitize_draft(raw, chapter, chapter.plan)
-    draft_before = draft
-    draft = enforce_draft_target_words(draft_before, req.target_words)
-    if len(draft_before) != len(draft):
-        logger.warning(
-            "draft length clipped chapter_id=%s chapter_no=%s mode=%s target_words=%d before=%d after=%d",
-            chapter.id,
-            chapter.chapter_number,
-            req.mode.value,
-            req.target_words,
-            len(draft_before),
-            len(draft),
-        )
+    draft = enforce_draft_target_words(draft, req.target_words)
     await emit_progress(
         progress,
         "chapter_stage",

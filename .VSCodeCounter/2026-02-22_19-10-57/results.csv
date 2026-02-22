@@ -1,0 +1,126 @@
+"filename", "language", "JSON", "TypeScript", "Markdown", "JSON with Comments", "JavaScript", "TypeScript JSX", "CSS", "HTML", "Shell Script", "Python", "comment", "blank", "total"
+"/Volumes/Work/Projects/Morpheus/README.md", "Markdown", 0, 0, 357, 0, 0, 0, 0, 0, 0, 0, 0, 108, 465
+"/Volumes/Work/Projects/Morpheus/backend/agents/studio.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 643, 4, 96, 743
+"/Volumes/Work/Projects/Morpheus/backend/api/main.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 3198, 10, 432, 3640
+"/Volumes/Work/Projects/Morpheus/backend/core/__init__.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1
+"/Volumes/Work/Projects/Morpheus/backend/core/llm_client.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 362, 1, 44, 407
+"/Volumes/Work/Projects/Morpheus/backend/core/story_templates.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 176, 0, 8, 184
+"/Volumes/Work/Projects/Morpheus/backend/memory/__init__.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 648, 5, 65, 718
+"/Volumes/Work/Projects/Morpheus/backend/memory/search.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 204, 0, 40, 244
+"/Volumes/Work/Projects/Morpheus/backend/models/__init__.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 171, 0, 39, 210
+"/Volumes/Work/Projects/Morpheus/backend/scripts/run_api.sh", "Shell Script", 0, 0, 0, 0, 0, 0, 0, 0, 17, 0, 1, 5, 23
+"/Volumes/Work/Projects/Morpheus/backend/services/consistency.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 246, 1, 54, 301
+"/Volumes/Work/Projects/Morpheus/backend/tests/test_agent_non_blocking.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 42, 2, 12, 56
+"/Volumes/Work/Projects/Morpheus/backend/tests/test_api_smoke.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 863, 1, 108, 972
+"/Volumes/Work/Projects/Morpheus/docs/BUGFIX_REPORT_2026-02-17.md", "Markdown", 0, 0, 58, 0, 0, 0, 0, 0, 0, 0, 0, 13, 71
+"/Volumes/Work/Projects/Morpheus/docs/QUICKSTART.md", "Markdown", 0, 0, 124, 0, 0, 0, 0, 0, 0, 0, 0, 44, 168
+"/Volumes/Work/Projects/Morpheus/docs/knowledge-graph-standard-mode.md", "Markdown", 0, 0, 178, 0, 0, 0, 0, 0, 0, 0, 0, 92, 270
+"/Volumes/Work/Projects/Morpheus/docs/morpheus-mcp-service-adaptation.md", "Markdown", 0, 0, 119, 0, 0, 0, 0, 0, 0, 0, 0, 39, 158
+"/Volumes/Work/Projects/Morpheus/docs/novelist-agent-requirements.md", "Markdown", 0, 0, 177, 0, 0, 0, 0, 0, 0, 0, 0, 29, 206
+"/Volumes/Work/Projects/Morpheus/docs/plans/2026-02-14-novelist-agent-implementation.md", "Markdown", 0, 0, 110, 0, 0, 0, 0, 0, 0, 0, 0, 35, 145
+"/Volumes/Work/Projects/Morpheus/docs/writing-console-simplification-plan.md", "Markdown", 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 29, 127
+"/Volumes/Work/Projects/Morpheus/docs/问题文档/UIUX全面翻新审计-2026-02-15.md", "Markdown", 0, 0, 70, 0, 0, 0, 0, 0, 0, 0, 0, 19, 89
+"/Volumes/Work/Projects/Morpheus/docs/问题文档/深度除虫报告-2026-02-15.md", "Markdown", 0, 0, 57, 0, 0, 0, 0, 0, 0, 0, 0, 11, 68
+"/Volumes/Work/Projects/Morpheus/frontend/e2e/smoke.spec.ts", "TypeScript", 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 7
+"/Volumes/Work/Projects/Morpheus/frontend/e2e/system-bugfix.spec.ts", "TypeScript", 0, 76, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 99
+"/Volumes/Work/Projects/Morpheus/frontend/e2e/templates.spec.ts", "TypeScript", 0, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 74
+"/Volumes/Work/Projects/Morpheus/frontend/index.html", "HTML", 0, 0, 0, 0, 0, 0, 0, 13, 0, 0, 0, 1, 14
+"/Volumes/Work/Projects/Morpheus/frontend/package-lock.json", "JSON", 8590, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 8591
+"/Volumes/Work/Projects/Morpheus/frontend/package.json", "JSON", 53, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 54
+"/Volumes/Work/Projects/Morpheus/frontend/playwright.config.ts", "TypeScript", 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 15
+"/Volumes/Work/Projects/Morpheus/frontend/postcss.config.js", "JavaScript", 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 1, 7
+"/Volumes/Work/Projects/Morpheus/frontend/src/App.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 35, 0, 0, 0, 0, 0, 3, 38
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/chapter/ChapterExportMenu.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 121, 0, 0, 0, 0, 5, 14, 140
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/chapter/ChapterTOC.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 52, 0, 0, 0, 0, 0, 5, 57
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/chapter/__tests__/ChapterExportMenu.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 186, 0, 0, 0, 0, 3, 30, 219
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/chapter/__tests__/ChapterTOC.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 66, 0, 0, 0, 0, 4, 11, 81
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/layout/AppLayout.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 93, 0, 0, 0, 0, 0, 9, 102
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/layout/Sidebar.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 164, 0, 0, 0, 0, 0, 18, 182
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/layout/__tests__/Sidebar.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 211, 0, 0, 0, 0, 9, 27, 247
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/project/ProjectCreateModal.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 278, 0, 0, 0, 0, 0, 17, 295
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/ActivityPanel.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 78, 0, 0, 0, 0, 0, 11, 89
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/BatchStateMachine.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 82, 0, 0, 0, 0, 3, 12, 97
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/DisabledTooltip.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 40, 0, 0, 0, 0, 0, 6, 46
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/ErrorBoundary.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 39, 0, 0, 0, 0, 0, 9, 48
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/PageTransition.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 3, 20
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/ReadingModeToolbar.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 59, 0, 0, 0, 0, 0, 4, 63
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/ReadingModeView.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 105, 0, 0, 0, 0, 0, 12, 117
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/ShortcutHelpPanel.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 61, 0, 0, 0, 0, 0, 6, 67
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/Skeleton.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 14, 0, 0, 0, 0, 0, 3, 17
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/Toast.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 58, 0, 0, 0, 0, 1, 6, 65
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/ToastContainer.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 3, 26
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/__tests__/ActivityPanel.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 109, 0, 0, 0, 0, 1, 15, 125
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/__tests__/BatchStateMachine.pbt.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 96, 0, 0, 0, 0, 26, 22, 144
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/__tests__/BatchStateMachine.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 82, 0, 0, 0, 0, 0, 14, 96
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/__tests__/DisabledTooltip.pbt.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 43, 0, 0, 0, 0, 20, 12, 75
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/__tests__/DisabledTooltip.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 76, 0, 0, 0, 0, 6, 13, 95
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/__tests__/ShortcutHelpPanel.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 63, 0, 0, 0, 0, 1, 17, 81
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/__tests__/Skeleton.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 24, 0, 0, 0, 0, 0, 5, 29
+"/Volumes/Work/Projects/Morpheus/frontend/src/components/ui/__tests__/Toast.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 104, 0, 0, 0, 0, 2, 30, 136
+"/Volumes/Work/Projects/Morpheus/frontend/src/config/features.ts", "TypeScript", 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 10
+"/Volumes/Work/Projects/Morpheus/frontend/src/config/storyTemplates.ts", "TypeScript", 0, 126, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 129
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/__tests__/useAutoSave.pbt.test.ts", "TypeScript", 0, 50, 0, 0, 0, 0, 0, 0, 0, 0, 9, 14, 73
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/__tests__/useAutoSave.test.ts", "TypeScript", 0, 142, 0, 0, 0, 0, 0, 0, 0, 0, 5, 44, 191
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/__tests__/useConfirmClose.pbt.test.ts", "TypeScript", 0, 25, 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, 34
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/__tests__/useConfirmClose.test.ts", "TypeScript", 0, 75, 0, 0, 0, 0, 0, 0, 0, 0, 1, 22, 98
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/__tests__/useKeyboardShortcuts.test.ts", "TypeScript", 0, 188, 0, 0, 0, 0, 0, 0, 0, 0, 9, 46, 243
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/__tests__/useSSEStream.test.ts", "TypeScript", 0, 201, 0, 0, 0, 0, 0, 0, 0, 0, 8, 37, 246
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/useAutoSave.ts", "TypeScript", 0, 95, 0, 0, 0, 0, 0, 0, 0, 0, 3, 17, 115
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/useConfirmClose.ts", "TypeScript", 0, 39, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 48
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/useKeyboardShortcuts.ts", "TypeScript", 0, 82, 0, 0, 0, 0, 0, 0, 0, 0, 11, 13, 106
+"/Volumes/Work/Projects/Morpheus/frontend/src/hooks/useSSEStream.ts", "TypeScript", 0, 268, 0, 0, 0, 0, 0, 0, 0, 0, 12, 36, 316
+"/Volumes/Work/Projects/Morpheus/frontend/src/index.css", "CSS", 0, 0, 0, 0, 0, 0, 2321, 0, 0, 0, 46, 422, 2789
+"/Volumes/Work/Projects/Morpheus/frontend/src/lib/api.ts", "TypeScript", 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 8
+"/Volumes/Work/Projects/Morpheus/frontend/src/main.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 2, 14
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/ChapterWorkbenchPage.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 1055, 0, 0, 0, 0, 29, 76, 1160
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/DashboardPage.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 355, 0, 0, 0, 0, 8, 24, 387
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/KnowledgeGraphPage.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 853, 0, 0, 0, 0, 18, 72, 943
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/MemoryBrowserPage.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 558, 0, 0, 0, 0, 8, 41, 607
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/ProjectDetail.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 418, 0, 0, 0, 0, 54, 21, 493
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/ProjectList.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 326, 0, 0, 0, 0, 2, 20, 348
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/TraceReplayPage.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 348, 0, 0, 0, 0, 15, 32, 395
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/WritingConsolePage.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 757, 0, 0, 0, 0, 21, 66, 844
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/ChapterWorkbenchPage.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 441, 0, 0, 0, 0, 25, 78, 544
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/DashboardPage.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 307, 0, 0, 0, 0, 4, 36, 347
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/KnowledgeGraphPage.pbt.test.ts", "TypeScript", 0, 208, 0, 0, 0, 0, 0, 0, 0, 0, 55, 43, 306
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/KnowledgeGraphPage.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 408, 0, 0, 0, 0, 10, 57, 475
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/LayerBadgeContrast.pbt.test.ts", "TypeScript", 0, 74, 0, 0, 0, 0, 0, 0, 0, 0, 25, 17, 116
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/MemoryBrowserPage.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 401, 0, 0, 0, 0, 4, 86, 491
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/ProjectDetail.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 341, 0, 0, 0, 0, 1, 43, 385
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/ProjectList.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 3, 41, 299
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/SvgIcons.pbt.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 29, 0, 0, 0, 0, 14, 5, 48
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/TraceReplayPage.pbt.test.ts", "TypeScript", 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 12, 11, 56
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/TraceReplayPage.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 278, 0, 0, 0, 0, 5, 35, 318
+"/Volumes/Work/Projects/Morpheus/frontend/src/pages/__tests__/WritingConsolePage.test.tsx", "TypeScript JSX", 0, 0, 0, 0, 0, 394, 0, 0, 0, 0, 7, 67, 468
+"/Volumes/Work/Projects/Morpheus/frontend/src/services/__tests__/exportService.pbt.test.ts", "TypeScript", 0, 125, 0, 0, 0, 0, 0, 0, 0, 0, 45, 28, 198
+"/Volumes/Work/Projects/Morpheus/frontend/src/services/__tests__/exportService.test.ts", "TypeScript", 0, 171, 0, 0, 0, 0, 0, 0, 0, 0, 6, 34, 211
+"/Volumes/Work/Projects/Morpheus/frontend/src/services/exportService.ts", "TypeScript", 0, 130, 0, 0, 0, 0, 0, 0, 0, 0, 28, 29, 187
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useActivityStore.pbt.test.ts", "TypeScript", 0, 71, 0, 0, 0, 0, 0, 0, 0, 0, 20, 18, 109
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useActivityStore.test.ts", "TypeScript", 0, 86, 0, 0, 0, 0, 0, 0, 0, 0, 1, 11, 98
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useProjectStore.pbt.test.ts", "TypeScript", 0, 105, 0, 0, 0, 0, 0, 0, 0, 0, 12, 28, 145
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useProjectStore.race.test.ts", "TypeScript", 0, 360, 0, 0, 0, 0, 0, 0, 0, 0, 0, 36, 396
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useProjectStore.test.ts", "TypeScript", 0, 67, 0, 0, 0, 0, 0, 0, 0, 0, 19, 12, 98
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useRecentAccessStore.pbt.test.ts", "TypeScript", 0, 66, 0, 0, 0, 0, 0, 0, 0, 0, 8, 15, 89
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useRecentAccessStore.test.ts", "TypeScript", 0, 99, 0, 0, 0, 0, 0, 0, 0, 0, 6, 22, 127
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useToastStore.pbt.test.ts", "TypeScript", 0, 57, 0, 0, 0, 0, 0, 0, 0, 0, 9, 11, 77
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useToastStore.test.ts", "TypeScript", 0, 109, 0, 0, 0, 0, 0, 0, 0, 0, 16, 23, 148
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useUIStore.pbt.test.ts", "TypeScript", 0, 59, 0, 0, 0, 0, 0, 0, 0, 0, 16, 13, 88
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/__tests__/useUIStore.test.ts", "TypeScript", 0, 58, 0, 0, 0, 0, 0, 0, 0, 0, 2, 9, 69
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/useActivityStore.ts", "TypeScript", 0, 58, 0, 0, 0, 0, 0, 0, 0, 0, 3, 11, 72
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/useProjectStore.ts", "TypeScript", 0, 426, 0, 0, 0, 0, 0, 0, 0, 0, 0, 33, 459
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/useRecentAccessStore.ts", "TypeScript", 0, 49, 0, 0, 0, 0, 0, 0, 0, 0, 3, 9, 61
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/useStreamStore.ts", "TypeScript", 0, 86, 0, 0, 0, 0, 0, 0, 0, 0, 3, 17, 106
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/useToastStore.ts", "TypeScript", 0, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 57
+"/Volumes/Work/Projects/Morpheus/frontend/src/stores/useUIStore.ts", "TypeScript", 0, 53, 0, 0, 0, 0, 0, 0, 0, 0, 3, 9, 65
+"/Volumes/Work/Projects/Morpheus/frontend/src/test-setup.ts", "TypeScript", 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2
+"/Volumes/Work/Projects/Morpheus/frontend/src/utils/__tests__/validation.pbt.test.ts", "TypeScript", 0, 111, 0, 0, 0, 0, 0, 0, 0, 0, 42, 16, 169
+"/Volumes/Work/Projects/Morpheus/frontend/src/utils/__tests__/validation.test.ts", "TypeScript", 0, 78, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17, 95
+"/Volumes/Work/Projects/Morpheus/frontend/src/utils/validation.ts", "TypeScript", 0, 39, 0, 0, 0, 0, 0, 0, 0, 0, 3, 9, 51
+"/Volumes/Work/Projects/Morpheus/frontend/tailwind.config.js", "JavaScript", 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 1, 1, 12
+"/Volumes/Work/Projects/Morpheus/frontend/tsconfig.json", "JSON with Comments", 0, 0, 0, 21, 0, 0, 0, 0, 0, 0, 0, 3, 24
+"/Volumes/Work/Projects/Morpheus/frontend/tsconfig.node.json", "JSON", 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 11
+"/Volumes/Work/Projects/Morpheus/frontend/vite.config.ts", "TypeScript", 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 16
+"/Volumes/Work/Projects/Morpheus/frontend/vitest.config.ts", "TypeScript", 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 13
+"/Volumes/Work/Projects/Morpheus/test-results/.last-run.json", "JSON", 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6
+"/Volumes/Work/Projects/Morpheus/test-results/output-playwright-specs-pw-a3f5c-ix-system-bugfix-regression/error-context.md", "Markdown", 0, 0, 122, 0, 0, 0, 0, 0, 0, 0, 0, 1, 123
+"Total", "-", 8659, 4308, 1470, 21, 16, 9915, 2321, 13, 17, 6553, 782, 3681, 37756
