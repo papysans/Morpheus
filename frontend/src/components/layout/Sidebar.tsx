@@ -96,7 +96,7 @@ export default function Sidebar() {
     return (
         <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`} role="navigation" aria-label="主导航">
             <div className="sidebar__header">
-                {!collapsed && <span className="sidebar__brand">编剧室</span>}
+                {!collapsed && <span className="sidebar__brand">Morpheus</span>}
                 <button
                     className="sidebar__toggle"
                     onClick={toggleSidebar}

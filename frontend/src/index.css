@@ -713,8 +713,8 @@ pre {
 }
 
 .sidebar__brand {
-  font-size: 1.1rem;
-  font-weight: 700;
+  font-size: 2rem;
+  font-weight: 800;
   letter-spacing: -0.02em;
   color: var(--text-primary);
   background: linear-gradient(135deg, var(--accent), #bf5af2);
@@ -1620,7 +1620,7 @@ pre {
   min-width: 0;
 }
 
-.app-layout--reading .app-layout__content > * {
+.app-layout--reading .app-layout__content>* {
   width: 100%;
   min-width: 0;
 }
@@ -2202,13 +2202,11 @@ tbody tr:hover {
   color: inherit;
   padding: 0 0.16em;
   border-radius: 0.22em;
-  background: linear-gradient(
-    180deg,
-    transparent 18%,
-    rgba(255, 235, 123, 0.18) 18%,
-    rgba(255, 235, 123, 0.9) 78%,
-    rgba(255, 235, 123, 0.72) 100%
-  );
+  background: linear-gradient(180deg,
+      transparent 18%,
+      rgba(255, 235, 123, 0.18) 18%,
+      rgba(255, 235, 123, 0.9) 78%,
+      rgba(255, 235, 123, 0.72) 100%);
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
