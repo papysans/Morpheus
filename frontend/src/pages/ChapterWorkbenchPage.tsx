@@ -70,6 +70,11 @@ type BlueprintDetailItem = {
     detail: string
 }
 
+type BlueprintValueCard = {
+    headline: string
+    body: string
+}
+
 const BLUEPRINT_NOISE_TOKENS = new Set([
     'id',
     'description',
@@ -98,62 +103,101 @@ function parseBlueprintDetailItems(
         ignoreKeys?: string[]
     },
 ): BlueprintDetailItem[] {
-    const titleKeys = new Set(options.titleKeys.map((k) => k.toLowerCase()))
-    const detailKeys = new Set(options.detailKeys.map((k) => k.toLowerCase()))
-    const ignoreKeys = new Set((options.ignoreKeys || []).map((k) => k.toLowerCase()))
+    const normalizeKey = (raw: string) =>
+        String(raw || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[：:]/g, '')
+            .replace(/\s+/g, '_')
+
+    const titleKeys = new Set(options.titleKeys.map(normalizeKey))
+    const detailKeys = new Set(options.detailKeys.map(normalizeKey))
+    const ignoreKeys = new Set((options.ignoreKeys || []).map(normalizeKey))
     const items: BlueprintDetailItem[] = []
+    const flattenedTokens: string[] = []
 
     for (const raw of values) {
-        const parts = String(raw || '')
+        const source = String(raw || '')
+        if (!source.trim()) continue
+        const bySlash = source
             .split(/\s*\/\s*/)
             .map((part) => part.trim())
             .filter(Boolean)
+        if (bySlash.length > 1) {
+            flattenedTokens.push(...bySlash)
+            continue
+        }
+        const byLine = source
+            .split(/\r?\n/)
+            .map((part) => part.trim())
+            .filter(Boolean)
+        if (byLine.length > 1) {
+            flattenedTokens.push(...byLine)
+            continue
+        }
+        flattenedTokens.push(source.trim())
+    }
 
-        if (parts.length >= 4) {
-            let currentTitle = ''
-            let currentDetail = ''
-            const pushCurrent = () => {
-                const title = cleanBlueprintText(currentTitle)
-                const detail = cleanBlueprintText(currentDetail)
-                if (!title && !detail) return
-                items.push({
-                    title: title || '未命名线索',
-                    detail: detail || '',
-                })
-            }
+    let currentTitle = ''
+    let currentDetail = ''
+    const pushCurrent = () => {
+        const title = cleanBlueprintText(currentTitle)
+        const detail = cleanBlueprintText(currentDetail)
+        if (!title && !detail) return
+        items.push({
+            title: title || '未命名线索',
+            detail: detail || '',
+        })
+        currentTitle = ''
+        currentDetail = ''
+    }
 
-            for (let i = 0; i < parts.length; i += 1) {
-                const token = parts[i]
-                const key = token.toLowerCase()
-                const next = i + 1 < parts.length ? parts[i + 1] : ''
-                if (titleKeys.has(key)) {
-                    if (currentTitle || currentDetail) pushCurrent()
-                    currentTitle = next
-                    currentDetail = ''
-                    i += 1
-                    continue
-                }
-                if (detailKeys.has(key)) {
-                    currentDetail = next
-                    i += 1
-                    continue
-                }
-                if (ignoreKeys.has(key)) {
-                    i += 1
-                    continue
-                }
-            }
+    for (let i = 0; i < flattenedTokens.length; i += 1) {
+        const token = flattenedTokens[i]
+        const key = normalizeKey(token)
+        const next = i + 1 < flattenedTokens.length ? flattenedTokens[i + 1] : ''
+
+        if (titleKeys.has(key)) {
             if (currentTitle || currentDetail) pushCurrent()
+            currentTitle = next
+            currentDetail = ''
+            i += 1
+            continue
+        }
+        if (detailKeys.has(key)) {
+            currentDetail = next
+            i += 1
+            continue
+        }
+        if (ignoreKeys.has(key)) {
+            i += 1
             continue
         }
 
-        const cleaned = cleanBlueprintText(raw)
-        if (cleaned) {
-            items.push({ title: cleaned, detail: '' })
+        const cleaned = cleanBlueprintText(token)
+        if (!cleaned) continue
+        if (!currentTitle) {
+            currentTitle = cleaned
+            continue
         }
+        if (!currentDetail) {
+            currentDetail = cleaned
+            continue
+        }
+        pushCurrent()
+        currentTitle = cleaned
+    }
+    if (currentTitle || currentDetail) {
+        pushCurrent()
     }
 
-    return items
+    const deduped = new Map<string, BlueprintDetailItem>()
+    for (const item of items) {
+        const key = `${item.title}|||${item.detail}`
+        if (!deduped.has(key)) deduped.set(key, item)
+    }
+
+    return Array.from(deduped.values())
 }
 
 export default function ChapterWorkbenchPage() {
@@ -164,6 +208,7 @@ export default function ChapterWorkbenchPage() {
     const currentProject = useProjectStore((s) => s.currentProject)
     const storeChapters = useProjectStore((s) => s.chapters)
     const fetchChapters = useProjectStore((s) => s.fetchChapters)
+    const fetchProject = useProjectStore((s) => s.fetchProject)
     const invalidateCache = useProjectStore((s) => s.invalidateCache)
     const addToast = useToastStore((s) => s.addToast)
     const addRecord = useActivityStore((s) => s.addRecord)
@@ -183,7 +228,7 @@ export default function ChapterWorkbenchPage() {
     const [oneShotLoading, setOneShotLoading] = useState(false)
     const [loadingPlan, setLoadingPlan] = useState(false)
     const [streaming, setStreaming] = useState(false)
-    const [editing, setEditing] = useState(false)
+    const [editing, setEditing] = useState(true)
     const [savingDraft, setSavingDraft] = useState(false)
     const eventSourceRef = useRef<EventSource | null>(null)
 
@@ -204,7 +249,7 @@ export default function ChapterWorkbenchPage() {
         try {
             const response = await api.get(`/chapters/${chapterId}`)
             setChapter(response.data)
-            setDraftContent(response.data.draft ?? '')
+            setDraftContent(response.data.draft ?? response.data.final ?? '')
             setOneShotPrompt((prev) => prev || response.data.goal || '')
             setLoading(false)
         } catch (err: any) {
@@ -258,6 +303,17 @@ export default function ChapterWorkbenchPage() {
         }
     }, [loading, chapter]) // eslint-disable-line react-hooks/exhaustive-deps
 
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
+            if (!editing || savingDraft || streaming) return
+            event.preventDefault()
+            void saveDraft()
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+    }, [editing, savingDraft, streaming, draftContent]) // eslint-disable-line react-hooks/exhaustive-deps
+
     /* ── 草稿恢复处理 ── */
     const handleRestoreDraft = () => {
         const restored = autoSave.restoreDraft()
@@ -292,8 +348,15 @@ export default function ChapterWorkbenchPage() {
         [chapter?.plan?.beats],
     )
 
-    const blueprintConflicts = useMemo(
-        () => (chapter?.plan?.conflicts || []).map(cleanBlueprintText).filter(Boolean),
+    const blueprintConflicts = useMemo<BlueprintValueCard[]>(
+        () =>
+            parseBlueprintDetailItems(chapter?.plan?.conflicts || [], {
+                titleKeys: ['type', '冲突', '冲突类型'],
+                detailKeys: ['description', '说明'],
+            }).map((item) => ({
+                headline: item.title,
+                body: item.detail,
+            })),
         [chapter?.plan?.conflicts],
     )
 
@@ -464,9 +527,17 @@ export default function ChapterWorkbenchPage() {
         try {
             const response = await api.put(`/chapters/${chapterId}/draft`, { draft: draftContent })
             setChapter(response.data.chapter)
-            setEditing(false)
+            setDraftContent(response.data.chapter?.draft ?? draftContent)
+            setEditing(true)
             autoSave.clearDraft()
-            if (projectId) invalidateCache('chapters', projectId)
+            if (projectId) {
+                invalidateCache('project', projectId)
+                invalidateCache('chapters', projectId)
+                await Promise.all([
+                    fetchProject(projectId, { force: true }),
+                    fetchChapters(projectId, { force: true }),
+                ])
+            }
             addToast('success', '草稿保存成功')
             addRecord({ type: 'save', description: '草稿保存成功', status: 'success' })
         } catch (err: any) {
@@ -776,9 +847,18 @@ export default function ChapterWorkbenchPage() {
                                         {blueprintConflicts.length > 0 && (
                                             <ul className="blueprint-list">
                                                 {blueprintConflicts.map((item, i) => (
-                                                    <li key={`${item}-${i}`} className="blueprint-item blueprint-item--conflict">
+                                                    <li key={`${item.headline}-${item.body}-${i}`} className="blueprint-item blueprint-item--conflict">
                                                         <span className="blueprint-item__tag">冲突</span>
-                                                        <p className="blueprint-item__text">{item}</p>
+                                                        <div>
+                                                            <p className="blueprint-item__text" style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+                                                                {item.headline}
+                                                            </p>
+                                                            {item.body && (
+                                                                <p className="blueprint-item__text" style={{ marginTop: 4 }}>
+                                                                    {item.body}
+                                                                </p>
+                                                            )}
+                                                        </div>
                                                     </li>
                                                 ))}
                                             </ul>
@@ -952,13 +1032,11 @@ export default function ChapterWorkbenchPage() {
                                 </button>
                             )}
                             <button className="btn btn-secondary" onClick={() => setEditing((s) => !s)}>
-                                {editing ? '只读预览' : '手动编辑'}
+                                {editing ? '预览正文' : '返回编辑'}
                             </button>
-                            {editing && (
-                                <button className="btn btn-secondary" disabled={savingDraft || streaming} onClick={saveDraft}>
-                                    {savingDraft ? '保存中...' : '保存编辑并重检'}
-                                </button>
-                            )}
+                            <button className="btn btn-secondary" disabled={savingDraft || streaming} onClick={saveDraft}>
+                                {savingDraft ? '保存中...' : '保存编辑并重检'}
+                            </button>
                             {editing && autoSave.lastSaved && (
                                 <span className="muted" style={{ fontSize: '0.8rem', alignSelf: 'center' }}>
                                     已自动保存

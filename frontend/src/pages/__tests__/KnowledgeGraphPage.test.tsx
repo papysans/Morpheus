@@ -276,6 +276,44 @@ describe('sanitizeGraphData', () => {
         expect(sanitized.events[0].subject).toBe('主角')
         expect(sanitized.events[0].object).toBe('关键配角')
     })
+
+    it('filters noisy pseudo-role fragments from entities and events', () => {
+        const entities: EntityNode[] = [
+            { entity_id: 'a', entity_type: 'character', name: '都没', attrs: {}, first_seen_chapter: 1, last_seen_chapter: 1 },
+            { entity_id: 'b', entity_type: 'character', name: '后者正', attrs: {}, first_seen_chapter: 1, last_seen_chapter: 1 },
+            { entity_id: 'c', entity_type: 'character', name: '胡说八', attrs: {}, first_seen_chapter: 1, last_seen_chapter: 1 },
+            { entity_id: 'd', entity_type: 'character', name: '任凭赵老板', attrs: {}, first_seen_chapter: 1, last_seen_chapter: 1 },
+            { entity_id: 'e', entity_type: 'character', name: '通风管', attrs: {}, first_seen_chapter: 1, last_seen_chapter: 1 },
+            { entity_id: 'f', entity_type: 'character', name: '冷静', attrs: {}, first_seen_chapter: 1, last_seen_chapter: 1 },
+            { entity_id: 'g', entity_type: 'character', name: '陆仁甲', attrs: {}, first_seen_chapter: 1, last_seen_chapter: 2 },
+        ]
+        const events: EventEdge[] = [
+            { event_id: 'ev-a', subject: '都没', relation: '冲突', object: '陆仁甲', chapter: 1, description: '' },
+            { event_id: 'ev-b', subject: '陆仁甲', relation: '合作', object: '后者正', chapter: 1, description: '' },
+            { event_id: 'ev-c', subject: '陆仁甲', relation: '保护', object: '苏小柒', chapter: 2, description: '' },
+        ]
+
+        const sanitized = sanitizeGraphData(entities, events)
+        const names = sanitized.entities.map((item) => item.name)
+        expect(names).toContain('陆仁甲')
+        expect(names).not.toContain('都没')
+        expect(names).not.toContain('后者正')
+        expect(names).not.toContain('胡说八')
+        expect(names).not.toContain('任凭赵老板')
+        expect(names).not.toContain('通风管')
+        expect(names).not.toContain('冷静')
+
+        const serializedEvents = JSON.stringify(sanitized.events)
+        expect(serializedEvents).not.toContain('都没')
+        expect(serializedEvents).not.toContain('后者正')
+        expect(serializedEvents).not.toContain('胡说八')
+        expect(serializedEvents).not.toContain('任凭赵老板')
+        expect(
+            sanitized.events.some(
+                (event) => event.subject === '陆仁甲' && event.object === '苏小柒' && event.relation === '保护',
+            ),
+        ).toBe(true)
+    })
 })
 
 describe('ENTITY_STYLES', () => {

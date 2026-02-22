@@ -11,11 +11,13 @@ from fastapi.testclient import TestClient
 
 os.environ["REMOTE_LLM_ENABLED"] = "false"
 os.environ["REMOTE_EMBEDDING_ENABLED"] = "false"
+os.environ["GRAPH_FEATURE_ENABLED"] = "true"
 
 from api.main import (
     app,
     build_outline_messages,
     extract_graph_role_names,
+    validate_graph_role_name,
     enforce_draft_target_words,
     get_or_create_store,
     trace_file,
@@ -278,6 +280,22 @@ class NovelistApiSmokeTest(unittest.TestCase):
         self.assertNotIn("都市传", names)
         self.assertIn("陆仁甲", names)
         self.assertIn("苏小柒", names)
+
+    def test_validate_graph_role_name_rejects_common_noise_fragments(self):
+        for raw in ("都没", "后者正", "胡说八", "任凭赵老板", "通风管", "从管", "冷静"):
+            self.assertEqual(validate_graph_role_name(raw), "")
+        self.assertEqual(validate_graph_role_name("赵老板"), "赵老板")
+
+    def test_extract_graph_role_names_avoids_dao_sentence_false_positive(self):
+        text = (
+            "“通风管道。”苏小柒的激光笔红点移向线路。"
+            "格栅后面有冷风从管道深处吹出。"
+            "她冷静道：跟我来。"
+        )
+        names = extract_graph_role_names(text, max_names=8)
+        self.assertNotIn("通风管", names)
+        self.assertNotIn("从管", names)
+        self.assertNotIn("冷静", names)
 
     def test_graph_upsert_ignores_role_goal_noise_like_urban_legend_fragment(self):
         project_id = self._create_project()

@@ -89,6 +89,7 @@ vi.mock('../../stores/useUIStore', () => ({
 }))
 
 const mockFetchChapters = vi.fn()
+const mockFetchProject = vi.fn()
 const mockInvalidateCache = vi.fn()
 const mockAddAccess = vi.fn()
 const mockStoreChapters = [
@@ -102,6 +103,7 @@ vi.mock('../../stores/useProjectStore', () => ({
             currentProject: { id: 'proj-1', name: '霜城编年史' },
             chapters: mockStoreChapters,
             fetchChapters: mockFetchChapters,
+            fetchProject: mockFetchProject,
             invalidateCache: mockInvalidateCache,
         }),
 }))
@@ -287,6 +289,50 @@ describe('ChapterWorkbenchPage', () => {
         })
     })
 
+    it('蓝图键值流会合并为单条而不是拆散成噪声卡片', async () => {
+        mockApiGet.mockResolvedValue({
+            data: {
+                ...sampleChapter,
+                plan: {
+                    ...sampleChapter.plan,
+                    conflicts: [
+                        'type',
+                        '外部武力冲突',
+                        'description',
+                        '拆迁楼内，苏小柒被黑衣人追杀，陆仁甲被迫卷入战斗。',
+                        'type',
+                        '人物关系冲突',
+                        'description',
+                        '猪肉铺内，陆仁甲与苏小柒因信息不对等互相质疑。',
+                    ],
+                    foreshadowing: [
+                        'item',
+                        '导师的医疗事故',
+                        'description',
+                        '通过视频闪回和记忆被明确提出，暗示并非简单事故。',
+                    ],
+                    callback_targets: [
+                        'target',
+                        '酱油画的笑脸和留言',
+                        'potential_use',
+                        '成为苏小柒与陆仁甲之间的联络符号。',
+                    ],
+                },
+            },
+        })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('外部武力冲突')).toBeTruthy()
+            expect(screen.getByText('拆迁楼内，苏小柒被黑衣人追杀，陆仁甲被迫卷入战斗。')).toBeTruthy()
+            expect(screen.getByText('导师的医疗事故')).toBeTruthy()
+            expect(screen.getByText('酱油画的笑脸和留言')).toBeTruthy()
+        })
+        expect(screen.queryByText(/^type$/i)).toBeNull()
+        expect(screen.queryByText(/^description$/i)).toBeNull()
+        expect(screen.queryByText(/^item$/i)).toBeNull()
+        expect(screen.queryByText(/^target$/i)).toBeNull()
+    })
+
     /* ── 冲突面板 ── */
 
     it('显示冲突统计', async () => {
@@ -367,23 +413,21 @@ describe('ChapterWorkbenchPage', () => {
 
     /* ── 编辑模式 ── */
 
-    it('点击手动编辑切换到编辑模式', async () => {
+    it('默认进入编辑模式并可切换到预览', async () => {
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText('手动编辑')).toBeTruthy()
+            expect(screen.getByText('预览正文')).toBeTruthy()
         })
-        fireEvent.click(screen.getByText('手动编辑'))
-        // 编辑模式下显示"只读预览"和"保存编辑并重检"
-        expect(screen.getByText('只读预览')).toBeTruthy()
+        fireEvent.click(screen.getByText('预览正文'))
+        expect(screen.getByText('返回编辑')).toBeTruthy()
         expect(screen.getByText('保存编辑并重检')).toBeTruthy()
     })
 
     it('保存草稿成功时触发 success Toast', async () => {
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText('手动编辑')).toBeTruthy()
+            expect(screen.getByText('保存编辑并重检')).toBeTruthy()
         })
-        fireEvent.click(screen.getByText('手动编辑'))
         fireEvent.click(screen.getByText('保存编辑并重检'))
         await waitFor(() => {
             expect(mockAddToast).toHaveBeenCalledWith('success', '草稿保存成功')
@@ -416,9 +460,8 @@ describe('ChapterWorkbenchPage', () => {
             vi.useRealTimers()
             renderPage()
             await waitFor(() => {
-                expect(screen.getByText('手动编辑')).toBeTruthy()
+                expect(screen.getByText('预览正文')).toBeTruthy()
             })
-            fireEvent.click(screen.getByText('手动编辑'))
 
             // Type into the textarea
             const textarea = screen.getAllByRole('textbox').find(
@@ -468,7 +511,7 @@ describe('ChapterWorkbenchPage', () => {
             expect(screen.queryByText('发现本地草稿')).toBeNull()
 
             // Should be in editing mode with restored content
-            expect(screen.getByText('只读预览')).toBeTruthy()
+            expect(screen.getByText('预览正文')).toBeTruthy()
             const textarea = screen.getAllByRole('textbox').find(
                 (el) => (el as HTMLTextAreaElement).value === '本地保存的草稿内容'
             )

@@ -18,6 +18,7 @@ import { useProjectStore } from '../stores/useProjectStore'
 import { useToastStore } from '../stores/useToastStore'
 import PageTransition from '../components/ui/PageTransition'
 import Skeleton from '../components/ui/Skeleton'
+import { GRAPH_FEATURE_ENABLED } from '../config/features'
 
 /* ── Data types ── */
 
@@ -63,13 +64,94 @@ const ROLE_NAME_ALIASES: Record<string, string> = {
 }
 
 const ROLE_NAME_IGNORES = new Set(['hidden', 'secret', 'unknown', 'none', 'null'])
+const ROLE_NAME_STOPWORDS = new Set([
+    '章节',
+    '章末',
+    '目标',
+    '冲突',
+    '线索',
+    '伏笔',
+    '回收',
+    '开场',
+    '结尾',
+    '剧情',
+    '故事',
+    '万事屋',
+    '猪肉铺',
+    '猪肉铺2号',
+    '长城路',
+    '长城路猪肉铺',
+    '长城路猪肉铺2号',
+    '黑衣人',
+    '器官库',
+    '数据碎片',
+    '都市传',
+    '都市怪',
+    '都没',
+    '后者正',
+    '胡说八',
+    '任凭赵老板',
+    '任谁',
+    '后者',
+    '前者',
+    '通风管',
+    '从管',
+    '冷静',
+])
+
+const ROLE_NAME_PREFIX_BLOCKLIST = [
+    '后者',
+    '前者',
+    '任凭',
+    '都没',
+    '胡说',
+    '据说',
+    '听说',
+    '如果',
+    '但是',
+    '只是',
+    '这个',
+    '那个',
+]
+
+const ROLE_NAME_TRAILING_INVALID_CHARS = new Set(['没', '不', '了', '着', '过', '都', '也', '正', '谁', '啥', '么'])
+const ROLE_NAME_INTERNAL_INVALID_CHARS = new Set(['者', '说', '没'])
+const ROLE_NAME_TITLE_SUFFIXES = ['教授', '医生', '老板', '队长', '先生', '小姐', '同学']
 
 function normalizeRoleName(name?: string) {
     const raw = String(name || '').trim()
     if (!raw) return ''
     const key = raw.toLowerCase()
     if (ROLE_NAME_IGNORES.has(key)) return ''
-    return ROLE_NAME_ALIASES[key] || raw
+
+    let normalized = ROLE_NAME_ALIASES[key] || raw
+    normalized = normalized.replace(/^(?:连|那|这|把|对|向|跟|让|与|和)/, '')
+    normalized = normalized.replace(/(?:喊|问|说|看|听|追|知|苦|笑|道|叫|答|想|盯|望)$/, '')
+    normalized = normalized.trim()
+
+    if (!normalized) return ''
+    if (!/^[\u4e00-\u9fff]{2,8}$/.test(normalized)) return ''
+    if (normalized.includes('第') && normalized.includes('章')) return ''
+    if (ROLE_NAME_STOPWORDS.has(normalized)) return ''
+    if (ROLE_NAME_PREFIX_BLOCKLIST.some((prefix) => normalized.startsWith(prefix))) return ''
+
+    if (normalized.length === 2 && ROLE_NAME_TRAILING_INVALID_CHARS.has(normalized[1])) return ''
+    if (normalized.length >= 3) {
+        if (ROLE_NAME_TRAILING_INVALID_CHARS.has(normalized[normalized.length - 1])) return ''
+        for (let i = 1; i < normalized.length; i += 1) {
+            if (ROLE_NAME_INTERNAL_INVALID_CHARS.has(normalized[i])) return ''
+        }
+    }
+
+    const matchedTitleSuffix = ROLE_NAME_TITLE_SUFFIXES.find((suffix) => normalized.endsWith(suffix))
+    if (matchedTitleSuffix) {
+        const stem = normalized.slice(0, normalized.length - matchedTitleSuffix.length)
+        if (!stem || stem.length > 2) return ''
+    }
+
+    if (normalized.length > 4 && !matchedTitleSuffix) return ''
+
+    return normalized
 }
 
 /* ── Custom Node Component ── */
@@ -536,6 +618,13 @@ export default function KnowledgeGraphPage() {
     // Load graph data
     useEffect(() => {
         if (!projectId) return
+        if (!GRAPH_FEATURE_ENABLED) {
+            setLoading(false)
+            setLayoutLoading(false)
+            setEntities([])
+            setEvents([])
+            return
+        }
         loadData()
     }, [projectId])
 
@@ -565,6 +654,7 @@ export default function KnowledgeGraphPage() {
     }
 
     useEffect(() => {
+        if (!GRAPH_FEATURE_ENABLED) return
         if (entities.length === 0) {
             setNodes([])
             setEdges([])
@@ -673,6 +763,36 @@ export default function KnowledgeGraphPage() {
         { key: 'graph', label: '关系视图' },
         { key: 'timeline', label: '事件时间线' },
     ]
+
+    if (!GRAPH_FEATURE_ENABLED) {
+        return (
+            <PageTransition>
+                <div>
+                    <div className="page-head" style={{ marginBottom: 16 }}>
+                        <div>
+                            <Link
+                                to={`/project/${projectId}`}
+                                className="muted"
+                                style={{ textDecoration: 'none', fontSize: '0.88rem' }}
+                            >
+                                ← 返回项目
+                            </Link>
+                            <h1 className="title" style={{ marginTop: 6 }}>知识图谱</h1>
+                        </div>
+                    </div>
+                    <section className="card" style={{ padding: 16 }}>
+                        <h2 className="section-title" style={{ marginTop: 0 }}>功能已暂时关闭</h2>
+                        <p className="muted" style={{ marginBottom: 12 }}>
+                            知识图谱已按当前配置下线，后续需要恢复时可重新开启。
+                        </p>
+                        <Link to={`/project/${projectId}`} className="btn btn-secondary" style={{ textDecoration: 'none' }}>
+                            返回项目概览
+                        </Link>
+                    </section>
+                </div>
+            </PageTransition>
+        )
+    }
 
     return (
         <PageTransition>

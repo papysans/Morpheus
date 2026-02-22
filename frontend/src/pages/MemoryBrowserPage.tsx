@@ -27,6 +27,13 @@ const LAYER_OPTIONS = [
     { value: 'L3', label: '仅 L3' },
 ] as const
 
+const QUICK_MEMORY_QUERIES = [
+    { label: '主角动机', query: '主角 目标 动机', layer: '' },
+    { label: '最近冲突', query: '冲突 对峙 误解', layer: 'L2' },
+    { label: '伏笔与回收', query: '伏笔 回收 线索', layer: 'L3' },
+    { label: '时间线', query: '时间线 顺序 先后', layer: '' },
+]
+
 const LAYER_BORDER_COLORS: Record<string, string> = {
     L1: 'rgba(31, 159, 97, 0.4)',
     L2: 'rgba(45, 126, 192, 0.4)',
@@ -144,25 +151,29 @@ export default function MemoryBrowserPage() {
         }
     }
 
-    const searchMemory = useCallback(async () => {
-        if (!query.trim()) return
+    const searchMemory = useCallback(async (options?: { query?: string; layer?: string; silentWhenEmpty?: boolean }) => {
+        const effectiveQuery = (options?.query ?? query).trim()
+        if (!effectiveQuery) return
+        const effectiveLayer = options?.layer ?? layerFilter
         setSearching(true)
         setExpandedId(null)
         try {
             const response = await api.get('/memory/query', {
+                timeout: 45000,
                 params: {
                     project_id: projectId,
-                    query,
-                    layers: layerFilter || undefined,
+                    query: effectiveQuery,
+                    layers: effectiveLayer || undefined,
                 },
             })
             setResults(response.data.results ?? [])
             const count = response.data.results?.length ?? 0
-            if (count === 0) {
+            if (count === 0 && !options?.silentWhenEmpty) {
                 addToast('info', '未找到匹配的记忆条目')
             }
-        } catch (error) {
-            addToast('error', '记忆检索失败')
+        } catch (error: any) {
+            const isTimeout = error?.code === 'ECONNABORTED' || /timeout/i.test(String(error?.message || ''))
+            addToast('error', isTimeout ? '记忆检索超时，请稍后重试或换更短关键词' : '记忆检索失败')
             console.error(error)
             setResults([])
         } finally {
@@ -176,6 +187,12 @@ export default function MemoryBrowserPage() {
 
     const toggleExpand = (itemId: string) => {
         setExpandedId((prev) => (prev === itemId ? null : itemId))
+    }
+
+    const handleQuickSearch = (queryText: string, layer: string) => {
+        setQuery(queryText)
+        setLayerFilter(layer)
+        void searchMemory({ query: queryText, layer, silentWhenEmpty: true })
     }
 
     const tabs: { key: TabKey; label: string }[] = [
@@ -322,12 +339,33 @@ export default function MemoryBrowserPage() {
                                 </select>
                                 <button
                                     className="primary-btn"
-                                    onClick={searchMemory}
+                                    onClick={() => searchMemory()}
                                     disabled={searching || !query.trim()}
                                 >
                                     {searching ? '检索中...' : '检索'}
                                 </button>
                             </div>
+
+                            {!searching && filteredResults.length === 0 && !query.trim() && (
+                                <section className="card" style={{ padding: 12, marginBottom: 10 }}>
+                                    <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>快速开始</div>
+                                    <p className="muted" style={{ margin: '6px 0 10px', fontSize: '0.82rem' }}>
+                                        点击下方预设关键词，直接查看 L2/L3 记忆命中结果。
+                                    </p>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                        {QUICK_MEMORY_QUERIES.map((item) => (
+                                            <button
+                                                key={item.label}
+                                                type="button"
+                                                className="chip-btn"
+                                                onClick={() => handleQuickSearch(item.query, item.layer)}
+                                            >
+                                                {item.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </section>
+                            )}
 
                             {/* Results */}
                             <div style={{ display: 'grid', gap: 10 }}>

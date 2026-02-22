@@ -3,6 +3,7 @@ import { useProjectStore } from '../../stores/useProjectStore'
 import { useUIStore } from '../../stores/useUIStore'
 import { useRecentAccessStore } from '../../stores/useRecentAccessStore'
 import ActivityPanel from '../../components/ui/ActivityPanel'
+import { GRAPH_FEATURE_ENABLED } from '../../config/features'
 
 interface SubNavItem {
     to: string
@@ -69,7 +70,7 @@ const projectSubNav: SubNavItem[] = [
     { to: '/write', label: '创作控制台', icon: <IconPen /> },
     { to: '/chapter', label: '章节工作台', icon: <IconBook />, matchPrefix: true },
     { to: '/memory', label: '记忆浏览器', icon: <IconBrain /> },
-    { to: '/graph', label: '知识图谱', icon: <IconGraph /> },
+    ...(GRAPH_FEATURE_ENABLED ? [{ to: '/graph', label: '知识图谱', icon: <IconGraph /> }] : []),
     { to: '/trace', label: '决策回放', icon: <IconReplay />, matchPrefix: true },
 ]
 

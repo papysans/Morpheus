@@ -5,6 +5,7 @@ import ToastContainer from '../ui/ToastContainer'
 import ShortcutHelpPanel from '../ui/ShortcutHelpPanel'
 import { useUIStore } from '../../stores/useUIStore'
 import { useKeyboardShortcuts, type ShortcutDef } from '../../hooks/useKeyboardShortcuts'
+import { GRAPH_FEATURE_ENABLED } from '../../config/features'
 
 export default function AppLayout() {
     const location = useLocation()
@@ -57,7 +58,7 @@ export default function AppLayout() {
               { to: `/project/${projectId}/write`, label: '写作', prefix: false },
               { to: `/project/${projectId}/chapter`, label: '章节', prefix: true },
               { to: `/project/${projectId}/memory`, label: '记忆', prefix: false },
-              { to: `/project/${projectId}/graph`, label: '图谱', prefix: false },
+              ...(GRAPH_FEATURE_ENABLED ? [{ to: `/project/${projectId}/graph`, label: '图谱', prefix: false }] : []),
               { to: `/project/${projectId}/trace`, label: '回放', prefix: true },
           ]
         : []

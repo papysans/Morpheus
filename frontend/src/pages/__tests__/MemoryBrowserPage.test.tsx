@@ -186,6 +186,30 @@ describe('MemoryBrowserPage', () => {
         })
     })
 
+    it('搜索页空状态展示快速开始入口并可一键检索', async () => {
+        mockApiGet
+            .mockResolvedValueOnce({ data: { content: '' } })
+            .mockResolvedValueOnce({ data: { results: sampleResults } })
+
+        renderPage()
+        fireEvent.click(screen.getByText('L2/L3 记忆搜索'))
+
+        await waitFor(() => {
+            expect(screen.getByText('快速开始')).toBeInTheDocument()
+            expect(screen.getByText('主角动机')).toBeInTheDocument()
+        })
+
+        fireEvent.click(screen.getByText('主角动机'))
+
+        await waitFor(() => {
+            expect(mockApiGet).toHaveBeenCalledWith('/memory/query', expect.objectContaining({
+                params: expect.objectContaining({
+                    query: '主角 目标 动机',
+                }),
+            }))
+        })
+    })
+
     it('performs search and displays results', async () => {
         mockApiGet
             .mockResolvedValueOnce({ data: { content: '' } })

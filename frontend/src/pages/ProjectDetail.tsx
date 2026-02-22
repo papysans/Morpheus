@@ -12,8 +12,6 @@ import DisabledTooltip from '../components/ui/DisabledTooltip'
 import { validateField, type FieldError } from '../utils/validation'
 import { useConfirmClose } from '../hooks/useConfirmClose'
 
-type OneShotScope = 'volume' | 'book'
-
 export default function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>()
   const {
@@ -34,8 +32,6 @@ export default function ProjectDetail() {
   const [creating, setCreating] = useState(false)
   const [exportingBook, setExportingBook] = useState(false)
   const [deletingChapterId, setDeletingChapterId] = useState<string | null>(null)
-  const [quickSynopsis, setQuickSynopsis] = useState('')
-  const [quickScope, setQuickScope] = useState<OneShotScope>('volume')
   const [form, setForm] = useState({ chapter_number: 1, title: '', goal: '' })
   const [chapterNumberInput, setChapterNumberInput] = useState('1')
   const [fieldErrors, setFieldErrors] = useState<Record<string, FieldError | null>>({})
@@ -125,16 +121,6 @@ export default function ProjectDetail() {
     } finally {
       setCreating(false)
     }
-  }
-
-  const buildWritingConsoleLink = () => {
-    if (!projectId) return '#'
-    const params = new URLSearchParams()
-    const prompt = quickSynopsis.trim()
-    if (prompt) params.set('prompt', prompt)
-    params.set('scope', quickScope)
-    const query = params.toString()
-    return query ? `/project/${projectId}/write?${query}` : `/project/${projectId}/write`
   }
 
   const handleExportBook = async () => {
@@ -290,7 +276,7 @@ export default function ProjectDetail() {
           </div>
         </section>
 
-        {/* 快捷导航 */}
+        {/* 快捷导航（暂时注释）
         <div className="grid-actions" style={{ marginTop: 16 }}>
           <Link to={`/project/${projectId}/write`} className="btn btn-secondary" style={{ textDecoration: 'none' }}>
             创作控制台
@@ -298,14 +284,18 @@ export default function ProjectDetail() {
           <Link to={`/project/${projectId}/memory`} className="btn btn-secondary" style={{ textDecoration: 'none' }}>
             记忆浏览器
           </Link>
-          <Link to={`/project/${projectId}/graph`} className="btn btn-secondary" style={{ textDecoration: 'none' }}>
-            知识图谱
-          </Link>
+          {GRAPH_FEATURE_ENABLED && (
+            <Link to={`/project/${projectId}/graph`} className="btn btn-secondary" style={{ textDecoration: 'none' }}>
+              知识图谱
+            </Link>
+          )}
           <Link to="/dashboard" className="btn btn-secondary" style={{ textDecoration: 'none' }}>
             评测看板
           </Link>
         </div>
+        */}
 
+        {/* 创作起点（暂时注释）
         <section className="card" style={{ padding: 14, marginTop: 16 }}>
           <h2 className="section-title">创作起点</h2>
           <p className="muted" style={{ marginTop: 6, marginBottom: 8 }}>
@@ -337,6 +327,7 @@ export default function ProjectDetail() {
             </Link>
           </div>
         </section>
+        */}
 
         {/* 章节列表 */}
         <section className="card" style={{ padding: 14, marginTop: 16 }}>

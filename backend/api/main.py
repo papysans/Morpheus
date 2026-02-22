@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     enable_http_logging: bool = True
     log_file: Optional[str] = None
+    graph_feature_enabled: bool = False
 
     model_config = SettingsConfigDict(
         extra="ignore",
@@ -664,6 +665,16 @@ GRAPH_ROLE_TEXT_STOPWORDS = {
     "数据碎片",
     "都市传",
     "都市怪",
+    "都没",
+    "后者正",
+    "胡说八",
+    "任凭赵老板",
+    "任谁",
+    "后者",
+    "前者",
+    "通风管",
+    "从管",
+    "冷静",
 }
 GRAPH_ROLE_PLACEHOLDER_NAMES = {"主角", "关键配角", "反派"}
 GRAPH_ROLE_COMPOUND_TOKEN_BLOCKLIST = {
@@ -677,6 +688,22 @@ GRAPH_ROLE_COMPOUND_TOKEN_BLOCKLIST = {
     "据说",
     "听说",
 }
+GRAPH_ROLE_PREFIX_BLOCKLIST = {
+    "后者",
+    "前者",
+    "任凭",
+    "都没",
+    "胡说",
+    "据说",
+    "听说",
+    "如果",
+    "但是",
+    "只是",
+    "这个",
+    "那个",
+}
+GRAPH_ROLE_INVALID_TRAILING_CHARS = {"没", "不", "了", "着", "过", "都", "也", "正", "谁", "啥", "么"}
+GRAPH_ROLE_INVALID_INTERNAL_CHARS = {"者", "说", "没"}
 
 GRAPH_TITLE_SUFFIXES = ("教授", "医生", "老板", "队长", "先生", "小姐", "同学")
 GRAPH_COMMON_SURNAMES = set(
@@ -711,10 +738,18 @@ def validate_graph_role_name(name: str, *, allow_placeholders: bool = True) -> s
         return normalized if allow_placeholders else ""
     if normalized in GRAPH_ROLE_TEXT_STOPWORDS:
         return ""
+    if any(normalized.startswith(prefix) for prefix in GRAPH_ROLE_PREFIX_BLOCKLIST):
+        return ""
+    if len(normalized) == 2 and normalized[1] in GRAPH_ROLE_INVALID_TRAILING_CHARS:
+        return ""
+    if len(normalized) >= 3 and any(ch in normalized[1:] for ch in GRAPH_ROLE_INVALID_INTERNAL_CHARS):
+        return ""
+    if len(normalized) >= 3 and normalized[-1] in GRAPH_ROLE_INVALID_TRAILING_CHARS:
+        return ""
     matched_title = next((suffix for suffix in GRAPH_TITLE_SUFFIXES if normalized.endswith(suffix)), None)
     if matched_title:
         stem = normalized[: -len(matched_title)]
-        if not stem or len(stem) > 3:
+        if not stem or len(stem) > 2:
             return ""
         if stem[0] not in GRAPH_COMMON_SURNAMES:
             return ""
@@ -742,7 +777,7 @@ def extract_graph_role_names(text: str, max_names: int = 8) -> List[str]:
             False,
         ),
         (
-            r"(?:^|[，。！？、“”\\s])([\u4e00-\u9fff]{2,4})(?:低声|轻声|冷声)?(说|问|道|喊|笑|看着|看向|盯着|回答|嘀咕|点头)",
+            r"(?:^|[，。！？、“”\\s])([\u4e00-\u9fff]{2,4})(?:低声|轻声|冷声)?(说|问|喊|笑|看着|看向|盯着|回答|嘀咕|点头)",
             True,
         ),
         (
@@ -807,6 +842,8 @@ def sanitize_graph_events(events: List[EventEdge]) -> List[EventEdge]:
 
 
 def get_project_graph_counts(project_id: str) -> tuple[int, int]:
+    if not settings.graph_feature_enabled:
+        return 0, 0
     try:
         store = get_or_create_store(project_id)
         return store.get_entity_count(), store.get_event_count()
@@ -1208,6 +1245,8 @@ def pick_relation_context(text: str, subject: str, target: Optional[str]) -> str
 
 
 def upsert_graph_from_chapter(store: MemoryStore, chapter: Chapter):
+    if not settings.graph_feature_enabled:
+        return
     if not chapter.draft:
         return
     now = datetime.now()
@@ -3548,6 +3587,8 @@ async def get_metrics(project_id: Optional[str] = None):
 async def get_entities(project_id: str):
     if not resolve_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
+    if not settings.graph_feature_enabled:
+        return []
     store = get_or_create_store(project_id)
     entities = sanitize_graph_entities(store.get_all_entities())
     return [entity.model_dump(mode="json") for entity in entities]
@@ -3557,6 +3598,8 @@ async def get_entities(project_id: str):
 async def get_events(project_id: str):
     if not resolve_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
+    if not settings.graph_feature_enabled:
+        return []
     store = get_or_create_store(project_id)
     events = sanitize_graph_events(store.get_all_events())
     return [event.model_dump(mode="json") for event in events]
