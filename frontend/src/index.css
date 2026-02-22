@@ -1830,7 +1830,7 @@ body {
   border: 1px solid var(--glass-border);
 }
 
-.btn:hover:not(:disabled),
+.btn:not(.btn-primary):hover:not(:disabled),
 .btn-secondary:hover:not(:disabled),
 .ghost-btn:hover:not(:disabled),
 .glass-btn:hover:not(:disabled),
@@ -1850,6 +1850,8 @@ body {
 
 .btn-primary:hover:not(:disabled),
 .primary-btn:hover:not(:disabled) {
+  background: linear-gradient(125deg, var(--accent-hover), var(--accent));
+  border-color: rgba(10, 111, 127, 0.28);
   box-shadow: 0 10px 22px rgba(10, 111, 127, 0.24);
 }
 

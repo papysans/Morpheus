@@ -420,6 +420,58 @@ async function handleKnownPublishModals(page, timeoutMs = 18000) {
   return actedAny;
 }
 
+async function clickPublishButtonFallback(page) {
+  const candidates = [
+    /下一步/,
+    /发布章节/,
+    /^发布$/,
+    /确认发布/,
+    /确定发布/,
+  ];
+  for (const pattern of candidates) {
+    const btn = page.getByRole('button', { name: pattern }).first();
+    if ((await btn.count()) <= 0) continue;
+    try {
+      const visible = await btn.isVisible();
+      if (!visible) continue;
+      await btn.click({ force: true });
+      console.log(`[ok] publish button: clicked via fallback role=button name~${pattern}`);
+      return true;
+    } catch {
+      // try next candidate
+    }
+  }
+  return false;
+}
+
+async function clickPublishButtonWithRetry(page, clickBySelectors, selectors) {
+  const maxAttempts = 8;
+  for (let i = 0; i < maxAttempts; i += 1) {
+    if (i === 0) {
+      await page.waitForTimeout(350);
+    } else {
+      await page.waitForTimeout(450);
+    }
+
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 800 });
+    } catch {
+      // keep retrying on dynamic pages
+    }
+
+    const clickedBySelectors = await clickBySelectors(
+      page,
+      selectors || [],
+      `publish button (attempt ${i + 1}/${maxAttempts})`
+    );
+    if (clickedBySelectors) return true;
+
+    const clickedByFallback = await clickPublishButtonFallback(page);
+    if (clickedByFallback) return true;
+  }
+  return false;
+}
+
 async function runPublishChapter({ page, context, config, helpers }) {
   const {
     absPath,
@@ -547,13 +599,13 @@ async function runPublishChapter({ page, context, config, helpers }) {
     )
     .catch(() => null);
 
-  const clicked = await clickBySelectors(
+  const clicked = await clickPublishButtonWithRetry(
     page,
-    config.selectors?.publishButton || [],
-    'publish button'
+    clickBySelectors,
+    config.selectors?.publishButton || []
   );
   if (!clicked) {
-    throw new Error('publish button not found, 请更新 selectors.publishButton 后重试');
+    throw new Error('publish button not found after retries, 请更新 selectors.publishButton 后重试');
   }
   await page.waitForTimeout(500);
   await handleKnownPublishModals(

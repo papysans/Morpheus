@@ -211,6 +211,27 @@ describe('ChapterWorkbenchPage', () => {
         })
     })
 
+    it('显示一键发布章节按钮并可触发发布接口', async () => {
+        mockApiPost.mockResolvedValueOnce({ data: { success: true, chapter_number: 1, book_id: 'b-1' } })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('一键发布章节')).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByText('一键发布章节'))
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith(
+                '/chapters/ch-1/publish',
+                expect.objectContaining({
+                    title: expect.stringContaining('第1章'),
+                    content: expect.any(String),
+                }),
+                expect.objectContaining({ timeout: 300000 }),
+            )
+        })
+    })
+
     /* ── 导出菜单集成 ── */
 
     it('渲染导出菜单组件', async () => {

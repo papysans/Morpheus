@@ -230,6 +230,7 @@ export default function ChapterWorkbenchPage() {
     const [streaming, setStreaming] = useState(false)
     const [editing, setEditing] = useState(true)
     const [savingDraft, setSavingDraft] = useState(false)
+    const [publishing, setPublishing] = useState(false)
     const eventSourceRef = useRef<EventSource | null>(null)
 
     /* ── 自动保存 ── */
@@ -580,6 +581,53 @@ export default function ChapterWorkbenchPage() {
         }
     }
 
+    const publishChapterExternally = async () => {
+        if (!chapterId || !chapter) return
+        const content = (draftContent || chapter.final || chapter.draft || '').trim()
+        if (!content) {
+            addToast('error', '当前章节内容为空，无法发布')
+            return
+        }
+
+        setPublishing(true)
+        try {
+            const response = await api.post(
+                `/chapters/${chapterId}/publish`,
+                {
+                    title: `第${chapter.chapter_number}章 ${chapter.title}`.trim(),
+                    content,
+                },
+                { timeout: 300000 },
+            )
+            const payload = response.data || {}
+            addToast('success', `发布成功：第 ${payload.chapter_number ?? chapter.chapter_number} 章`)
+            addRecord({
+                type: 'save',
+                description: `一键发布成功（book_id=${payload.book_id || 'N/A'}）`,
+                status: 'success',
+            })
+        } catch (err: any) {
+            console.error(err)
+            const detailRaw = err?.response?.data?.detail
+            const detail = typeof detailRaw === 'string'
+                ? detailRaw
+                : detailRaw?.message || err?.message || '一键发布失败'
+            addToast('error', '一键发布失败', {
+                context: '番茄发布',
+                detail,
+                actions: [{ label: '重试', onClick: () => void publishChapterExternally() }],
+            })
+            addRecord({
+                type: 'save',
+                description: '一键发布失败',
+                status: 'error',
+                retryAction: () => void publishChapterExternally(),
+            })
+        } finally {
+            setPublishing(false)
+        }
+    }
+
     const projectName = currentProject?.name ?? '小说项目'
 
     const deleteChapterRequest = async (targetChapterId: string) => {
@@ -784,25 +832,47 @@ export default function ChapterWorkbenchPage() {
                             {chapter.goal}
                         </p>
                     </div>
-                    <div className="grid-actions">
-                        <button className="btn btn-secondary" onClick={() => setShowDeleteConfirm(true)} disabled={streaming || deletingChapter}>
-                            {deletingChapter ? '处理中...' : '删除本章'}
-                        </button>
-                        <ChapterExportMenu
-                            currentChapter={currentChapterExport}
-                            allChapters={allChaptersExport.length > 0 ? allChaptersExport : undefined}
-                            projectName={projectName}
-                        />
-                        <button className="btn btn-secondary" onClick={enterReadingMode}>
-                            阅读模式
-                        </button>
-                        <Link
-                            to={`/project/${projectId}/trace/${chapterId}`}
-                            className="btn btn-secondary"
-                            style={{ textDecoration: 'none' }}
-                        >
-                            决策回放
-                        </Link>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', width: '100%', flexBasis: '100%' }}>
+                        <div className="grid-actions">
+                            <button className="btn btn-secondary" onClick={() => setShowDeleteConfirm(true)} disabled={streaming || deletingChapter}>
+                                {deletingChapter ? '处理中...' : '删除本章'}
+                            </button>
+                            <button className="btn btn-secondary" onClick={enterReadingMode}>
+                                阅读模式
+                            </button>
+                            <Link
+                                to={`/project/${projectId}/trace/${chapterId}`}
+                                className="btn btn-secondary"
+                                style={{ textDecoration: 'none' }}
+                            >
+                                决策回放
+                            </Link>
+                        </div>
+                        <div className="grid-actions" style={{ marginLeft: 'auto' }}>
+                            <ChapterExportMenu
+                                currentChapter={currentChapterExport}
+                                allChapters={allChaptersExport.length > 0 ? allChaptersExport : undefined}
+                                projectName={projectName}
+                            />
+                            <DisabledTooltip
+                                reason={
+                                    publishing
+                                        ? '正在发布，请稍候'
+                                        : !draftContent.trim()
+                                            ? '当前无可发布正文'
+                                            : '请先等待当前生成流程结束'
+                                }
+                                disabled={publishing || streaming || !draftContent.trim()}
+                            >
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={() => void publishChapterExternally()}
+                                    disabled={publishing || streaming || !draftContent.trim()}
+                                >
+                                    {publishing ? '发布中...' : '一键发布章节'}
+                                </button>
+                            </DisabledTooltip>
+                        </div>
                     </div>
                 </div>
 

@@ -100,6 +100,21 @@ function shouldCaptureUrl(rawUrl, captureAll, urlIncludes) {
   return (urlIncludes || []).some((part) => rawUrl.includes(part));
 }
 
+function collectBookIdsFromText(input, outSet) {
+  const text = String(input || '');
+  const patterns = [
+    /\/main\/writer\/(\d+)(?:\/|$|\?)/g,
+    /[?&]book_id=(\d+)/g,
+  ];
+  for (const re of patterns) {
+    let m = re.exec(text);
+    while (m) {
+      if (m[1]) outSet.add(String(m[1]));
+      m = re.exec(text);
+    }
+  }
+}
+
 function getRequestPageUrl(request) {
   try {
     const frame = request.frame();
@@ -185,10 +200,43 @@ async function fillBySelectors(page, selectors, value, label) {
     console.log(`[warn] ${label}: selector not found`);
     return false;
   }
-  await hit.locator.fill('');
-  await hit.locator.type(value, { delay: 20 });
-  console.log(`[ok] ${label}: filled via ${hit.selector}`);
-  return true;
+
+  const expected = String(value);
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await hit.locator.click({ force: true });
+    await hit.locator.fill(expected);
+    await page.waitForTimeout(80);
+
+    let actual = '';
+    try {
+      actual = await hit.locator.inputValue();
+    } catch {
+      actual = '';
+    }
+
+    if (actual === expected) {
+      console.log(`[ok] ${label}: filled via ${hit.selector}`);
+      return true;
+    }
+
+    // Fallback for components that occasionally swallow part of the input.
+    await hit.locator.fill('');
+    await hit.locator.type(expected, { delay: 35 });
+    await page.waitForTimeout(120);
+    try {
+      actual = await hit.locator.inputValue();
+    } catch {
+      actual = '';
+    }
+    if (actual === expected) {
+      console.log(`[ok] ${label}: filled via ${hit.selector} (retry ${attempt})`);
+      return true;
+    }
+  }
+
+  console.log(`[warn] ${label}: value mismatch after retries`);
+  return false;
 }
 
 async function uploadFileBySelectors(page, selectors, filePath, label) {
@@ -337,6 +385,10 @@ async function ensureLoginState(context, page, config) {
     return;
   }
 
+  if (process.env.FANQIE_NON_INTERACTIVE === '1') {
+    throw new Error('no session cookie found in non-interactive mode');
+  }
+
   console.log('[warn] no session cookie found, manual login required');
   await page.goto(config.urls.writerHome, { waitUntil: 'domcontentloaded', timeout: config.timeouts.defaultMs });
   await waitForEnter('请在浏览器中完成登录');
@@ -419,6 +471,39 @@ async function runInspect(page, context, config) {
   await page.pause();
 }
 
+async function runDetectBookId(page, context, config) {
+  await ensureLoginState(context, page, config);
+  const target = config.urls.writerHome || 'https://fanqienovel.com/main/writer/?enter_from=author_zone';
+  await page.goto(target, { waitUntil: 'domcontentloaded', timeout: config.timeouts.defaultMs });
+  await page.waitForTimeout(1200);
+
+  const ids = new Set();
+  collectBookIdsFromText(page.url(), ids);
+
+  const hrefs = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('a[href]'))
+      .map((a) => a.getAttribute('href') || '')
+      .filter(Boolean)
+  );
+  for (const href of hrefs || []) {
+    collectBookIdsFromText(href, ids);
+  }
+
+  const perfUrls = await page.evaluate(() => {
+    try {
+      return performance.getEntriesByType('resource').map((x) => x.name || '');
+    } catch {
+      return [];
+    }
+  });
+  for (const u of perfUrls || []) {
+    collectBookIdsFromText(u, ids);
+  }
+
+  const sorted = Array.from(ids).sort();
+  console.log(`[result] detect_book_ids=${JSON.stringify({ bookIds: sorted })}`);
+}
+
 async function main() {
   const config = loadConfig();
   const userDataDir = absPath(config.paths.userDataDir || './state/chromium-profile');
@@ -456,6 +541,8 @@ async function main() {
       await runRecordOnly(page, context, config);
     } else if (MODE === 'inspect') {
       await runInspect(page, context, config);
+    } else if (MODE === 'detect-book-id') {
+      await runDetectBookId(page, context, config);
     } else {
       throw new Error(`Unknown mode: ${MODE}`);
     }

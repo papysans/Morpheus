@@ -2041,6 +2041,13 @@ class UpdateDraftRequest(BaseModel):
     draft: str
 
 
+class ExternalPublishRequest(BaseModel):
+    book_id: Optional[str] = None
+    title: Optional[str] = None
+    content: Optional[str] = None
+    timeout_sec: int = Field(default=300, ge=30, le=900)
+
+
 class GenerationMode(str, Enum):
     STUDIO = "studio"
     QUICK = "quick"
@@ -2086,6 +2093,68 @@ class PromptPreviewRequest(BaseModel):
 class ProjectHealthRepairRequest(BaseModel):
     project_id: Optional[str] = None
     dry_run: bool = False
+
+
+def _tail_text(value: str, max_chars: int = 4000) -> str:
+    text = (value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def _resolve_book_id_from_automation_config(automation_dir: Path) -> str:
+    candidates = [
+        automation_dir / "config" / "local.json",
+        automation_dir / "config" / "example.json",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        chapter_cfg = payload.get("chapter") if isinstance(payload, dict) else None
+        if isinstance(chapter_cfg, dict):
+            book_id = str(chapter_cfg.get("bookId") or "").strip()
+            if book_id:
+                return book_id
+    return ""
+
+
+async def _detect_book_id_via_playwright(automation_dir: Path, timeout_sec: int = 45) -> str:
+    env = os.environ.copy()
+    env["FANQIE_NON_INTERACTIVE"] = "1"
+    proc = await asyncio.create_subprocess_exec(
+        "node",
+        "src/run.js",
+        "detect-book-id",
+        cwd=str(automation_dir),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        stdout_bytes, _stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return ""
+    if proc.returncode != 0:
+        return ""
+
+    stdout = (stdout_bytes or b"").decode("utf-8", errors="replace")
+    match = re.search(r"detect_book_ids=(\{.*\})", stdout)
+    if not match:
+        return ""
+    try:
+        payload = json.loads(match.group(1))
+    except Exception:
+        return ""
+    ids = payload.get("bookIds") if isinstance(payload, dict) else None
+    if isinstance(ids, list) and ids:
+        return str(ids[0]).strip()
+    return ""
 
 
 bootstrap_state()
@@ -3576,6 +3645,150 @@ async def review_chapter(req: ReviewRequest):
         len(req.comment or ""),
     )
     return {"status": chapter.status.value, "action": req.action.value, "comment": req.comment}
+
+
+@app.post("/api/chapters/{chapter_id}/publish")
+async def publish_chapter_external(chapter_id: str, req: ExternalPublishRequest):
+    chapter = resolve_chapter(chapter_id)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    content = (req.content or chapter.final or chapter.draft or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="No chapter content to publish")
+
+    chapter_title = (req.title or f"第{chapter.chapter_number}章 {chapter.title}").strip()
+    automation_dir = Path(
+        os.getenv("FANQIE_AUTOMATION_DIR", str((BACKEND_ROOT.parent / "automation" / "fanqie-playwright")))
+    ).expanduser().resolve()
+    if not automation_dir.exists():
+        raise HTTPException(status_code=500, detail=f"Automation dir not found: {automation_dir}")
+
+    book_id = (req.book_id or os.getenv("FANQIE_BOOK_ID") or "").strip()
+    if not book_id:
+        book_id = _resolve_book_id_from_automation_config(automation_dir)
+    if not book_id:
+        book_id = await _detect_book_id_via_playwright(automation_dir)
+    if not book_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "book_id is required and auto-detect failed. "
+                "请在请求里传 book_id，或设置 FANQIE_BOOK_ID，或在 "
+                "automation/fanqie-playwright/config/local.json 里配置 chapter.bookId"
+            ),
+        )
+
+    config_payload = {
+        "chapter": {
+            "bookId": book_id,
+            "number": str(chapter.chapter_number),
+            "title": chapter_title,
+            "content": content,
+            "autoPublish": True,
+            "clearBeforeInput": True,
+            "collapseParagraphBlankLines": True,
+        },
+        "manual": {
+            "pauseAfterOpenPublish": False,
+            "pauseBeforePublish": False,
+        },
+        "selectors": {
+            "publishButton": [
+                "button:has-text('下一步')",
+                "button:has-text('发布章节')",
+                "button:has-text('发布')",
+            ],
+            "publishConfirmButton": [
+                "button:has-text('确认发布')",
+                "button:has-text('确定发布')",
+                "button:has-text('确认')",
+            ],
+        },
+    }
+
+    config_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json",
+            prefix=f"fanqie-publish-{chapter_id}-",
+            encoding="utf-8",
+            delete=False,
+        ) as tmp:
+            json.dump(config_payload, tmp, ensure_ascii=False, indent=2)
+            config_path = tmp.name
+
+        env = os.environ.copy()
+        env["FANQIE_CONFIG"] = config_path
+        env["FANQIE_NON_INTERACTIVE"] = "1"
+        proc = await asyncio.create_subprocess_exec(
+            "node",
+            "src/run.js",
+            "publish-chapter",
+            cwd=str(automation_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=req.timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise HTTPException(
+                status_code=504,
+                detail=f"Publish timeout after {req.timeout_sec}s",
+            )
+
+        stdout = (stdout_bytes or b"").decode("utf-8", errors="replace")
+        stderr = (stderr_bytes or b"").decode("utf-8", errors="replace")
+        stdout_tail = _tail_text(stdout, 5000)
+        stderr_tail = _tail_text(stderr, 5000)
+        success = proc.returncode == 0 and "publish_article status=200 code=0" in stdout
+
+        if not success:
+            logger.error(
+                "external publish failed chapter_id=%s code=%s stdout_tail=%s stderr_tail=%s",
+                chapter_id,
+                proc.returncode,
+                stdout_tail,
+                stderr_tail,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": "External publish failed",
+                    "exit_code": proc.returncode,
+                    "stdout_tail": stdout_tail,
+                    "stderr_tail": stderr_tail,
+                },
+            )
+
+        logger.info(
+            "external publish success chapter_id=%s chapter_no=%d book_id=%s",
+            chapter.id,
+            chapter.chapter_number,
+            book_id,
+        )
+        return {
+            "success": True,
+            "chapter_id": chapter.id,
+            "chapter_number": chapter.chapter_number,
+            "book_id": book_id,
+            "stdout_tail": stdout_tail,
+        }
+    finally:
+        if config_path:
+            try:
+                temp_config = Path(config_path)
+                if temp_config.exists():
+                    temp_config.unlink()
+            except Exception:
+                logger.warning("temp config cleanup failed path=%s", config_path)
 
 
 @app.get("/api/metrics")
