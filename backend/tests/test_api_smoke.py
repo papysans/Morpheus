@@ -3,6 +3,7 @@ import os
 import shutil
 import json
 import sqlite3
+import re
 from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -16,9 +17,11 @@ os.environ["GRAPH_FEATURE_ENABLED"] = "true"
 from api.main import (
     app,
     build_outline_messages,
+    build_fallback_outline,
     extract_graph_role_names,
     validate_graph_role_name,
     enforce_draft_target_words,
+    sanitize_narrative_for_export,
     get_or_create_store,
     trace_file,
     memory_stores,
@@ -33,6 +36,7 @@ from api.main import (
     upsert_graph_from_chapter,
 )
 from agents.studio import StudioWorkflow
+from core.chapter_craft import normalize_chapter_title, strip_leading_chapter_heading
 from models import AgentDecision, AgentRole, AgentTrace, EntityState, EventEdge, ProjectStatus, ChapterStatus, ChapterPlan, MemoryItem, Layer
 
 
@@ -881,6 +885,19 @@ class NovelistApiSmokeTest(unittest.TestCase):
         self.assertTrue(payload.get("continuation_mode"))
         self.assertTrue(any("主线仅推进" in item for item in constraints))
         self.assertTrue(any("最多回收 1 个伏笔" in item for item in constraints))
+        forbidden = payload.get("forbidden_title_keywords") or []
+        self.assertIn("阶段收束", forbidden)
+        self.assertIn("第二阶段钩子", forbidden)
+
+    def test_build_fallback_outline_avoids_phase_template_titles(self):
+        outline = build_fallback_outline(
+            prompt="开始在10章内收束阶段里程碑，但是不要写死，记得抛出第二阶段钩子",
+            chapter_count=10,
+            continuation_mode=True,
+        )
+        self.assertEqual(len(outline), 10)
+        pattern = re.compile(r"^(起势递进|代价扩张|阶段收束)([·:：\\-][0-9]+)?$")
+        self.assertFalse(any(pattern.match(item.get("title", "")) for item in outline))
 
     def test_get_chapter_works_even_if_chapter_not_cached_in_worker(self):
         project_id = self._create_project()
@@ -953,18 +970,66 @@ class NovelistApiSmokeTest(unittest.TestCase):
         finally:
             settings.data_dir = original
 
-    def test_enforce_draft_target_words_caps_runaway_output(self):
+    def test_enforce_draft_target_words_uses_soft_limit_without_clipping(self):
         target_words = 1800
         original = "段落。" * 3000  # ~9k chars
         clipped = enforce_draft_target_words(original, target_words)
-        self.assertLessEqual(len(clipped), resolve_target_word_upper_bound(target_words))
-        self.assertGreaterEqual(len(clipped), int(target_words * 0.7))
+        self.assertEqual(clipped, original.strip())
+        self.assertGreater(len(clipped), resolve_target_word_upper_bound(target_words))
 
     def test_enforce_draft_target_words_keeps_normal_output(self):
         target_words = 1800
         normal = "内容。" * 500
         clipped = enforce_draft_target_words(normal, target_words)
         self.assertEqual(clipped, normal.strip())
+
+    def test_title_normalization_removes_chapter_prefix_and_deduplicates(self):
+        used = set()
+        first = normalize_chapter_title(
+            raw_title="第5章 继续",
+            goal="主角破解盲区协议并付出代价",
+            chapter_number=5,
+            used_titles=used,
+            phase="压力升级",
+        )
+        second = normalize_chapter_title(
+            raw_title="第6章 继续",
+            goal="主角破解盲区协议并付出代价",
+            chapter_number=6,
+            used_titles=used,
+            phase="压力升级",
+        )
+        self.assertNotIn("第5章", first)
+        self.assertNotIn("第6章", second)
+        self.assertNotEqual(first, second)
+
+    def test_title_normalization_rewrites_phase_template_title(self):
+        used = set()
+        title = normalize_chapter_title(
+            raw_title="阶段收束·10",
+            goal="围绕“开始在10章内收束阶段里程碑，但是不要写死，记得抛出第二阶段钩子”推进：引入新异常并绑定角色目标",
+            chapter_number=20,
+            used_titles=used,
+            phase="阶段收束",
+        )
+        self.assertTrue(title)
+        self.assertNotEqual(title, "阶段收束·10")
+        self.assertNotIn("阶段收束", title)
+
+    def test_strip_leading_chapter_heading(self):
+        raw = "# 第8章 深夜食堂\n\n正文第一段。\n\n正文第二段。"
+        cleaned = strip_leading_chapter_heading(raw)
+        self.assertEqual(cleaned, "正文第一段。\n\n正文第二段。")
+
+    def test_sanitize_narrative_for_export_removes_editorial_parentheses(self):
+        raw = "镜子再次出现（与“镜之城”呼应）；信号抖动。（反转）"
+        cleaned = sanitize_narrative_for_export(raw)
+        self.assertEqual(cleaned, "镜子再次出现；信号抖动。")
+
+    def test_sanitize_narrative_for_export_keeps_normal_parentheses(self):
+        raw = "她低声说（别回头），然后继续向前。"
+        cleaned = sanitize_narrative_for_export(raw)
+        self.assertEqual(cleaned, raw)
 
 
 if __name__ == "__main__":

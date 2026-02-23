@@ -232,6 +232,65 @@ describe('ChapterWorkbenchPage', () => {
         })
     })
 
+    it('显示创建并绑定番茄书本按钮并可触发接口', async () => {
+        mockApiPost.mockResolvedValueOnce({ data: { success: true, book_id: '7600000000000000000' } })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('创建并绑定番茄书本')).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByText('填写番茄参数'))
+        const introInput = screen.getByPlaceholderText('可留空（后端会按项目信息补全）')
+        fireEvent.change(introInput, { target: { value: '测试简介补充文本' } })
+
+        fireEvent.click(screen.getByText('创建并绑定番茄书本'))
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith(
+                '/projects/proj-1/fanqie/create-book',
+                expect.objectContaining({
+                    title: '霜城编年史',
+                    target_reader: 'male',
+                    intro: '测试简介补充文本',
+                }),
+                expect.objectContaining({ timeout: 300000 }),
+            )
+        })
+    })
+
+    it('支持LLM填充番茄创建参数', async () => {
+        mockApiPost
+            .mockResolvedValueOnce({
+                data: {
+                    success: true,
+                    title_reference: '霜城编年史',
+                    intro: '这是LLM生成的简介，超过五十字，满足平台简介字段长度要求。',
+                    protagonist1: '沈砺',
+                    protagonist2: '苏岚',
+                    target_reader: 'female',
+                },
+            })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('填写番茄参数')).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByText('填写番茄参数'))
+        fireEvent.click(screen.getByText('LLM 填充剩余字段'))
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith(
+                '/projects/proj-1/fanqie/create-book/suggest',
+                expect.objectContaining({ prompt: expect.any(String) }),
+                expect.objectContaining({ timeout: 120000 }),
+            )
+        })
+        await waitFor(() => {
+            expect(screen.getByDisplayValue('沈砺')).toBeTruthy()
+            expect(screen.getByDisplayValue('苏岚')).toBeTruthy()
+        })
+    })
+
     /* ── 导出菜单集成 ── */
 
     it('渲染导出菜单组件', async () => {
@@ -288,6 +347,30 @@ describe('ChapterWorkbenchPage', () => {
         })
         fireEvent.click(screen.getByText('退出阅读'))
         expect(mockExitReadingMode).toHaveBeenCalledTimes(1)
+    })
+
+    it('阅读模式保留正文方括号内容，仅清理思考标签噪音', async () => {
+        mockReadingMode = true
+        mockApiGet.mockResolvedValue({
+            data: {
+                ...sampleChapter,
+                draft: [
+                    '普通段落。',
+                    '[……滋滋……节点……共鸣……增强……]',
+                    '[thinking: 这是思考噪音]',
+                    '【reasoning：内部推理】',
+                    '[……第七区……欢迎……来到……]',
+                ].join('\n\n'),
+            },
+        })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByTestId('reading-toolbar')).toBeTruthy()
+        })
+        expect(screen.getByText('[……滋滋……节点……共鸣……增强……]')).toBeTruthy()
+        expect(screen.getByText('[……第七区……欢迎……来到……]')).toBeTruthy()
+        expect(screen.queryByText('[thinking: 这是思考噪音]')).toBeNull()
+        expect(screen.queryByText('【reasoning：内部推理】')).toBeNull()
     })
 
     /* ── 蓝图面板 ── */
@@ -444,6 +527,26 @@ describe('ChapterWorkbenchPage', () => {
         expect(screen.getByText('保存编辑并重检')).toBeTruthy()
     })
 
+    it('清空创作台仅清空本地编辑区，不触发保存接口', async () => {
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('清空创作台')).toBeTruthy()
+        })
+
+        const editor = document.querySelector('textarea[rows="22"]') as HTMLTextAreaElement
+        expect(editor).toBeTruthy()
+        fireEvent.change(editor, { target: { value: '临时编辑内容' } })
+        expect(editor.value).toBe('临时编辑内容')
+
+        fireEvent.click(screen.getByText('清空创作台'))
+        expect(screen.getByText('清空当前创作台？')).toBeTruthy()
+        fireEvent.click(screen.getByText('确认清空'))
+
+        const clearedEditor = document.querySelector('textarea[rows="22"]') as HTMLTextAreaElement
+        expect(clearedEditor.value).toBe('')
+        expect(mockApiPut).not.toHaveBeenCalled()
+    })
+
     it('保存草稿成功时触发 success Toast', async () => {
         renderPage()
         await waitFor(() => {
@@ -511,6 +614,22 @@ describe('ChapterWorkbenchPage', () => {
             })
             expect(screen.getByText('恢复草稿')).toBeTruthy()
             expect(screen.getByText('丢弃草稿')).toBeTruthy()
+        })
+
+        it('本地草稿与服务端一致时不显示恢复对话框', async () => {
+            localStorageMock.setItem(
+                'draft-ch-1',
+                JSON.stringify({ content: sampleChapter.draft, timestamp: Date.now() })
+            )
+
+            vi.useRealTimers()
+            renderPage()
+
+            await waitFor(() => {
+                expect(screen.getByText(/第 1 章 · 雪夜惊变/)).toBeTruthy()
+            })
+            expect(screen.queryByText('发现本地草稿')).toBeNull()
+            expect(localStorageMock.getItem('draft-ch-1')).toBeNull()
         })
 
         it('点击恢复草稿后恢复内容并进入编辑模式', async () => {

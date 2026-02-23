@@ -44,6 +44,32 @@ function collapseBlankLines(text) {
   return normalizeNewlines(text).replace(/\n{2,}/g, '\n').trim();
 }
 
+const EDITORIAL_NOTE_PATTERNS = [
+  /^反转(?:[：:、，,\-\s].*)?$/i,
+  /^余震(?:[：:、，,\-\s].*)?$/i,
+  /^(?:章尾)?钩子(?:[：:、，,\-\s].*)?$/i,
+  /^(?:与|和).{0,40}呼应$/i,
+  /^呼应.{0,40}$/i,
+  /^callback(?:[：:、，,\-\s].*)?$/i,
+  /^回收(?:[：:、，,\-\s].*)?$/i,
+];
+
+function isEditorialNote(inner) {
+  const candidate = String(inner || '').replace(/\s+/g, ' ').trim();
+  if (!candidate || candidate.length > 60) return false;
+  return EDITORIAL_NOTE_PATTERNS.some((pattern) => pattern.test(candidate));
+}
+
+function sanitizeNarrativeForFanqie(content) {
+  const normalized = normalizeNewlines(String(content || ''));
+  if (!normalized.trim()) return '';
+  return normalized
+    .replace(/[（(]([^（）()]{1,80})[）)]/g, (match, inner) => (isEditorialNote(inner) ? '' : match))
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function removeLeadingMarkdownHeadings(lines) {
   const out = [...lines];
   while (out.length > 0) {
@@ -123,7 +149,7 @@ function parseMarkdownExport(raw, filePath) {
   let bodyLines = [...lines];
   bodyLines = removeLeadingMarkdownHeadings(bodyLines);
   bodyLines = removeLeadingTitleLikeLines(bodyLines);
-  const body = bodyLines.join('\n').trim();
+  const body = sanitizeNarrativeForFanqie(bodyLines.join('\n'));
 
   return { title: title.trim(), content: body };
 }
@@ -179,9 +205,10 @@ function resolveChapterInput(chapter, absPath) {
   const collapseParagraphBlankLines = chapter.collapseParagraphBlankLines !== false;
   if (!chapter.contentFile) {
     const split = splitChapterHeading(fallbackTitle);
+    const normalizedContent = sanitizeNarrativeForFanqie(fallbackContent);
     const content = collapseParagraphBlankLines
-      ? collapseBlankLines(fallbackContent)
-      : normalizeNewlines(fallbackContent).trim();
+      ? collapseBlankLines(normalizedContent)
+      : normalizeNewlines(normalizedContent).trim();
     return {
       title: split.pureTitle || fallbackTitle,
       content,
@@ -196,7 +223,7 @@ function resolveChapterInput(chapter, absPath) {
   const raw = fs.readFileSync(filePath, 'utf8');
   const parsed = parseMarkdownExport(raw, filePath);
   const finalTitle = fallbackTitle || parsed.title || '';
-  const finalContent = fallbackContent || parsed.content || '';
+  const finalContent = sanitizeNarrativeForFanqie(fallbackContent || parsed.content || '');
   const content = collapseParagraphBlankLines
     ? collapseBlankLines(finalContent)
     : normalizeNewlines(finalContent).trim();

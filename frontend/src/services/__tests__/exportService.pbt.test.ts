@@ -5,6 +5,7 @@ import {
     generateChapterTxt,
     generateBookMarkdown,
     generateBookTxt,
+    sanitizeNarrativeForExport,
     ChapterContent,
     ExportOptions,
 } from '../exportService'
@@ -69,8 +70,8 @@ describe('Feature: frontend-ux-overhaul, Property 1: Markdown 导出结构保持
                 const headingLine = lines.find((l) => l.startsWith('#'))
                 expect(headingLine).toBeDefined()
 
-                // Body content should be fully preserved
-                expect(result).toContain(chapter.content)
+                // Body content should be preserved after export sanitization
+                expect(result).toContain(sanitizeNarrativeForExport(chapter.content))
             }),
             { numRuns: 100 },
         )
@@ -100,8 +101,8 @@ describe('Feature: frontend-ux-overhaul, Property 2: TXT 导出结构保持', ()
                 expect(separatorLine).toBeDefined()
                 expect(separatorLine!.length).toBeGreaterThanOrEqual(40)
 
-                // Body content should be fully preserved
-                expect(result).toContain(chapter.content)
+                // Body content should be preserved after export sanitization
+                expect(result).toContain(sanitizeNarrativeForExport(chapter.content))
             }),
             { numRuns: 100 },
         )
@@ -131,14 +132,14 @@ describe('Feature: frontend-ux-overhaul, Property 3: 多章节导出完整性与
 
                 // (a) All chapters' content is present
                 for (const ch of chapters) {
-                    expect(result).toContain(ch.content)
+                    expect(result).toContain(sanitizeNarrativeForExport(ch.content))
                     expect(result).toContain(ch.title)
                 }
 
                 // (b) Chapters appear in original order
                 for (let i = 0; i < chapters.length - 1; i++) {
-                    const idxCurrent = result.indexOf(chapters[i].content)
-                    const idxNext = result.indexOf(chapters[i + 1].content)
+                    const idxCurrent = result.indexOf(sanitizeNarrativeForExport(chapters[i].content))
+                    const idxNext = result.indexOf(sanitizeNarrativeForExport(chapters[i + 1].content))
                     expect(idxCurrent).toBeLessThan(idxNext)
                 }
 
@@ -150,7 +151,7 @@ describe('Feature: frontend-ux-overhaul, Property 3: 多章节导出完整性与
 
                 // TOC appears before the first chapter body
                 const tocIdx = result.indexOf('目录')
-                const firstContentIdx = result.indexOf(chapters[0].content)
+                const firstContentIdx = result.indexOf(sanitizeNarrativeForExport(chapters[0].content))
                 expect(tocIdx).toBeLessThan(firstContentIdx)
             }),
             { numRuns: 100 },
@@ -169,14 +170,14 @@ describe('Feature: frontend-ux-overhaul, Property 3: 多章节导出完整性与
 
                 // (a) All chapters' content is present
                 for (const ch of chapters) {
-                    expect(result).toContain(ch.content)
+                    expect(result).toContain(sanitizeNarrativeForExport(ch.content))
                     expect(result).toContain(ch.title)
                 }
 
                 // (b) Chapters appear in original order
                 for (let i = 0; i < chapters.length - 1; i++) {
-                    const idxCurrent = result.indexOf(chapters[i].content)
-                    const idxNext = result.indexOf(chapters[i + 1].content)
+                    const idxCurrent = result.indexOf(sanitizeNarrativeForExport(chapters[i].content))
+                    const idxNext = result.indexOf(sanitizeNarrativeForExport(chapters[i + 1].content))
                     expect(idxCurrent).toBeLessThan(idxNext)
                 }
 
@@ -188,7 +189,7 @@ describe('Feature: frontend-ux-overhaul, Property 3: 多章节导出完整性与
 
                 // TOC appears before the first chapter body
                 const tocIdx = result.indexOf('目录')
-                const firstContentIdx = result.indexOf(chapters[0].content)
+                const firstContentIdx = result.indexOf(sanitizeNarrativeForExport(chapters[0].content))
                 expect(tocIdx).toBeLessThan(firstContentIdx)
             }),
             { numRuns: 100 },

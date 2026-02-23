@@ -8,9 +8,10 @@ const { runPublishChapter } = require('./publishChapterFlow');
 
 const ROOT = path.resolve(__dirname, '..');
 const MODE = (process.argv[2] || 'create-book').trim();
+const LOCAL_CONFIG_PATH = path.join(ROOT, 'config', 'local.json');
 const CONFIG_PATH = process.env.FANQIE_CONFIG
   ? path.resolve(process.env.FANQIE_CONFIG)
-  : path.join(ROOT, 'config', 'local.json');
+  : LOCAL_CONFIG_PATH;
 const EXAMPLE_CONFIG_PATH = path.join(ROOT, 'config', 'example.json');
 
 function nowStamp() {
@@ -40,6 +41,23 @@ function loadConfig() {
   }
   const local = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   return deepMerge(base, local);
+}
+
+function readJsonFileSafe(filePath, fallback = {}) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed;
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFile(filePath, payload) {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 }
 
 function absPath(p) {
@@ -115,6 +133,102 @@ function collectBookIdsFromText(input, outSet) {
   }
 }
 
+function collectBookIdsFromPayload(payload, outSet) {
+  if (!payload || typeof payload !== 'object') return;
+  const stack = [payload];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (cur === null || cur === undefined) continue;
+    if (Array.isArray(cur)) {
+      for (const item of cur) stack.push(item);
+      continue;
+    }
+    if (typeof cur !== 'object') continue;
+    for (const [k, v] of Object.entries(cur)) {
+      if (typeof v === 'string' || typeof v === 'number') {
+        const text = String(v);
+        if (/(^|_)(book|novel)(_|)id$/i.test(String(k)) && /^\d{8,}$/.test(text)) {
+          outSet.add(text);
+        }
+        collectBookIdsFromText(text, outSet);
+      } else if (v && typeof v === 'object') {
+        stack.push(v);
+      }
+    }
+  }
+}
+
+function sortBookIdsAsc(ids) {
+  return Array.from(ids || []).sort((a, b) => {
+    const aa = String(a || '').trim();
+    const bb = String(b || '').trim();
+    if (/^\d+$/.test(aa) && /^\d+$/.test(bb)) {
+      try {
+        const an = BigInt(aa);
+        const bn = BigInt(bb);
+        if (an < bn) return -1;
+        if (an > bn) return 1;
+        return 0;
+      } catch {
+        // fall through
+      }
+    }
+    return aa.localeCompare(bb);
+  });
+}
+
+function pickLatestBookId(ids) {
+  const sorted = sortBookIdsAsc(ids);
+  if (!sorted.length) return '';
+  return sorted[sorted.length - 1];
+}
+
+function resolvePersistConfigPath(config) {
+  const fromConfig = config?.paths?.persistConfigPath;
+  if (fromConfig) return absPath(fromConfig);
+  return LOCAL_CONFIG_PATH;
+}
+
+function resolveBookStatePath(config) {
+  return absPath(config?.paths?.bookStateFile || './state/book-ids.json');
+}
+
+function persistBookId(bookId, config, meta = {}) {
+  const normalized = String(bookId || '').trim();
+  if (!normalized) return { persisted: false };
+
+  const configPath = resolvePersistConfigPath(config);
+  const cfg = readJsonFileSafe(configPath, {});
+  if (!cfg.chapter || typeof cfg.chapter !== 'object') {
+    cfg.chapter = {};
+  }
+  cfg.chapter.bookId = normalized;
+  writeJsonFile(configPath, cfg);
+
+  const statePath = resolveBookStatePath(config);
+  const state = readJsonFileSafe(statePath, { latestBookId: '', history: [] });
+  const history = Array.isArray(state.history) ? state.history : [];
+  history.push({
+    bookId: normalized,
+    at: new Date().toISOString(),
+    mode: MODE,
+    source: meta.source || 'unknown',
+    title: meta.title || '',
+    status: meta.status ?? null,
+  });
+  const trimmed = history.slice(-50);
+  writeJsonFile(statePath, {
+    latestBookId: normalized,
+    history: trimmed,
+  });
+
+  return {
+    persisted: true,
+    configPath,
+    statePath,
+  };
+}
+
 function getRequestPageUrl(request) {
   try {
     const frame = request.frame();
@@ -170,22 +284,40 @@ async function waitForStopSignal(message) {
 }
 
 async function firstExistingLocator(page, selectors) {
+  const frames = page.frames();
   for (const selector of selectors || []) {
-    const locator = page.locator(selector);
-    const count = await locator.count();
-    if (count <= 0) continue;
-    for (let i = 0; i < count; i += 1) {
-      const candidate = locator.nth(i);
+    for (const frame of frames) {
+      const locator = frame.locator(selector);
+      let count = 0;
       try {
-        const visible = await candidate.isVisible();
-        if (!visible) continue;
-        const box = await candidate.boundingBox();
-        if (!box || box.width < 20 || box.height < 10) continue;
-        return { selector, locator: candidate };
+        count = await locator.count();
       } catch {
-        // continue searching
+        count = 0;
+      }
+      if (count <= 0) continue;
+      for (let i = 0; i < count; i += 1) {
+        const candidate = locator.nth(i);
+        try {
+          const visible = await candidate.isVisible();
+          if (!visible) continue;
+          const box = await candidate.boundingBox();
+          if (!box || box.width < 20 || box.height < 10) continue;
+          return { selector, locator: candidate, frameUrl: frame.url() || '' };
+        } catch {
+          // continue searching
+        }
       }
     }
+  }
+  return null;
+}
+
+async function waitForAnySelectorAcrossFrames(page, selectors, timeoutMs = 15000) {
+  const timeoutAt = Date.now() + Math.max(1000, Number(timeoutMs || 15000));
+  while (Date.now() < timeoutAt) {
+    const hit = await firstExistingLocator(page, selectors);
+    if (hit) return hit;
+    await page.waitForTimeout(250);
   }
   return null;
 }
@@ -216,7 +348,7 @@ async function fillBySelectors(page, selectors, value, label) {
     }
 
     if (actual === expected) {
-      console.log(`[ok] ${label}: filled via ${hit.selector}`);
+      console.log(`[ok] ${label}: filled via ${hit.selector}${hit.frameUrl ? ` frame=${hit.frameUrl}` : ''}`);
       return true;
     }
 
@@ -230,7 +362,9 @@ async function fillBySelectors(page, selectors, value, label) {
       actual = '';
     }
     if (actual === expected) {
-      console.log(`[ok] ${label}: filled via ${hit.selector} (retry ${attempt})`);
+      console.log(
+        `[ok] ${label}: filled via ${hit.selector}${hit.frameUrl ? ` frame=${hit.frameUrl}` : ''} (retry ${attempt})`
+      );
       return true;
     }
   }
@@ -255,7 +389,7 @@ async function uploadFileBySelectors(page, selectors, filePath, label) {
     return false;
   }
   await hit.locator.setInputFiles(abs);
-  console.log(`[ok] ${label}: uploaded via ${hit.selector}`);
+  console.log(`[ok] ${label}: uploaded via ${hit.selector}${hit.frameUrl ? ` frame=${hit.frameUrl}` : ''}`);
   return true;
 }
 
@@ -401,8 +535,263 @@ async function clickBySelectors(page, selectors, label) {
     return false;
   }
   await hit.locator.click();
-  console.log(`[ok] ${label}: clicked via ${hit.selector}`);
+  console.log(`[ok] ${label}: clicked via ${hit.selector}${hit.frameUrl ? ` frame=${hit.frameUrl}` : ''}`);
   return true;
+}
+
+function normalizeTagList(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((x) => String(x || '').trim()).filter(Boolean);
+  }
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  return text
+    .split(/[,\n，]/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function quoteForHasText(value) {
+  return String(value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'");
+}
+
+async function clearSelectedBookTags(page, selectors) {
+  const removeSelectors = [
+    ...(selectors?.selectedTagRemove || []),
+    '.create-category-item .item-del',
+    '.create-category-item .tomato-close',
+  ];
+  let removed = 0;
+  for (let round = 0; round < 20; round += 1) {
+    const hit = await firstExistingLocator(page, removeSelectors);
+    if (!hit) break;
+    try {
+      await hit.locator.click({ force: true });
+      removed += 1;
+      await page.waitForTimeout(120);
+    } catch {
+      break;
+    }
+  }
+  if (removed > 0) {
+    console.log(`[ok] book tags: cleared existing tags count=${removed}`);
+  }
+}
+
+async function clickTagOptionByText(page, selectors, tagText) {
+  const tag = String(tagText || '').trim();
+  if (!tag) return false;
+  const t = quoteForHasText(tag);
+  const optionSelectors = [
+    ...(selectors?.tagOptions || []),
+    `.arco-select-option:has-text('${t}')`,
+    `li[role='option']:has-text('${t}')`,
+    `.arco-select-option-content:has-text('${t}')`,
+    `.dropdown-menu-item:has-text('${t}')`,
+    `.byte-select-option:has-text('${t}')`,
+    `span.item-title:has-text('${t}')`,
+    `text=${tag}`,
+  ];
+  const hit = await waitForAnySelectorAcrossFrames(page, optionSelectors, 3500);
+  if (!hit) return false;
+  try {
+    await hit.locator.click({ force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function pickTagFromModal(modalLocator, tag) {
+  const safeTag = String(tag || '').trim();
+  if (!safeTag) return false;
+
+  const tryPickInCurrentPane = async () => {
+    const titleNodes = modalLocator.locator('.category-choose-item-title').filter({ hasText: safeTag });
+    const count = await titleNodes.count();
+    if (count <= 0) return false;
+    const titleNode = titleNodes.first();
+    const itemNode = titleNode.locator('xpath=ancestor::div[contains(@class,"category-choose-item")]').first();
+    await itemNode.click({ force: true });
+    return true;
+  };
+
+  if (await tryPickInCurrentPane()) return true;
+
+  const tabs = modalLocator.locator('.arco-tabs-header-title');
+  const tabCount = await tabs.count();
+  for (let i = 0; i < tabCount; i += 1) {
+    await tabs.nth(i).click({ force: true });
+    await modalLocator.page().waitForTimeout(180);
+    if (await tryPickInCurrentPane()) return true;
+  }
+  return false;
+}
+
+async function pickTagFromModalByDom(page, tag) {
+  const safeTag = String(tag || '').trim();
+  if (!safeTag) return { ok: false, reason: 'empty_tag' };
+  return page.evaluate((tagText) => {
+    const dialogs = Array.from(document.querySelectorAll("div[role='dialog']"));
+    const modal = dialogs.find((d) => (d.textContent || '').includes('作品标签'));
+    if (!modal) return { ok: false, reason: 'modal_not_found' };
+
+    const tabNodes = Array.from(modal.querySelectorAll('.arco-tabs-header-title'));
+    const tryPickInCurrentPane = () => {
+      const titles = Array.from(modal.querySelectorAll('.category-choose-item-title'));
+      const hit = titles.find((n) => (n.textContent || '').trim() === tagText);
+      if (!hit) return false;
+      const item = hit.closest('.category-choose-item');
+      if (!item) return false;
+      (item).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      return true;
+    };
+
+    if (tryPickInCurrentPane()) return { ok: true, mode: 'current_tab' };
+
+    for (const tab of tabNodes) {
+      tab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      if (tryPickInCurrentPane()) {
+        return { ok: true, mode: 'tab_scan' };
+      }
+    }
+
+    const available = Array.from(modal.querySelectorAll('.category-choose-item-title'))
+      .map((n) => (n.textContent || '').trim())
+      .filter(Boolean)
+      .slice(0, 80);
+    return { ok: false, reason: 'tag_not_found', available };
+  }, safeTag);
+}
+
+async function confirmTagModalByDom(page) {
+  return page.evaluate(() => {
+    const dialogs = Array.from(document.querySelectorAll("div[role='dialog']"));
+    const modal = dialogs.find((d) => (d.textContent || '').includes('作品标签'));
+    if (!modal) return { ok: false, reason: 'modal_not_found' };
+    const buttons = Array.from(modal.querySelectorAll('button'));
+    const confirmBtn = buttons.find((b) => (b.textContent || '').trim() === '确认');
+    if (!confirmBtn) return { ok: false, reason: 'confirm_not_found' };
+    confirmBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return { ok: true };
+  });
+}
+
+async function fillBookTagsViaModal(page, config, tags) {
+  const modalSelectors = [
+    ...(config.selectors?.tagModal || []),
+    "div[role='dialog'].category-modal",
+    "div[role='dialog']:has-text('作品标签')",
+  ];
+  const modalHit = await waitForAnySelectorAcrossFrames(page, modalSelectors, 3500);
+  if (!modalHit) return false;
+
+  let allOk = true;
+  for (const tag of tags) {
+    let ok = await pickTagFromModal(modalHit.locator, tag);
+    if (!ok) {
+      const domPick = await pickTagFromModalByDom(page, tag);
+      ok = !!domPick?.ok;
+      if (!ok && domPick?.available?.length) {
+        console.log(
+          `[debug] book tags: available in modal (first ${domPick.available.length})=${JSON.stringify(domPick.available)}`
+        );
+      }
+    }
+    if (!ok) {
+      allOk = false;
+      console.log(`[warn] book tags: modal option not found tag=${tag}`);
+      continue;
+    }
+    console.log(`[ok] book tags: modal selected tag=${tag}`);
+    await page.waitForTimeout(140);
+  }
+
+  try {
+    const domConfirm = await confirmTagModalByDom(page);
+    if (domConfirm?.ok) {
+      await page.waitForTimeout(220);
+      console.log('[ok] book tags: modal confirmed');
+      return allOk;
+    }
+
+    const confirmBtn = modalHit.locator
+      .locator(
+        [
+          ...(config.selectors?.tagModalConfirmButton || []),
+          "button.arco-btn-primary:has-text('确认')",
+          "button:has-text('确认')",
+        ].join(', ')
+      )
+      .first();
+    if (await confirmBtn.count()) {
+      await confirmBtn.click({ force: true });
+      await page.waitForTimeout(220);
+      console.log('[ok] book tags: modal confirmed');
+    } else {
+      allOk = false;
+      console.log('[warn] book tags: modal confirm button not found');
+    }
+  } catch {
+    allOk = false;
+    console.log('[warn] book tags: modal confirm click failed');
+  }
+
+  return allOk;
+}
+
+async function fillBookTags(page, config) {
+  const tags = normalizeTagList(config.book?.tags);
+  if (!tags.length) {
+    console.log('[skip] book tags: empty');
+    return true;
+  }
+
+  if (config.book?.clearExistingTags) {
+    await clearSelectedBookTags(page, config.selectors || {});
+  }
+
+  const triggerSelectors = [
+    ...(config.selectors?.tagTrigger || []),
+    '#selectRow_input .select-view',
+    '.serial-form-item.cate-wrap .select-view',
+    '.select-row .select-view',
+    '.tomato-down-arrow',
+  ];
+
+  const opened = await clickBySelectors(page, triggerSelectors, 'book tags trigger');
+  if (!opened) {
+    console.log('[warn] book tags: trigger not found');
+    return false;
+  }
+
+  await page.waitForTimeout(200);
+  const viaModal = await fillBookTagsViaModal(page, config, tags);
+  if (viaModal) {
+    return true;
+  }
+
+  // Fallback path for dropdown-based UIs (no modal).
+  let fallbackOk = true;
+  for (const tag of tags) {
+    const selected = await clickTagOptionByText(page, config.selectors || {}, tag);
+    if (!selected) {
+      fallbackOk = false;
+      console.log(`[warn] book tags: dropdown option not found tag=${tag}`);
+      continue;
+    }
+    console.log(`[ok] book tags: dropdown selected tag=${tag}`);
+    await page.waitForTimeout(120);
+  }
+
+  try {
+    await page.keyboard.press('Escape');
+  } catch {
+    // noop
+  }
+  return fallbackOk;
 }
 
 async function runCreateBook(page, context, config) {
@@ -412,6 +801,7 @@ async function runCreateBook(page, context, config) {
     waitUntil: 'domcontentloaded',
     timeout: config.timeouts.defaultMs,
   });
+  await waitForAnySelectorAcrossFrames(page, config.selectors.bookTitle, Number(config.timeouts.defaultMs || 15000));
   console.log(`[info] opened ${config.urls.createBook}`);
 
   if (config.manual?.pauseAfterOpenCreate) {
@@ -419,9 +809,14 @@ async function runCreateBook(page, context, config) {
   }
 
   await fillBySelectors(page, config.selectors.bookTitle, config.book?.title, 'book title');
+  await fillBookTags(page, config);
+  await fillBySelectors(page, config.selectors.protagonist1, config.book?.protagonist1, 'protagonist1');
+  await fillBySelectors(page, config.selectors.protagonist2, config.book?.protagonist2, 'protagonist2');
   await fillBySelectors(page, config.selectors.bookIntro, config.book?.intro, 'book intro');
   await uploadFileBySelectors(page, config.selectors.coverFileInput, config.book?.coverPath, 'book cover');
 
+  const detectedBookIds = new Set();
+  collectBookIdsFromText(page.url(), detectedBookIds);
   const createResponsePromise = page.waitForResponse(
     (resp) => resp.url().includes('/api/author/book/create/') && resp.request().method() === 'POST',
     { timeout: config.timeouts.createResponseMs }
@@ -444,15 +839,183 @@ async function runCreateBook(page, context, config) {
     await waitForEnter('请手动点击提交（脚本正在等待创建接口响应）');
   }
 
+  let createResp = null;
+  let createBody = '';
+  let createPayload = null;
+  let createOk = false;
   try {
-    const resp = await createResponsePromise;
-    const body = await resp.text();
-    console.log(`[result] create response status=${resp.status()}`);
-    console.log(`[result] create response body=${truncate(body, 2000)}`);
+    createResp = await createResponsePromise;
+    createBody = await createResp.text();
+    console.log(`[result] create response status=${createResp.status()}`);
+    console.log(`[result] create response body=${truncate(createBody, 2000)}`);
+    collectBookIdsFromText(createResp.url(), detectedBookIds);
+    collectBookIdsFromText(createBody, detectedBookIds);
+    try {
+      createPayload = JSON.parse(createBody);
+      collectBookIdsFromPayload(createPayload, detectedBookIds);
+    } catch {
+      // keep best-effort id collection from plain text/url
+    }
+    const code = Number(createPayload?.code);
+    createOk = createResp.status() >= 200 && createResp.status() < 300 && (!Number.isFinite(code) || code === 0);
   } catch (err) {
     console.log(`[error] waiting create response failed: ${String(err)}`);
     console.log('[hint] 可能未触发 /api/author/book/create/，请检查提交按钮选择器或人工提交是否成功。');
+    return;
   }
+
+  await page.waitForTimeout(1500);
+  collectBookIdsFromText(page.url(), detectedBookIds);
+  const hrefs = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('a[href]'))
+      .map((a) => a.getAttribute('href') || '')
+      .filter(Boolean)
+  );
+  for (const href of hrefs || []) {
+    collectBookIdsFromText(href, detectedBookIds);
+  }
+  const perfUrls = await page.evaluate(() => {
+    try {
+      return performance.getEntriesByType('resource').map((x) => x.name || '');
+    } catch {
+      return [];
+    }
+  });
+  for (const u of perfUrls || []) {
+    collectBookIdsFromText(u, detectedBookIds);
+  }
+
+  const sorted = sortBookIdsAsc(detectedBookIds);
+  const latestBookId = pickLatestBookId(detectedBookIds);
+  console.log(`[result] create_book_ids=${JSON.stringify({ bookIds: sorted, latestBookId })}`);
+  if (!latestBookId) {
+    console.log('[warn] create-book did not detect a valid bookId; please inspect network logs');
+    return;
+  }
+  if (!createOk) {
+    console.log('[warn] create response not successful, skip bookId persistence');
+    return;
+  }
+
+  if (config.book?.persistBookId === false) {
+    console.log(`[info] persist disabled, detected latestBookId=${latestBookId}`);
+    return;
+  }
+  const persisted = persistBookId(latestBookId, config, {
+    source: 'create-book',
+    title: String(config.book?.title || '').trim(),
+    status: createResp?.status?.(),
+  });
+  if (persisted.persisted) {
+    console.log(
+      `[result] persisted_book_id=${latestBookId} config=${persisted.configPath} state=${persisted.statePath}`
+    );
+  }
+}
+
+async function runFillCreateBookForm(page, context, config) {
+  await ensureLoginState(context, page, config);
+  const consoleErrors = [];
+  const onConsole = (msg) => {
+    if (msg.type() === 'error') {
+      consoleErrors.push(msg.text());
+    }
+  };
+  const onPageError = (err) => {
+    consoleErrors.push(String(err));
+  };
+  page.on('console', onConsole);
+  page.on('pageerror', onPageError);
+  await page.goto(config.urls.createBook, {
+    waitUntil: 'domcontentloaded',
+    timeout: config.timeouts.defaultMs,
+  });
+  console.log(`[info] opened ${config.urls.createBook}`);
+  const mounted = await waitForAnySelectorAcrossFrames(
+    page,
+    [
+      ...(config.selectors.bookTitle || []),
+      ...(config.selectors.bookIntro || []),
+      ...(config.selectors.submitButton || []),
+    ],
+    Math.max(12000, Number(config.timeouts.defaultMs || 15000))
+  );
+  if (!mounted) console.log('[warn] create page hydrate timeout, continue with diagnostics');
+  await page.waitForTimeout(800);
+
+  const okTitle = await fillBySelectors(page, config.selectors.bookTitle, config.book?.title, 'book title');
+  const okTags = await fillBookTags(page, config);
+  const okP1 = await fillBySelectors(page, config.selectors.protagonist1, config.book?.protagonist1, 'protagonist1');
+  const okP2 = config.book?.protagonist2
+    ? await fillBySelectors(page, config.selectors.protagonist2, config.book?.protagonist2, 'protagonist2')
+    : true;
+  const okIntro = await fillBySelectors(page, config.selectors.bookIntro, config.book?.intro, 'book intro');
+
+  const targetReader = String(config.book?.targetReader || '').trim().toLowerCase();
+  if (targetReader === 'male' || targetReader === '男频') {
+    await clickBySelectors(page, config.selectors.targetReaderMale, 'target reader male');
+  } else if (targetReader === 'female' || targetReader === '女频') {
+    await clickBySelectors(page, config.selectors.targetReaderFemale, 'target reader female');
+  }
+
+  if (!okTitle || !okTags || !okIntro || !okP1 || !okP2) {
+    const diagFrames = [];
+    for (const frame of page.frames()) {
+      try {
+        const frameDiag = await frame.evaluate(() => {
+          const inputs = Array.from(document.querySelectorAll('input, textarea')).map((el) => ({
+            tag: el.tagName.toLowerCase(),
+            type: (el.getAttribute('type') || '').toLowerCase(),
+            placeholder: el.getAttribute('placeholder') || '',
+            className: el.getAttribute('class') || '',
+            id: el.getAttribute('id') || '',
+            name: el.getAttribute('name') || '',
+          }));
+          const buttons = Array.from(document.querySelectorAll('button')).map((el) => ({
+            text: (el.textContent || '').trim(),
+            className: el.getAttribute('class') || '',
+            id: el.getAttribute('id') || '',
+          }));
+          return {
+            url: location.href,
+            title: document.title,
+            inputCount: inputs.length,
+            buttonCount: buttons.length,
+            inputs: inputs.slice(0, 80),
+            buttons: buttons.slice(0, 60),
+          };
+        });
+        diagFrames.push(frameDiag);
+      } catch {
+        diagFrames.push({ url: frame.url() || '', error: 'frame-eval-failed' });
+      }
+    }
+    const html = await page.content();
+    const snapDir = absPath('./output/network');
+    ensureDir(snapDir);
+    const snapPath = path.join(snapDir, `create-form-debug-${nowStamp()}.png`);
+    await page.screenshot({ path: snapPath, fullPage: true }).catch(() => {});
+    const diag = {
+      pageUrl: page.url(),
+      htmlSize: html.length,
+      htmlHead: truncate(html, 2000),
+      consoleErrors: consoleErrors.slice(-20),
+      screenshot: snapPath,
+      frames: diagFrames,
+    };
+    console.log(`[debug] create_form_diag=${JSON.stringify(diag)}`);
+  }
+
+  console.log('[result] fill_create_book_form_done=true');
+  if (process.env.FANQIE_NON_INTERACTIVE !== '1') {
+    if (config.manual?.fillKeepOpen !== false) {
+      await waitForStopSignal('已完成回填（未点击“立即创建”），浏览器保持打开，按 Ctrl+C 结束。');
+    } else {
+      await waitForEnter('已完成回填（未点击“立即创建”），请人工检查页面');
+    }
+  }
+  page.off('console', onConsole);
+  page.off('pageerror', onPageError);
 }
 
 async function runRecordOnly(page, context, config) {
@@ -474,34 +1037,69 @@ async function runInspect(page, context, config) {
 async function runDetectBookId(page, context, config) {
   await ensureLoginState(context, page, config);
   const target = config.urls.writerHome || 'https://fanqienovel.com/main/writer/?enter_from=author_zone';
-  await page.goto(target, { waitUntil: 'domcontentloaded', timeout: config.timeouts.defaultMs });
-  await page.waitForTimeout(1200);
-
   const ids = new Set();
-  collectBookIdsFromText(page.url(), ids);
-
-  const hrefs = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('a[href]'))
-      .map((a) => a.getAttribute('href') || '')
-      .filter(Boolean)
-  );
-  for (const href of hrefs || []) {
-    collectBookIdsFromText(href, ids);
-  }
-
-  const perfUrls = await page.evaluate(() => {
+  const onResponse = async (response) => {
     try {
-      return performance.getEntriesByType('resource').map((x) => x.name || '');
+      const rawUrl = response.url();
+      collectBookIdsFromText(rawUrl, ids);
+      const ct = String(response.headers()['content-type'] || '').toLowerCase();
+      if (!ct.includes('application/json')) return;
+      const text = await response.text();
+      collectBookIdsFromText(text, ids);
+      try {
+        const payload = JSON.parse(text);
+        collectBookIdsFromPayload(payload, ids);
+      } catch {
+        // noop
+      }
     } catch {
-      return [];
+      // noop
     }
-  });
-  for (const u of perfUrls || []) {
-    collectBookIdsFromText(u, ids);
+  };
+  page.on('response', onResponse);
+  try {
+    await page.goto(target, { waitUntil: 'domcontentloaded', timeout: config.timeouts.defaultMs });
+    await page.waitForTimeout(1500);
+    collectBookIdsFromText(page.url(), ids);
+
+    const hrefs = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('a[href]'))
+        .map((a) => a.getAttribute('href') || '')
+        .filter(Boolean)
+    );
+    for (const href of hrefs || []) {
+      collectBookIdsFromText(href, ids);
+    }
+
+    const perfUrls = await page.evaluate(() => {
+      try {
+        return performance.getEntriesByType('resource').map((x) => x.name || '');
+      } catch {
+        return [];
+      }
+    });
+    for (const u of perfUrls || []) {
+      collectBookIdsFromText(u, ids);
+    }
+  } finally {
+    page.off('response', onResponse);
   }
 
-  const sorted = Array.from(ids).sort();
-  console.log(`[result] detect_book_ids=${JSON.stringify({ bookIds: sorted })}`);
+  const sorted = sortBookIdsAsc(ids);
+  const latestBookId = pickLatestBookId(ids);
+  console.log(`[result] detect_book_ids=${JSON.stringify({ bookIds: sorted, latestBookId })}`);
+  if (latestBookId && config.book?.persistDetectedBookId !== false) {
+    const persisted = persistBookId(latestBookId, config, {
+      source: 'detect-book-id',
+      title: '',
+      status: null,
+    });
+    if (persisted.persisted) {
+      console.log(
+        `[result] persisted_book_id=${latestBookId} config=${persisted.configPath} state=${persisted.statePath}`
+      );
+    }
+  }
 }
 
 async function main() {
@@ -521,6 +1119,8 @@ async function main() {
   try {
     if (MODE === 'create-book') {
       await runCreateBook(page, context, config);
+    } else if (MODE === 'fill-create-book-form') {
+      await runFillCreateBookForm(page, context, config);
     } else if (MODE === 'publish-chapter') {
       await runPublishChapter({
         page,

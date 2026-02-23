@@ -8,11 +8,12 @@
 
 ## 目录结构
 
-- `src/run.js`：主脚本（create-book / publish-chapter / record / inspect）
+- `src/run.js`：主脚本（create-book / publish-chapter / detect-book-id / record / inspect）
 - `src/publishChapterFlow.js`：章节发布独立组件
 - `config/example.json`：默认配置模板
 - `config/local.json`：你的本地覆盖配置（不入库）
 - `state/`：浏览器登录态（不入库）
+- `state/book-ids.json`：自动持久化的书本 ID 历史
 - `output/network/`：抓包日志 jsonl（不入库）
 
 ## 安装
@@ -49,12 +50,19 @@ npm run create-book
 npm run publish-chapter
 ```
 
+5. （可选）仅检测并持久化当前账号书本 ID：
+
+```bash
+npm run detect-book-id
+```
+
 ## 三种模式
 
 - `npm run create-book`
   - 自动尝试填写书名/简介/封面。
   - 提交前会停下来等你确认。
   - 等待并打印 `/api/author/book/create/` 响应。
+  - 创建成功后自动提取并持久化 `bookId`（默认写入 `config/local.json -> chapter.bookId` 和 `state/book-ids.json`）。
 
 - `npm run publish-chapter`
   - 进入指定 `bookId` 的章节发布页。
@@ -69,6 +77,10 @@ npm run publish-chapter
 
 - `npm run inspect`
   - 进入 `page.pause()`，用于定位选择器。
+
+- `npm run detect-book-id`
+  - 从作者后台页面链接与响应中提取账号可见的 `bookId` 列表。
+  - 输出 `latestBookId`，并默认自动持久化到 `config/local.json`。
 
 ## 配置说明（local.json）
 
@@ -129,6 +141,8 @@ npm run publish-chapter
   - 若提取到 `第X章 标题`，会自动拆分：`X` 填入章节号输入框，`标题` 填入标题输入框。
   - 自动去掉开头重复标题行，只发布正文内容。
   - 若你在配置里显式设置了 `chapter.title`，则优先使用配置标题。
+- 一键发布接口（后端 `/api/chapters/{id}/publish`）会优先复用持久化后的 `chapter.bookId`，
+  因此建议先执行一次 `npm run create-book` 或 `npm run detect-book-id` 完成绑定。
 
 ## 抓“章节发布”推荐步骤
 
@@ -182,3 +196,13 @@ NODE
 
 - 你的登录态保存在 `state/`，不要提交到仓库。
 - 抓包日志默认会对 Cookie/Token 头做脱敏，但仍建议视为敏感文件。
+- `book.persistBookId`
+  - `true`（默认）：`create-book` 成功后自动持久化 `bookId`
+  - `false`：只打印，不写配置
+- `book.persistDetectedBookId`
+  - `true`（默认）：`detect-book-id` 成功后自动持久化 `bookId`
+  - `false`：只打印，不写配置
+- `paths.persistConfigPath`
+  - 默认 `./config/local.json`，用于持久化 `chapter.bookId`
+- `paths.bookStateFile`
+  - 默认 `./state/book-ids.json`，保存 `latestBookId` 与历史

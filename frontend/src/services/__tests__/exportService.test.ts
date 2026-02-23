@@ -5,6 +5,7 @@ import {
     generateChapterTxt,
     generateBookMarkdown,
     generateBookTxt,
+    sanitizeNarrativeForExport,
     exportChapter,
     exportBook,
     ChapterContent,
@@ -53,6 +54,18 @@ describe('generateChapterMarkdown', () => {
         const result = generateChapterMarkdown(chapter)
         expect(result).toContain(chapter.content)
     })
+
+    it('removes editorial notes inside parentheses', () => {
+        const polluted: ChapterContent = {
+            chapterNumber: 7,
+            title: '镜门',
+            content: '镜子再次出现（与“镜之城”呼应）；她继续前行。（反转）',
+        }
+        const result = generateChapterMarkdown(polluted)
+        expect(result).toContain('镜子再次出现；她继续前行。')
+        expect(result).not.toContain('与“镜之城”呼应')
+        expect(result).not.toContain('（反转）')
+    })
 })
 
 describe('generateChapterTxt', () => {
@@ -71,6 +84,21 @@ describe('generateChapterTxt', () => {
     it('includes full body content', () => {
         const result = generateChapterTxt(chapter)
         expect(result).toContain(chapter.content)
+    })
+
+    it('keeps normal parenthetical narrative text', () => {
+        const polluted = '她低声说（别回头），然后迈过门槛。'
+        const result = generateChapterTxt({ ...chapter, content: polluted })
+        expect(result).toContain('（别回头）')
+    })
+})
+
+describe('sanitizeNarrativeForExport', () => {
+    it('strips common planning note markers only', () => {
+        const content = '转角有风（反转）。镜面闪动（与“镜之城”呼应）。\n她低声说（别回头）。'
+        const cleaned = sanitizeNarrativeForExport(content)
+        expect(cleaned).toContain('转角有风。镜面闪动。')
+        expect(cleaned).toContain('（别回头）')
     })
 })
 

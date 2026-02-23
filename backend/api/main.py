@@ -24,6 +24,15 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agents.studio import AGENT_PROMPTS, AgentStudio, StudioWorkflow
+from core.chapter_craft import (
+    build_micro_arc_hint,
+    build_outline_phase_hints,
+    collapse_blank_lines,
+    compute_length_bounds,
+    derive_title_from_goal,
+    normalize_outline_items,
+    strip_leading_chapter_heading,
+)
 from core.story_templates import get_story_template, list_story_templates
 from memory import MemoryStore
 from memory.search import EmbeddingProvider, HybridSearchEngine, VectorStore
@@ -127,6 +136,16 @@ THINK_BLOCK_PATTERN = re.compile(
 )
 THINKING_BLOCK_PATTERN = re.compile(r"(?is)```(?:thinking|reasoning)\s*[\s\S]*?```")
 THINKING_LINE_PATTERN = re.compile(r"(?im)^\s*(thinking|thoughts?|reasoning)\s*[:：].*(?:\n|$)")
+EDITORIAL_NOTE_BRACKET_PATTERN = re.compile(r"[（(]([^（）()]{1,80})[）)]")
+EDITORIAL_NOTE_TEXT_PATTERNS = (
+    re.compile(r"^反转(?:[：:、，,\-\s].*)?$", re.IGNORECASE),
+    re.compile(r"^余震(?:[：:、，,\-\s].*)?$", re.IGNORECASE),
+    re.compile(r"^(?:章尾)?钩子(?:[：:、，,\-\s].*)?$", re.IGNORECASE),
+    re.compile(r"^(?:与|和).{0,40}呼应$", re.IGNORECASE),
+    re.compile(r"^呼应.{0,40}$", re.IGNORECASE),
+    re.compile(r"^callback(?:[：:、，,\-\s].*)?$", re.IGNORECASE),
+    re.compile(r"^回收(?:[：:、，,\-\s].*)?$", re.IGNORECASE),
+)
 
 
 def sanitize_trace_text(value: Optional[str]) -> str:
@@ -138,6 +157,28 @@ def sanitize_trace_text(value: Optional[str]) -> str:
     text = THINKING_BLOCK_PATTERN.sub("", text)
     text = THINKING_LINE_PATTERN.sub("", text)
     return text.strip()
+
+
+def _is_editorial_note_text(value: str) -> bool:
+    candidate = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not candidate or len(candidate) > 60:
+        return False
+    return any(pattern.match(candidate) for pattern in EDITORIAL_NOTE_TEXT_PATTERNS)
+
+
+def sanitize_narrative_for_export(text: Optional[str]) -> str:
+    content = str(text or "")
+    if not content.strip():
+        return ""
+
+    def _replace(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        return "" if _is_editorial_note_text(inner) else match.group(0)
+
+    cleaned = EDITORIAL_NOTE_BRACKET_PATTERN.sub(_replace, content)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def sanitize_trace_payload(trace: AgentTrace) -> Dict[str, Any]:
@@ -1411,25 +1452,22 @@ def parse_outline_json(text: str) -> List[Dict[str, str]]:
     return outline
 
 
-def build_fallback_outline(prompt: str, chapter_count: int) -> List[Dict[str, str]]:
-    phase = [
-        "引爆主冲突",
-        "扩大代价",
-        "误导与反转伏笔",
-        "关系破裂",
-        "真相逼近",
-        "局势失控",
-        "抉择时刻",
-        "收束并留钩子",
-    ]
+def build_fallback_outline(
+    prompt: str,
+    chapter_count: int,
+    continuation_mode: bool = False,
+) -> List[Dict[str, str]]:
+    phase = build_outline_phase_hints(chapter_count, continuation_mode=continuation_mode)
     result: List[Dict[str, str]] = []
     for index in range(chapter_count):
-        p = phase[index % len(phase)]
         number = index + 1
+        p = phase[index % len(phase)]
+        goal = f"围绕“{prompt}”推进：{p['focus']}"
+        title = derive_title_from_goal(goal, number, phase=None)
         result.append(
             {
-                "title": f"{p}·{number}",
-                "goal": f"{prompt}（第{number}章：{p}）",
+                "title": title,
+                "goal": goal,
             }
         )
     return result
@@ -1455,10 +1493,15 @@ def build_outline_messages(
     identity: str,
     continuation_mode: bool = False,
 ) -> List[Dict[str, str]]:
+    phase_hints = build_outline_phase_hints(chapter_count, continuation_mode)
     constraints = [
-        "每章 title 简洁有辨识度",
-        "每章 goal 要推动主线并含冲突动作",
-        "章节之间有递进关系",
+        "每章 title 2-14 字，禁止写“第X章”前缀",
+        "每章 title 必须具体且可区分，避免“开端/发展/继续”之类空泛命名",
+        "每章 title 禁止使用阶段标签（如“起势递进/代价扩张/阶段收束”）及其编号变体",
+        "每章 title 禁止直接复述流程指令词（如“里程碑/阶段收束/第二阶段钩子”）",
+        "每章 title 必须像小说章名（名词短语或意象短语），不要写成动作句或说明句",
+        "每章 goal 必须包含明确行动和阻力，不能只写情绪或设定介绍",
+        "章节之间要形成因果递进，后章必须承接前章代价",
     ]
     if continuation_mode:
         constraints.extend(build_serial_continuation_constraints())
@@ -1468,6 +1511,7 @@ def build_outline_messages(
             "content": (
                 "你是长篇小说策划编辑。仅输出 JSON 数组，不要解释。"
                 "数组每项格式：{\"title\":\"...\",\"goal\":\"...\"}。"
+                "标题不允许包含“第X章”。"
             ),
         },
         {
@@ -1483,6 +1527,9 @@ def build_outline_messages(
                     "identity": identity,
                     "continuation_mode": continuation_mode,
                     "constraints": constraints,
+                    "forbidden_title_keywords": ["起势递进", "代价扩张", "阶段收束", "里程碑", "第二阶段钩子"],
+                    "title_style_examples": ["镜城残响", "雪夜压城", "盲域余震", "风暴前兆"],
+                    "phase_hints": phase_hints,
                 },
                 ensure_ascii=False,
             ),
@@ -1499,6 +1546,7 @@ def build_chapter_outline(
     store: MemoryStore,
     studio: AgentStudio,
     continuation_mode: bool = False,
+    start_chapter_number: int = 1,
 ) -> List[Dict[str, str]]:
     identity = store.three_layer.get_identity()[:2500]
     messages = build_outline_messages(
@@ -1518,20 +1566,34 @@ def build_chapter_outline(
         raw = str(raw)
     outline = parse_outline_json(raw)
     if len(outline) >= chapter_count:
+        normalized = normalize_outline_items(
+            outline=outline[:chapter_count],
+            prompt=prompt,
+            chapter_count=chapter_count,
+            start_chapter_number=start_chapter_number,
+            continuation_mode=continuation_mode,
+        )
         logger.info(
             "outline generated via model scope=%s chapters=%d",
             scope,
             chapter_count,
         )
-        return outline[:chapter_count]
-    fallback = build_fallback_outline(prompt, chapter_count)
+        return normalized
+    fallback = build_fallback_outline(prompt, chapter_count, continuation_mode=continuation_mode)
     if not outline:
+        normalized_fallback = normalize_outline_items(
+            outline=fallback,
+            prompt=prompt,
+            chapter_count=chapter_count,
+            start_chapter_number=start_chapter_number,
+            continuation_mode=continuation_mode,
+        )
         logger.warning(
             "outline parse failed using fallback scope=%s chapters=%d",
             scope,
             chapter_count,
         )
-        return fallback
+        return normalized_fallback
     logger.warning(
         "outline partially generated model_count=%d fallback_count=%d",
         len(outline),
@@ -1542,7 +1604,13 @@ def build_chapter_outline(
         if len(merged) >= chapter_count:
             break
         merged.append(item)
-    return merged[:chapter_count]
+    return normalize_outline_items(
+        outline=merged[:chapter_count],
+        prompt=prompt,
+        chapter_count=chapter_count,
+        start_chapter_number=start_chapter_number,
+        continuation_mode=continuation_mode,
+    )
 
 
 ProgressReporter = Optional[Callable[[str, Dict[str, Any]], Any]]
@@ -1614,6 +1682,12 @@ def build_one_shot_messages(
         GenerationMode.CINEMATIC: "电影模式：强调场景调度、对白张力和镜头感，篇幅更饱满。",
     }[req.mode]
     continuation_constraints = build_serial_continuation_constraints() if req.continuation_mode else []
+    rhythm_hint = build_micro_arc_hint(
+        chapter_number=chapter.chapter_number,
+        target_words=req.target_words,
+        continuation_mode=req.continuation_mode,
+    )
+    length_bounds = compute_length_bounds(req.target_words)
     return [
         {
             "role": "system",
@@ -1621,6 +1695,7 @@ def build_one_shot_messages(
                 "你是中文长篇小说写作助手。请只输出章节正文，不要输出解释、JSON、标题栏、提示词。"
                 "必须遵守世界规则与禁忌约束，保持人物行为一致。"
                 "若为续写模式，不得在单章内结束全书主线，章尾必须保留下一章触发点。"
+                "正文不得包含“第X章/Chapter X”标题行。"
             ),
         },
         {
@@ -1634,6 +1709,8 @@ def build_one_shot_messages(
                     "chapter_goal": chapter.goal,
                     "one_line_premise": premise,
                     "target_words": req.target_words,
+                    "length_bounds": length_bounds,
+                    "rhythm_hint": rhythm_hint,
                     "project_style": project.style,
                     "taboo_constraints": project.taboo_constraints,
                     "identity": store.three_layer.get_identity()[:2000],
@@ -1666,9 +1743,41 @@ def resolve_draft_max_tokens(llm_client: Any, target_words: int) -> int:
 
 
 def resolve_target_word_upper_bound(target_words: int) -> int:
-    target = max(int(target_words or 0), 300)
-    # Keep a moderate tolerance to absorb model variance while preventing runaway output.
-    return max(target + 240, int(target * 1.35))
+    return compute_length_bounds(target_words)["soft_upper"]
+
+
+def resolve_project_target_words(project: Project, project_id: str) -> int:
+    template_words: Optional[int] = None
+    if project.template_id:
+        template = get_story_template(project.template_id)
+        if template:
+            structure = template.get("recommended_structure", {})
+            if isinstance(structure, dict):
+                raw_words = structure.get("words_per_chapter")
+                if raw_words:
+                    try:
+                        template_words = int(raw_words)
+                    except Exception:
+                        template_words = None
+
+    if template_words and template_words >= 300:
+        return min(max(template_words, 300), 12000)
+
+    existing_word_counts = [
+        c.word_count
+        for c in chapter_list(project_id)
+        if c.word_count and c.word_count >= 300
+    ]
+    if existing_word_counts:
+        existing_word_counts.sort()
+        median = existing_word_counts[len(existing_word_counts) // 2]
+        return min(max(int(median), 300), 12000)
+
+    estimated_total_chapters = 24
+    if project.target_length > 0:
+        estimated_total_chapters = max(12, min(60, int(project.target_length / 12000) + 1))
+    fallback = int(project.target_length / estimated_total_chapters) if project.target_length > 0 else 1800
+    return min(max(fallback, 1200), 4200)
 
 
 def _clip_text_at_sentence_boundary(text: str, upper_bound: int) -> str:
@@ -1703,6 +1812,157 @@ def enforce_draft_target_words(draft: str, target_words: int) -> str:
             len(text),
         )
     # Soft limit only: do not hard-clip model output.
+    return text
+
+
+def _normalize_generated_draft_text(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = strip_leading_chapter_heading(cleaned)
+    cleaned = collapse_blank_lines(cleaned, max_consecutive_blank=1)
+    return cleaned.strip()
+
+
+def _looks_like_full_rewrite(candidate: str, baseline: str) -> bool:
+    if not candidate or not baseline:
+        return False
+    if len(candidate) < int(len(baseline) * 0.85):
+        return False
+    head = baseline[: min(120, len(baseline))]
+    return head and head in candidate[: min(len(candidate), 500)]
+
+
+async def rebalance_draft_length_if_needed(
+    *,
+    llm_client: Any,
+    chapter: Chapter,
+    project: Project,
+    draft: str,
+    target_words: int,
+) -> str:
+    text = _normalize_generated_draft_text(draft)
+    if not text:
+        return text
+
+    bounds = compute_length_bounds(target_words)
+    lower = bounds["lower"]
+    upper = bounds["soft_upper"]
+    target = bounds["target"]
+
+    if lower <= len(text) <= upper:
+        return text
+
+    base_temperature = resolve_llm_temperature(llm_client)
+    append_rounds = 0
+
+    while len(text) < lower and append_rounds < 2:
+        deficit = lower - len(text)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是小说续写编辑。请在不改写既有段落的前提下续写后文。"
+                    "只输出新增内容，不要重复已有正文，不要输出标题。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "chapter_number": chapter.chapter_number,
+                        "chapter_title": chapter.title,
+                        "chapter_goal": chapter.goal,
+                        "project_style": project.style,
+                        "target_words": target,
+                        "target_range": [bounds["ideal_low"], bounds["ideal_high"]],
+                        "deficit_words": deficit,
+                        "current_draft": text,
+                        "requirements": [
+                            "延续当前场景与人物动机",
+                            "至少新增一个推进动作和一个后续钩子",
+                            "不要复述前文，不要输出说明",
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        extra_max_tokens = min(
+            max(768, deficit * 3),
+            max(resolve_draft_max_tokens(llm_client, target), 768),
+        )
+        raw = await asyncio.to_thread(
+            llm_client.chat,
+            messages,
+            temperature=max(0.6, base_temperature - 0.25),
+            max_tokens=extra_max_tokens,
+        )
+        addition = _normalize_generated_draft_text(raw if isinstance(raw, str) else str(raw))
+        if not addition:
+            break
+
+        if _looks_like_full_rewrite(addition, text):
+            text = addition
+        else:
+            text = f"{text}\\n\\n{addition}".strip()
+        append_rounds += 1
+
+    if len(text) > upper:
+        shrink_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是小说压缩编辑。请在不改变剧情事实和因果关系的前提下压缩文本。"
+                    "只输出压缩后的正文，不要说明。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "target_range": [bounds["ideal_low"], bounds["ideal_high"]],
+                        "chapter_number": chapter.chapter_number,
+                        "chapter_title": chapter.title,
+                        "draft": text,
+                        "requirements": [
+                            "保留关键冲突与反转",
+                            "删除重复表述和解释性赘述",
+                            "结尾保留下一章触发点",
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        raw = await asyncio.to_thread(
+            llm_client.chat,
+            shrink_messages,
+            temperature=max(0.4, base_temperature - 0.35),
+            max_tokens=resolve_draft_max_tokens(llm_client, target),
+        )
+        compressed = _normalize_generated_draft_text(raw if isinstance(raw, str) else str(raw))
+        if compressed and len(compressed) >= max(300, int(bounds["lower"] * 0.75)):
+            text = compressed
+
+    if len(text) < lower or len(text) > upper:
+        logger.warning(
+            "draft length remains out of bound chapter_no=%d target=%d lower=%d upper=%d actual=%d",
+            chapter.chapter_number,
+            target,
+            lower,
+            upper,
+            len(text),
+        )
+    else:
+        logger.info(
+            "draft length rebalanced chapter_no=%d target=%d actual=%d range=%d-%d",
+            chapter.chapter_number,
+            target,
+            len(text),
+            bounds["ideal_low"],
+            bounds["ideal_high"],
+        )
     return text
 
 
@@ -1895,6 +2155,13 @@ async def generate_one_shot_draft_text(
         else:
             draft = await workflow.generate_draft(chapter, chapter.plan, draft_context)
         draft = enforce_draft_target_words(draft, req.target_words)
+        draft = await rebalance_draft_length_if_needed(
+            llm_client=studio.llm_client,
+            chapter=chapter,
+            project=project,
+            draft=draft,
+            target_words=req.target_words,
+        )
         await emit_progress(
             progress,
             "chapter_stage",
@@ -1960,6 +2227,13 @@ async def generate_one_shot_draft_text(
             raw = str(raw)
     draft = workflow._sanitize_draft(raw, chapter, chapter.plan)
     draft = enforce_draft_target_words(draft, req.target_words)
+    draft = await rebalance_draft_length_if_needed(
+        llm_client=studio.llm_client,
+        chapter=chapter,
+        project=project,
+        draft=draft,
+        target_words=req.target_words,
+    )
     await emit_progress(
         progress,
         "chapter_stage",
@@ -2030,6 +2304,19 @@ class ExternalPublishRequest(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
     timeout_sec: int = Field(default=300, ge=30, le=900)
+
+
+class ExternalCreateBookRequest(BaseModel):
+    title: Optional[str] = None
+    intro: Optional[str] = None
+    protagonist1: Optional[str] = None
+    protagonist2: Optional[str] = None
+    target_reader: str = Field(default="male")
+    timeout_sec: int = Field(default=300, ge=30, le=900)
+
+
+class FanqieCreateSuggestionRequest(BaseModel):
+    prompt: Optional[str] = None
 
 
 class GenerationMode(str, Enum):
@@ -2106,6 +2393,189 @@ def _resolve_book_id_from_automation_config(automation_dir: Path) -> str:
     return ""
 
 
+def _resolve_book_id_from_state_file(automation_dir: Path) -> str:
+    state_path = automation_dir / "state" / "book-ids.json"
+    if not state_path.exists():
+        return ""
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    latest = str(payload.get("latestBookId") or "").strip()
+    if latest:
+        return latest
+    history = payload.get("history")
+    if not isinstance(history, list):
+        return ""
+    for item in reversed(history):
+        if not isinstance(item, dict):
+            continue
+        book_id = str(item.get("bookId") or "").strip()
+        if book_id:
+            return book_id
+    return ""
+
+
+def _persist_book_id_to_automation_config(automation_dir: Path, book_id: str) -> None:
+    normalized = str(book_id or "").strip()
+    if not normalized:
+        return
+
+    local_cfg = automation_dir / "config" / "local.json"
+    payload: Dict[str, Any] = {}
+    if local_cfg.exists():
+        try:
+            payload = json.loads(local_cfg.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    chapter_cfg = payload.get("chapter")
+    if not isinstance(chapter_cfg, dict):
+        chapter_cfg = {}
+    chapter_cfg["bookId"] = normalized
+    payload["chapter"] = chapter_cfg
+    local_cfg.parent.mkdir(parents=True, exist_ok=True)
+    local_cfg.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    state_path = automation_dir / "state" / "book-ids.json"
+    state_payload: Dict[str, Any] = {}
+    if state_path.exists():
+        try:
+            state_payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            state_payload = {}
+    if not isinstance(state_payload, dict):
+        state_payload = {}
+    history_raw = state_payload.get("history")
+    history: List[Dict[str, Any]] = []
+    if isinstance(history_raw, list):
+        for item in history_raw[-49:]:
+            if isinstance(item, dict):
+                history.append(item)
+    history.append(
+        {
+            "bookId": normalized,
+            "at": datetime.now().isoformat(),
+            "mode": "backend-detect",
+            "source": "api.publish.auto-detect",
+            "status": None,
+            "title": "",
+        }
+    )
+    state_payload["latestBookId"] = normalized
+    state_payload["history"] = history[-50:]
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _extract_book_id_from_create_output(stdout: str) -> str:
+    text = str(stdout or "")
+    patterns = [
+        r"persisted_book_id=(\d+)",
+        r'"latestBookId"\s*:\s*"(\d+)"',
+        r'"book_id"\s*:\s*"(\d+)"',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return str(match.group(1) or "").strip()
+    return ""
+
+
+def _build_fanqie_intro(project: Project, provided_intro: Optional[str] = None) -> str:
+    intro = str(provided_intro or "").strip()
+    fallback = (
+        f"《{project.name}》是一部{project.genre}题材的中长篇小说，整体文风偏{project.style}。"
+        "故事围绕核心人物在连续危机中的选择与代价展开，兼具悬念推进、世界观铺陈与人物弧光，"
+        "以稳定节奏持续输出剧情张力。"
+    )
+    if len(intro) >= 50:
+        return intro[:500]
+    if intro:
+        merged = f"{intro}\n\n{fallback}".strip()
+        return merged[:500]
+    return fallback[:500]
+
+
+def _extract_first_json_object(text: str) -> Dict[str, Any]:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        pass
+
+    start = raw.find("{")
+    if start < 0:
+        return {}
+    depth = 0
+    for idx in range(start, len(raw)):
+        ch = raw[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = raw[start : idx + 1]
+                try:
+                    payload = json.loads(candidate)
+                    return payload if isinstance(payload, dict) else {}
+                except Exception:
+                    return {}
+    return {}
+
+
+def _normalize_fanqie_target_reader(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "male"
+    if text in {"female", "f", "0", "女", "女频"}:
+        return "female"
+    if "女" in text:
+        return "female"
+    return "male"
+
+
+def _normalize_fanqie_role_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.split(r"[，。,.!?！？\s]+", text)[0].strip()
+    return text[:5]
+
+
+def _derive_fanqie_role_candidates(project_id: str) -> List[str]:
+    names: List[str] = []
+    try:
+        for chapter in chapter_list(project_id):
+            for source in [chapter.title, chapter.goal, chapter.final or chapter.draft or ""]:
+                for name in extract_graph_role_names(source, max_names=8):
+                    if name and name not in names:
+                        names.append(name)
+                    if len(names) >= 6:
+                        return names
+    except Exception:
+        return names
+    return names
+
+
+def _bind_project_fanqie_book_id(project: Project, book_id: str) -> bool:
+    normalized = str(book_id or "").strip()
+    if not normalized:
+        return False
+    if getattr(project, "fanqie_book_id", None) == normalized:
+        return False
+    project.fanqie_book_id = normalized
+    project.updated_at = datetime.now()
+    save_project(project)
+    return True
+
+
 async def _detect_book_id_via_playwright(automation_dir: Path, timeout_sec: int = 45) -> str:
     env = os.environ.copy()
     env["FANQIE_NON_INTERACTIVE"] = "1"
@@ -2136,8 +2606,23 @@ async def _detect_book_id_via_playwright(automation_dir: Path, timeout_sec: int 
     except Exception:
         return ""
     ids = payload.get("bookIds") if isinstance(payload, dict) else None
+    latest = ""
+    if isinstance(payload, dict):
+        latest = str(payload.get("latestBookId") or "").strip()
+    if latest:
+        return latest
     if isinstance(ids, list) and ids:
-        return str(ids[0]).strip()
+        normalized_ids: List[str] = []
+        for item in ids:
+            candidate = str(item or "").strip()
+            if candidate:
+                normalized_ids.append(candidate)
+        if not normalized_ids:
+            return ""
+        numeric_ids = [x for x in normalized_ids if x.isdigit()]
+        if numeric_ids:
+            return max(numeric_ids, key=lambda x: int(x))
+        return normalized_ids[-1]
     return ""
 
 
@@ -2162,6 +2647,7 @@ async def list_projects():
                 "genre": project.genre,
                 "style": project.style,
                 "template_id": project.template_id,
+                "fanqie_book_id": project.fanqie_book_id,
                 "status": project.status.value,
                 "target_length": project.target_length,
                 "chapter_count": len(chapter_list(project.id)),
@@ -2434,6 +2920,7 @@ async def create_project(req: CreateProjectRequest):
         "id": project.id,
         "name": project.name,
         "template_id": project.template_id,
+        "fanqie_book_id": project.fanqie_book_id,
         "status": project.status.value,
         "created_at": project.created_at.isoformat(),
     }
@@ -2568,6 +3055,7 @@ async def get_project(project_id: str):
         "genre": project.genre,
         "style": project.style,
         "template_id": project.template_id,
+        "fanqie_book_id": project.fanqie_book_id,
         "target_length": project.target_length,
         "taboo_constraints": project.taboo_constraints,
         "status": project.status.value,
@@ -2651,6 +3139,7 @@ async def run_one_shot_book_generation(
         store=store,
         studio=studio,
         continuation_mode=req.continuation_mode,
+        start_chapter_number=next_number,
     )
     await emit_progress(
         progress,
@@ -3353,14 +3842,23 @@ async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict
 
     workflow = StudioWorkflow(studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20)))
     trace = studio.start_trace(chapter.chapter_number)
+    target_words = resolve_project_target_words(project, chapter.project_id)
     draft = await workflow.generate_draft(
         chapter,
         chapter.plan,
         {
             "identity": store.three_layer.get_identity(),
             "project_style": project.style,
+            "target_words": target_words,
             "previous_chapters": [c.final or c.draft or "" for c in chapter_list(chapter.project_id) if c.chapter_number < chapter.chapter_number][-5:],
         },
+    )
+    draft = await rebalance_draft_length_if_needed(
+        llm_client=studio.llm_client,
+        chapter=chapter,
+        project=project,
+        draft=draft,
+        target_words=target_words,
     )
     return finalize_generated_draft(
         chapter=chapter,
@@ -3631,13 +4129,246 @@ async def review_chapter(req: ReviewRequest):
     return {"status": chapter.status.value, "action": req.action.value, "comment": req.comment}
 
 
+@app.post("/api/projects/{project_id}/fanqie/create-book")
+async def create_fanqie_book(project_id: str, req: ExternalCreateBookRequest):
+    project = resolve_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    automation_dir = Path(
+        os.getenv("FANQIE_AUTOMATION_DIR", str((BACKEND_ROOT.parent / "automation" / "fanqie-playwright")))
+    ).expanduser().resolve()
+    if not automation_dir.exists():
+        raise HTTPException(status_code=500, detail=f"Automation dir not found: {automation_dir}")
+
+    title = str(req.title or project.name or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="book title is required")
+    title_trimmed = False
+    if len(title) > 15:
+        title = title[:15]
+        title_trimmed = True
+
+    intro = _build_fanqie_intro(project, req.intro)
+    protagonist1 = str(req.protagonist1 or "").strip()[:5]
+    protagonist2 = str(req.protagonist2 or "").strip()[:5]
+    target_reader = str(req.target_reader or "male").strip().lower()
+    if target_reader not in {"male", "female"}:
+        target_reader = "male"
+
+    config_payload = {
+        "book": {
+            "title": title,
+            "tags": [],
+            "clearExistingTags": False,
+            "intro": intro,
+            "protagonist1": protagonist1,
+            "protagonist2": protagonist2,
+            "targetReader": target_reader,
+            "coverPath": "",
+            "autoSubmit": True,
+            "persistBookId": True,
+            "persistDetectedBookId": True,
+        },
+        "manual": {
+            "pauseAfterOpenCreate": False,
+            "pauseBeforeSubmit": False,
+            "fillKeepOpen": False,
+        },
+    }
+
+    config_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json",
+            prefix=f"fanqie-create-{project_id}-",
+            encoding="utf-8",
+            delete=False,
+        ) as tmp:
+            json.dump(config_payload, tmp, ensure_ascii=False, indent=2)
+            config_path = tmp.name
+
+        env = os.environ.copy()
+        env["FANQIE_CONFIG"] = config_path
+        env["FANQIE_NON_INTERACTIVE"] = "1"
+        proc = await asyncio.create_subprocess_exec(
+            "node",
+            "src/run.js",
+            "create-book",
+            cwd=str(automation_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=req.timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise HTTPException(
+                status_code=504,
+                detail=f"Create book timeout after {req.timeout_sec}s",
+            )
+
+        stdout = (stdout_bytes or b"").decode("utf-8", errors="replace")
+        stderr = (stderr_bytes or b"").decode("utf-8", errors="replace")
+        stdout_tail = _tail_text(stdout, 5000)
+        stderr_tail = _tail_text(stderr, 5000)
+        book_id = _extract_book_id_from_create_output(stdout)
+        success = proc.returncode == 0 and bool(book_id)
+
+        if not success:
+            logger.error(
+                "external create book failed project_id=%s code=%s stdout_tail=%s stderr_tail=%s",
+                project_id,
+                proc.returncode,
+                stdout_tail,
+                stderr_tail,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": "External create book failed",
+                    "exit_code": proc.returncode,
+                    "stdout_tail": stdout_tail,
+                    "stderr_tail": stderr_tail,
+                },
+            )
+
+        try:
+            _persist_book_id_to_automation_config(automation_dir, book_id)
+        except Exception:
+            logger.warning("persist create book_id failed book_id=%s automation_dir=%s", book_id, automation_dir)
+        _bind_project_fanqie_book_id(project, book_id)
+
+        logger.info(
+            "external create book success project_id=%s book_id=%s title=%s",
+            project_id,
+            book_id,
+            title,
+        )
+        return {
+            "success": True,
+            "project_id": project_id,
+            "book_id": book_id,
+            "title": title,
+            "title_trimmed": title_trimmed,
+            "request_applied": {
+                "title": title,
+                "target_reader": target_reader,
+                "protagonist1": protagonist1,
+                "protagonist2": protagonist2,
+                "intro_length": len(intro),
+            },
+            "stdout_tail": stdout_tail,
+        }
+    finally:
+        if config_path:
+            try:
+                temp_config = Path(config_path)
+                if temp_config.exists():
+                    temp_config.unlink()
+            except Exception:
+                logger.warning("temp config cleanup failed path=%s", config_path)
+
+
+@app.post("/api/projects/{project_id}/fanqie/create-book/suggest")
+async def suggest_fanqie_create_book(project_id: str, req: FanqieCreateSuggestionRequest):
+    project = resolve_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    title_reference = str(project.name or "").strip()[:15]
+    role_candidates = _derive_fanqie_role_candidates(project_id)
+    fallback_intro = _build_fanqie_intro(project, "")
+    fallback_target_reader = "male"
+
+    chapters = chapter_list(project_id)
+    recent_chapters = [
+        {
+            "chapter_number": ch.chapter_number,
+            "title": ch.title,
+            "goal": ch.goal,
+            "excerpt": (ch.final or ch.draft or "")[:200],
+        }
+        for ch in chapters[-3:]
+    ]
+
+    prompt = str(req.prompt or "").strip()
+    studio = get_or_create_studio(project_id)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是番茄小说创作后台助手，负责补全创建书本表单。"
+                "只输出 JSON 对象，字段为 intro, protagonist1, protagonist2, target_reader。"
+                "不要输出 title；title 已固定由外部引用。"
+                "约束：intro 50-500 字；protagonist1/2 各<=5 字；target_reader 只能 male 或 female。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "title_reference": title_reference,
+                    "project_name": project.name,
+                    "genre": project.genre,
+                    "style": project.style,
+                    "taboo_constraints": project.taboo_constraints[:8],
+                    "role_candidates": role_candidates,
+                    "recent_chapters": recent_chapters,
+                    "extra_instruction": prompt,
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    raw = await asyncio.to_thread(
+        studio.llm_client.chat,
+        messages,
+        temperature=0.7,
+        max_tokens=900,
+    )
+    parsed = _extract_first_json_object(raw if isinstance(raw, str) else str(raw))
+
+    intro = _build_fanqie_intro(project, str(parsed.get("intro") or "").strip())[:500]
+    protagonist1 = _normalize_fanqie_role_name(parsed.get("protagonist1"))
+    protagonist2 = _normalize_fanqie_role_name(parsed.get("protagonist2"))
+    if not protagonist1 and role_candidates:
+        protagonist1 = _normalize_fanqie_role_name(role_candidates[0])
+    if not protagonist2 and len(role_candidates) > 1:
+        protagonist2 = _normalize_fanqie_role_name(role_candidates[1])
+    target_reader = _normalize_fanqie_target_reader(parsed.get("target_reader") or fallback_target_reader)
+
+    logger.info(
+        "fanqie create suggestion generated project_id=%s title_reference=%s target_reader=%s",
+        project_id,
+        title_reference,
+        target_reader,
+    )
+    return {
+        "success": True,
+        "title_reference": title_reference,
+        "intro": intro,
+        "protagonist1": protagonist1,
+        "protagonist2": protagonist2,
+        "target_reader": target_reader,
+        "source": "llm",
+    }
+
+
 @app.post("/api/chapters/{chapter_id}/publish")
 async def publish_chapter_external(chapter_id: str, req: ExternalPublishRequest):
     chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
+    project = resolve_project(chapter.project_id)
 
-    content = (req.content or chapter.final or chapter.draft or "").strip()
+    content = sanitize_narrative_for_export(req.content or chapter.final or chapter.draft or "")
     if not content:
         raise HTTPException(status_code=400, detail="No chapter content to publish")
 
@@ -3648,18 +4379,42 @@ async def publish_chapter_external(chapter_id: str, req: ExternalPublishRequest)
     if not automation_dir.exists():
         raise HTTPException(status_code=500, detail=f"Automation dir not found: {automation_dir}")
 
-    book_id = (req.book_id or os.getenv("FANQIE_BOOK_ID") or "").strip()
+    book_id = (req.book_id or "").strip()
+    book_id_source = "request"
+    if not book_id and project and project.fanqie_book_id:
+        book_id = str(project.fanqie_book_id).strip()
+        if book_id:
+            book_id_source = "project.binding"
+    if not book_id:
+        env_book_id = (os.getenv("FANQIE_BOOK_ID") or "").strip()
+        if env_book_id:
+            book_id = env_book_id
+            book_id_source = "env"
     if not book_id:
         book_id = _resolve_book_id_from_automation_config(automation_dir)
+        if book_id:
+            book_id_source = "config.local"
+    if not book_id:
+        book_id = _resolve_book_id_from_state_file(automation_dir)
+        if book_id:
+            book_id_source = "state.book-ids"
     if not book_id:
         book_id = await _detect_book_id_via_playwright(automation_dir)
+        if book_id:
+            book_id_source = "detect-book-id"
+            try:
+                _persist_book_id_to_automation_config(automation_dir, book_id)
+                logger.info("persisted detected book_id=%s automation_dir=%s", book_id, automation_dir)
+            except Exception:
+                logger.warning("persist detected book_id failed book_id=%s automation_dir=%s", book_id, automation_dir)
     if not book_id:
         raise HTTPException(
             status_code=400,
             detail=(
                 "book_id is required and auto-detect failed. "
                 "请在请求里传 book_id，或设置 FANQIE_BOOK_ID，或在 "
-                "automation/fanqie-playwright/config/local.json 里配置 chapter.bookId"
+                "automation/fanqie-playwright/config/local.json 里配置 chapter.bookId，"
+                "也可先运行 create-book / detect-book-id 持久化 bookId"
             ),
         )
 
@@ -3753,16 +4508,20 @@ async def publish_chapter_external(chapter_id: str, req: ExternalPublishRequest)
             )
 
         logger.info(
-            "external publish success chapter_id=%s chapter_no=%d book_id=%s",
+            "external publish success chapter_id=%s chapter_no=%d book_id=%s source=%s",
             chapter.id,
             chapter.chapter_number,
             book_id,
+            book_id_source,
         )
+        if project:
+            _bind_project_fanqie_book_id(project, book_id)
         return {
             "success": True,
             "chapter_id": chapter.id,
             "chapter_number": chapter.chapter_number,
             "book_id": book_id,
+            "book_id_source": book_id_source,
             "stdout_tail": stdout_tail,
         }
     finally:

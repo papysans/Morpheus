@@ -10,6 +10,12 @@ from enum import Enum
 
 from models import AgentRole, AgentDecision, AgentTrace, ChapterPlan, Chapter
 from core.llm_client import create_llm_client
+from core.chapter_craft import (
+    build_micro_arc_hint,
+    collapse_blank_lines,
+    compute_length_bounds,
+    strip_leading_chapter_heading,
+)
 
 
 class AgentState(str, Enum):
@@ -124,19 +130,25 @@ AGENT_PROMPTS = {
         "name": "导演",
         "description": "分解章节目标，控制节奏与冲突推进",
         "system_prompt": """你是一位资深小说导演Agent。你的职责是：
-1. 分析章节目标，将其分解为具体的节拍（beats）
-2. 设计冲突点和高潮
-3. 规划伏笔埋入和回收计划
-4. 为每个角色设定本章目标
+1. 将章节目标拆分为可执行节拍（开场触发→推进对抗→反转/新信息→余震钩子）
+2. 设计“人物主动决策导致代价上升”的关键节点
+3. 规划伏笔埋入与局部回收，不得单章终结主线
+4. 给核心角色分配可验证的本章目标
 
-输出格式要求：
-- beats: 节拍列表
-- conflicts: 冲突点列表
-- foreshadowing: 伏笔列表
-- callback_targets: 回收目标
-- role_goals: 角色目标字典
+输出必须是 JSON 对象，不要解释，不要 Markdown：
+{
+  "beats": ["..."],
+  "conflicts": ["..."],
+  "foreshadowing": ["..."],
+  "callback_targets": ["..."],
+  "role_goals": {"角色A":"..."}
+}
 
-请基于上下文和记忆进行创作。""",
+要求：
+- beats 3-6条，按时间顺序，且至少包含一次“反转或信息位移”
+- conflicts 至少2条，必须有外部阻力与内部价值冲突
+- callback_targets 至少1条，且不可回收全部伏笔
+""",
     },
     AgentRole.SETTER: {
         "name": "设定官",
@@ -181,7 +193,12 @@ AGENT_PROMPTS = {
 3. 生成最终草稿
 4. 做出最终决策
 
-请权衡各方意见，给出最佳方案。""",
+请权衡各方意见，给出最佳方案。
+输出正文时必须：
+- 只输出小说正文，不要解释，不要标题行（如“第X章”）
+- 保留章节节奏：开场触发、对抗升级、反转或新信息、章尾钩子
+- 不得在单章内解决全部核心矛盾
+""",
     },
 }
 
@@ -304,6 +321,11 @@ class StudioWorkflow:
         arbiter = self.studio.get_agent(AgentRole.ARBITER)
         target_words = context.get("target_words")
         length_instruction = self._build_length_instruction(target_words)
+        rhythm_hint = build_micro_arc_hint(
+            chapter_number=chapter.chapter_number,
+            target_words=int(target_words or 1600),
+            continuation_mode=bool(context.get("continuation_mode", False)),
+        )
 
         memory_query = f"{chapter.title} {chapter.goal}".strip()
         memory_hits = self.memory_search(memory_query, fts_top_k=25)
@@ -318,13 +340,15 @@ class StudioWorkflow:
             "project_style": context.get("project_style", ""),
             "memory_hits": memory_hits[:12],
             "previous_chapters": context.get("previous_chapters", []),
+            "rhythm_hint": rhythm_hint,
         }
 
         director_text = await director.think(
             {
                 **draft_context,
                 "instruction": (
-                    "请基于计划写出章节初稿，输出纯正文。"
+                    "请基于计划写出章节初稿，输出纯正文。严格执行 rhythm_hint 的四段节奏，"
+                    "且不得输出“第X章”标题行。"
                     f"{length_instruction}"
                 ),
             }
@@ -355,6 +379,7 @@ class StudioWorkflow:
                 "setter_feedback": setter_text,
                 "instruction": (
                     "请在不改事实的前提下润色正文。"
+                    "保持节奏推进，避免把动作改成纯解释。"
                     f"{length_instruction}"
                 ),
             }
@@ -373,7 +398,7 @@ class StudioWorkflow:
                 "stylist_draft": stylist_text,
                 "instruction": (
                     "请输出最终章节正文。要求：保留事实一致性，尽量吸收润色建议，"
-                    "只输出正文，不要解释。"
+                    "只输出正文，不要解释，不要标题。"
                     f"{length_instruction}"
                 ),
             }
@@ -400,6 +425,11 @@ class StudioWorkflow:
         arbiter = self.studio.get_agent(AgentRole.ARBITER)
         target_words = context.get("target_words")
         length_instruction = self._build_length_instruction(target_words)
+        rhythm_hint = build_micro_arc_hint(
+            chapter_number=chapter.chapter_number,
+            target_words=int(target_words or 1600),
+            continuation_mode=bool(context.get("continuation_mode", False)),
+        )
 
         memory_query = f"{chapter.title} {chapter.goal}".strip()
         memory_hits = self.memory_search(memory_query, fts_top_k=25)
@@ -414,18 +444,20 @@ class StudioWorkflow:
             "project_style": context.get("project_style", ""),
             "memory_hits": memory_hits[:12],
             "previous_chapters": context.get("previous_chapters", []),
+            "rhythm_hint": rhythm_hint,
         }
 
-        # Stream director draft first to reduce first-token latency in Studio mode.
-        director_text = await director.think_stream(
+        # Keep director output internal. Director prompt is structured-planning oriented
+        # and may emit JSON-like content that should not be shown to readers.
+        director_text = await director.think(
             {
                 **draft_context,
                 "instruction": (
-                    "请基于计划写出章节初稿，输出纯正文。"
+                    "请基于计划写出章节初稿，输出纯正文。严格执行 rhythm_hint 的四段节奏，"
+                    "且不得输出“第X章”标题行。"
                     f"{length_instruction}"
                 ),
             },
-            on_chunk=on_chunk,
         )
         director_decision = director.decide(
             draft_context, [item["item_id"] for item in memory_hits[:5]]
@@ -453,6 +485,7 @@ class StudioWorkflow:
                 "setter_feedback": setter_text,
                 "instruction": (
                     "请在不改事实的前提下润色正文。"
+                    "保持节奏推进，避免把动作改成纯解释。"
                     f"{length_instruction}"
                 ),
             }
@@ -463,8 +496,8 @@ class StudioWorkflow:
         stylist_decision.decision_text = stylist_text
         self.studio.add_decision(stylist_decision)
 
-        # Arbiter produces final version (not streamed) to avoid duplicate stream phases.
-        final_text = await arbiter.think(
+        # Stream only the final arbiter output to avoid leaking intermediate planning text.
+        final_text = await arbiter.think_stream(
             {
                 **draft_context,
                 "draft": director_text,
@@ -472,10 +505,11 @@ class StudioWorkflow:
                 "stylist_draft": stylist_text,
                 "instruction": (
                     "请输出最终章节正文。要求：保留事实一致性，尽量吸收润色建议，"
-                    "只输出正文，不要解释。"
+                    "只输出正文，不要解释，不要标题。"
                     f"{length_instruction}"
                 ),
             },
+            on_chunk=on_chunk,
         )
         arbiter_decision = arbiter.decide(
             draft_context, [item["item_id"] for item in memory_hits[:5]]
@@ -715,14 +749,15 @@ class StudioWorkflow:
         # Trim known wrapper labels from model outputs.
         content = re.sub(r"^```(?:markdown|md)?", "", content).strip()
         content = re.sub(r"```$", "", content).strip()
-        return content
+        content = strip_leading_chapter_heading(content)
+        content = collapse_blank_lines(content, max_consecutive_blank=1)
+        return content.strip()
 
     def _build_fallback_draft(self, chapter: Chapter, plan: ChapterPlan) -> str:
         beat_a = plan.beats[0] if plan.beats else "开场建立冲突"
         beat_b = plan.beats[1] if len(plan.beats) > 1 else "中段推进人物关系"
         beat_c = plan.beats[2] if len(plan.beats) > 2 else "结尾留下悬念"
         return (
-            f"# 第{chapter.chapter_number}章 {chapter.title}\n\n"
             f"雪夜压城，主角在风口停住脚步，心里反复确认本章目标：{chapter.goal}。"
             "街灯被雪粒打得忽明忽暗，他意识到今晚每一个选择都会留下代价。\n\n"
             f"{beat_a}。随之而来的变故让他不得不直面最不愿触碰的真相。"
@@ -737,6 +772,8 @@ class StudioWorkflow:
             return ""
         if target <= 0:
             return ""
-        upper = max(target + 240, int(target * 1.35))
-        lower = max(300, int(target * 0.75))
-        return f" 目标字数约 {target}，建议区间 {lower}-{upper}，禁止明显超长。"
+        bounds = compute_length_bounds(target)
+        return (
+            f" 目标字数约 {bounds['target']}，建议区间 {bounds['ideal_low']}-{bounds['ideal_high']}。"
+            f" 低于 {bounds['lower']} 视为信息不足，高于 {bounds['soft_upper']} 视为冗长。"
+        )

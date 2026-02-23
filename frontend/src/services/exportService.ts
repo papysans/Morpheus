@@ -14,6 +14,33 @@ export interface ChapterContent {
     content: string
 }
 
+const EDITORIAL_NOTE_PATTERNS: RegExp[] = [
+    /^反转(?:[：:、，,\-\s].*)?$/i,
+    /^余震(?:[：:、，,\-\s].*)?$/i,
+    /^(?:章尾)?钩子(?:[：:、，,\-\s].*)?$/i,
+    /^(?:与|和).{0,40}呼应$/i,
+    /^呼应.{0,40}$/i,
+    /^callback(?:[：:、，,\-\s].*)?$/i,
+    /^回收(?:[：:、，,\-\s].*)?$/i,
+]
+
+function isEditorialNote(inner: string): boolean {
+    const candidate = String(inner || '').replace(/\s+/g, ' ').trim()
+    if (!candidate || candidate.length > 60) return false
+    return EDITORIAL_NOTE_PATTERNS.some((pattern) => pattern.test(candidate))
+}
+
+export function sanitizeNarrativeForExport(content: string): string {
+    const normalized = String(content || '')
+    if (!normalized.trim()) return ''
+
+    return normalized
+        .replace(/[（(]([^（）()]{1,80})[）)]/g, (match, inner) => (isEditorialNote(inner) ? '' : match))
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
 // === Formatting Functions (exported for testing) ===
 
 /**
@@ -21,7 +48,8 @@ export interface ChapterContent {
  * Uses # heading for the title, followed by the body text.
  */
 export function generateChapterMarkdown(chapter: ChapterContent): string {
-    return `# 第${chapter.chapterNumber}章 ${chapter.title}\n\n${chapter.content}`
+    const content = sanitizeNarrativeForExport(chapter.content)
+    return `# 第${chapter.chapterNumber}章 ${chapter.title}\n\n${content}`
 }
 
 /**
@@ -31,7 +59,8 @@ export function generateChapterMarkdown(chapter: ChapterContent): string {
 export function generateChapterTxt(chapter: ChapterContent): string {
     const title = `第${chapter.chapterNumber}章 ${chapter.title}`
     const separator = '='.repeat(title.length > 40 ? title.length : 40)
-    return `${title}\n${separator}\n\n${chapter.content}`
+    const content = sanitizeNarrativeForExport(chapter.content)
+    return `${title}\n${separator}\n\n${content}`
 }
 
 /**
@@ -117,21 +146,23 @@ function triggerDownload(content: string, filename: string, mimeType: string): v
  */
 export function exportChapter(chapter: ChapterContent, options: ExportOptions): void {
     try {
-        if (!chapter.content) {
+        const sanitizedContent = sanitizeNarrativeForExport(chapter.content)
+        if (!sanitizedContent) {
             useToastStore.getState().addToast('warning', '该章节暂无内容可导出')
             return
         }
 
+        const normalizedChapter = { ...chapter, content: sanitizedContent }
         let content: string
         let filename: string
         let mimeType: string
 
         if (options.format === 'markdown') {
-            content = generateChapterMarkdown(chapter)
+            content = generateChapterMarkdown(normalizedChapter)
             filename = `${options.projectName}_第${chapter.chapterNumber}章_${chapter.title}.md`
             mimeType = 'text/markdown;charset=utf-8'
         } else {
-            content = generateChapterTxt(chapter)
+            content = generateChapterTxt(normalizedChapter)
             filename = `${options.projectName}_第${chapter.chapterNumber}章_${chapter.title}.txt`
             mimeType = 'text/plain;charset=utf-8'
         }
@@ -155,7 +186,12 @@ export function exportBook(chapters: ChapterContent[], options: ExportOptions): 
             return
         }
 
-        const chaptersWithContent = chapters.filter((chapter) => chapter.content?.trim().length > 0)
+        const chaptersWithContent = chapters
+            .map((chapter) => ({
+                ...chapter,
+                content: sanitizeNarrativeForExport(chapter.content),
+            }))
+            .filter((chapter) => chapter.content.trim().length > 0)
         if (!chaptersWithContent.length) {
             useToastStore.getState().addToast('warning', '暂无可导出的章节正文')
             return

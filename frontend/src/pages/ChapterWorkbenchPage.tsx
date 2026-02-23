@@ -75,6 +75,13 @@ type BlueprintValueCard = {
     body: string
 }
 
+type FanqieCreateFormState = {
+    intro: string
+    protagonist1: string
+    protagonist2: string
+    targetReader: 'male' | 'female'
+}
+
 const BLUEPRINT_NOISE_TOKENS = new Set([
     'id',
     'description',
@@ -231,6 +238,15 @@ export default function ChapterWorkbenchPage() {
     const [editing, setEditing] = useState(true)
     const [savingDraft, setSavingDraft] = useState(false)
     const [publishing, setPublishing] = useState(false)
+    const [creatingFanqieBook, setCreatingFanqieBook] = useState(false)
+    const [fillingFanqieByLLM, setFillingFanqieByLLM] = useState(false)
+    const [showFanqieCreateForm, setShowFanqieCreateForm] = useState(false)
+    const [fanqieCreateForm, setFanqieCreateForm] = useState<FanqieCreateFormState>({
+        intro: '',
+        protagonist1: '',
+        protagonist2: '',
+        targetReader: 'male',
+    })
     const eventSourceRef = useRef<EventSource | null>(null)
 
     /* ── 自动保存 ── */
@@ -242,6 +258,7 @@ export default function ChapterWorkbenchPage() {
     const [showDraftRestore, setShowDraftRestore] = useState(false)
     const [showRejectConfirm, setShowRejectConfirm] = useState(false)
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+    const [showClearWorkspaceConfirm, setShowClearWorkspaceConfirm] = useState(false)
     const [deletingChapter, setDeletingChapter] = useState(false)
 
     /* ── 加载章节 ── */
@@ -271,12 +288,19 @@ export default function ChapterWorkbenchPage() {
         if (!chapterId) return
         setLoading(true)
         loadChapter()
-        // 同时获取章节列表（用于导出整书和章节导航）
-        if (projectId) fetchChapters(projectId)
+        // 同步获取项目与章节列表，避免项目级字段（如 fanqie_book_id）显示滞后
+        if (projectId) {
+            try {
+                void fetchProject(projectId)
+            } catch {
+                // ignore project preload errors here; chapter load/toast handles main flow
+            }
+            fetchChapters(projectId)
+        }
         return () => {
             eventSourceRef.current?.close()
         }
-    }, [chapterId, projectId, loadChapter, fetchChapters])
+    }, [chapterId, projectId, loadChapter, fetchChapters, fetchProject])
 
     useEffect(() => {
         if (chapter && chapterId && projectId) {
@@ -297,12 +321,20 @@ export default function ChapterWorkbenchPage() {
         }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // 检测本地草稿
+    // 检测本地草稿：只有本地草稿与服务端内容不一致时才提示恢复
     useEffect(() => {
-        if (!loading && chapter && autoSave.hasDraft) {
-            setShowDraftRestore(true)
+        if (loading || !chapter || !autoSave.hasDraft) return
+        const localDraft = autoSave.draftContent ?? ''
+        const remoteDraft = chapter.draft ?? chapter.final ?? ''
+        if (!localDraft) return
+
+        if (localDraft === remoteDraft) {
+            autoSave.clearDraft()
+            setShowDraftRestore(false)
+            return
         }
-    }, [loading, chapter]) // eslint-disable-line react-hooks/exhaustive-deps
+        setShowDraftRestore(true)
+    }, [loading, chapter, autoSave.hasDraft, autoSave.draftContent, autoSave.clearDraft])
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -600,6 +632,10 @@ export default function ChapterWorkbenchPage() {
                 { timeout: 300000 },
             )
             const payload = response.data || {}
+            if (projectId) {
+                invalidateCache('project', projectId)
+                await fetchProject(projectId, { force: true })
+            }
             addToast('success', `发布成功：第 ${payload.chapter_number ?? chapter.chapter_number} 章`)
             addRecord({
                 type: 'save',
@@ -625,6 +661,105 @@ export default function ChapterWorkbenchPage() {
             })
         } finally {
             setPublishing(false)
+        }
+    }
+
+    const createAndBindFanqieBook = async () => {
+        if (!projectId) return
+        const titleRef = String(currentProject?.name || '').trim()
+        const payload = {
+            title: titleRef,
+            intro: fanqieCreateForm.intro.trim(),
+            protagonist1: fanqieCreateForm.protagonist1.trim(),
+            protagonist2: fanqieCreateForm.protagonist2.trim(),
+            target_reader: fanqieCreateForm.targetReader,
+        }
+        if (!payload.title) {
+            addToast('error', '缺少可引用标题，请先确认项目名称')
+            return
+        }
+        setCreatingFanqieBook(true)
+        try {
+            const response = await api.post(
+                `/projects/${projectId}/fanqie/create-book`,
+                payload,
+                { timeout: 300000 },
+            )
+            const result = response.data || {}
+            if (projectId) {
+                invalidateCache('project', projectId)
+                await fetchProject(projectId, { force: true })
+            }
+            addToast('success', `番茄书本创建并绑定成功（book_id=${result.book_id || 'N/A'}）`)
+            addRecord({
+                type: 'create',
+                description: `番茄书本创建成功（book_id=${result.book_id || 'N/A'}）`,
+                status: 'success',
+            })
+        } catch (err: any) {
+            console.error(err)
+            const detailRaw = err?.response?.data?.detail
+            const detail = typeof detailRaw === 'string'
+                ? detailRaw
+                : detailRaw?.message || err?.message || '番茄书本创建失败'
+            addToast('error', '番茄书本创建失败', {
+                context: '番茄创建',
+                detail,
+                actions: [{ label: '重试', onClick: () => void createAndBindFanqieBook() }],
+            })
+            addRecord({
+                type: 'create',
+                description: '番茄书本创建失败',
+                status: 'error',
+                retryAction: () => void createAndBindFanqieBook(),
+            })
+        } finally {
+            setCreatingFanqieBook(false)
+        }
+    }
+
+    const clearWorkspaceLocally = () => {
+        setDraftContent('')
+        setOneShotPrompt('')
+        setEditing(true)
+        autoSave.clearDraft()
+        setShowDraftRestore(false)
+        addToast('success', '创作台已清空（仅本地，不影响已保存章节）')
+        addRecord({ type: 'save', description: '清空创作台（仅本地）', status: 'success' })
+    }
+
+    const fillFanqieFormWithLLM = async () => {
+        if (!projectId) return
+        setFillingFanqieByLLM(true)
+        try {
+            const response = await api.post(
+                `/projects/${projectId}/fanqie/create-book/suggest`,
+                {
+                    prompt: chapter?.goal || '',
+                },
+                { timeout: 120000 },
+            )
+            const result = response.data || {}
+            setFanqieCreateForm((prev) => ({
+                ...prev,
+                intro: String(result.intro || prev.intro || ''),
+                protagonist1: String(result.protagonist1 || prev.protagonist1 || ''),
+                protagonist2: String(result.protagonist2 || prev.protagonist2 || ''),
+                targetReader: result.target_reader === 'female' ? 'female' : 'male',
+            }))
+            addToast('success', 'LLM 已填充番茄创建参数')
+        } catch (err: any) {
+            console.error(err)
+            const detailRaw = err?.response?.data?.detail
+            const detail = typeof detailRaw === 'string'
+                ? detailRaw
+                : detailRaw?.message || err?.message || 'LLM 填充失败'
+            addToast('error', 'LLM 填充失败', {
+                context: '番茄参数',
+                detail,
+            })
+        } finally {
+            setFillingFanqieByLLM(false)
         }
     }
 
@@ -791,9 +926,9 @@ export default function ChapterWorkbenchPage() {
     if (readingMode) {
         const rawContent = chapter.final || chapter.draft || draftContent || ''
         const displayContent = rawContent
-            .replace(/<think>[\s\S]*?<\/think>/gi, '')
-            .replace(/【.*?】/g, '')
-            .replace(/\[.*?\]/g, '')
+            .replace(/<(?:think|thinking)>[\s\S]*?<\/(?:think|thinking)>/gi, '')
+            .replace(/【\s*(?:thinking|thoughts?|reasoning)\s*[:：][^】]*】/gi, '')
+            .replace(/^\s*\[(?:thinking|thoughts?|reasoning)\s*[:：][^\]]*]\s*$/gim, '')
             .trim()
 
         return (
@@ -849,6 +984,31 @@ export default function ChapterWorkbenchPage() {
                             </Link>
                         </div>
                         <div className="grid-actions" style={{ marginLeft: 'auto' }}>
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => setShowFanqieCreateForm((v) => !v)}
+                                disabled={creatingFanqieBook || fillingFanqieByLLM || streaming}
+                            >
+                                {showFanqieCreateForm ? '收起番茄参数' : '填写番茄参数'}
+                            </button>
+                            <DisabledTooltip
+                                reason={
+                                    creatingFanqieBook
+                                        ? '正在创建番茄书本，请稍候'
+                                        : streaming
+                                            ? '请先等待当前生成流程结束'
+                                            : '将调用 Playwright 在番茄后台创建新书并自动绑定 book_id'
+                                }
+                                disabled={creatingFanqieBook || fillingFanqieByLLM || streaming}
+                            >
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => void createAndBindFanqieBook()}
+                                    disabled={creatingFanqieBook || fillingFanqieByLLM || streaming}
+                                >
+                                    {creatingFanqieBook ? '创建中...' : '创建并绑定番茄书本'}
+                                </button>
+                            </DisabledTooltip>
                             <ChapterExportMenu
                                 currentChapter={currentChapterExport}
                                 allChapters={allChaptersExport.length > 0 ? allChaptersExport : undefined}
@@ -872,9 +1032,98 @@ export default function ChapterWorkbenchPage() {
                                     {publishing ? '发布中...' : '一键发布章节'}
                                 </button>
                             </DisabledTooltip>
+                            <span className="muted" style={{ fontSize: '0.78rem' }}>
+                                当前 book_id：{currentProject?.fanqie_book_id || '未绑定'}
+                            </span>
                         </div>
                     </div>
                 </div>
+
+                {showFanqieCreateForm && (
+                    <section className="card" style={{ padding: 14, marginBottom: 14 }}>
+                        <h3 className="section-title" style={{ marginTop: 0, marginBottom: 12 }}>番茄创建参数</h3>
+                        <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => void fillFanqieFormWithLLM()}
+                                disabled={fillingFanqieByLLM || creatingFanqieBook}
+                            >
+                                {fillingFanqieByLLM ? 'LLM 填充中...' : 'LLM 填充剩余字段'}
+                            </button>
+                            <span className="muted" style={{ fontSize: '0.78rem', alignSelf: 'center' }}>
+                                标题固定引用项目名，不参与 LLM 生成。
+                            </span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: 10 }}>
+                            <label>
+                                <div className="metric-label" style={{ marginBottom: 6 }}>书本名称（≤15）</div>
+                                <input
+                                    className="input"
+                                    value={String(currentProject?.name || '')}
+                                    maxLength={15}
+                                    readOnly
+                                    placeholder="引用项目名"
+                                />
+                            </label>
+                            <label>
+                                <div className="metric-label" style={{ marginBottom: 6 }}>目标读者</div>
+                                <select
+                                    className="select"
+                                    value={fanqieCreateForm.targetReader}
+                                    onChange={(e) =>
+                                        setFanqieCreateForm((prev) => ({
+                                            ...prev,
+                                            targetReader: e.target.value === 'female' ? 'female' : 'male',
+                                        }))
+                                    }
+                                >
+                                    <option value="male">男频</option>
+                                    <option value="female">女频</option>
+                                </select>
+                            </label>
+                            <label>
+                                <div className="metric-label" style={{ marginBottom: 6 }}>主角名1（可选）</div>
+                                <input
+                                    className="input"
+                                    value={fanqieCreateForm.protagonist1}
+                                    maxLength={5}
+                                    onChange={(e) =>
+                                        setFanqieCreateForm((prev) => ({ ...prev, protagonist1: e.target.value }))
+                                    }
+                                    placeholder="最多5字"
+                                />
+                            </label>
+                            <label>
+                                <div className="metric-label" style={{ marginBottom: 6 }}>主角名2（可选）</div>
+                                <input
+                                    className="input"
+                                    value={fanqieCreateForm.protagonist2}
+                                    maxLength={5}
+                                    onChange={(e) =>
+                                        setFanqieCreateForm((prev) => ({ ...prev, protagonist2: e.target.value }))
+                                    }
+                                    placeholder="最多5字"
+                                />
+                            </label>
+                        </div>
+                        <label style={{ display: 'block', marginTop: 10 }}>
+                            <div className="metric-label" style={{ marginBottom: 6 }}>作品简介（建议 ≥50）</div>
+                            <textarea
+                                className="input"
+                                value={fanqieCreateForm.intro}
+                                maxLength={500}
+                                onChange={(e) =>
+                                    setFanqieCreateForm((prev) => ({ ...prev, intro: e.target.value }))
+                                }
+                                placeholder="可留空（后端会按项目信息补全）"
+                                style={{ minHeight: 100, resize: 'vertical' }}
+                            />
+                        </label>
+                        <div className="muted" style={{ marginTop: 6, fontSize: '0.78rem' }}>
+                            当前简介字数：{fanqieCreateForm.intro.trim().length}，若不足 50 字后端会自动补齐。
+                        </div>
+                    </section>
+                )}
 
                 {/* 主体内容 */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1.4fr', gap: 14 }}>
@@ -1107,6 +1356,13 @@ export default function ChapterWorkbenchPage() {
                             <button className="btn btn-secondary" disabled={savingDraft || streaming} onClick={saveDraft}>
                                 {savingDraft ? '保存中...' : '保存编辑并重检'}
                             </button>
+                            <button
+                                className="btn btn-secondary"
+                                disabled={streaming || (!draftContent.trim() && !oneShotPrompt.trim())}
+                                onClick={() => setShowClearWorkspaceConfirm(true)}
+                            >
+                                清空创作台
+                            </button>
                             {editing && autoSave.lastSaved && (
                                 <span className="muted" style={{ fontSize: '0.8rem', alignSelf: 'center' }}>
                                     已自动保存
@@ -1180,6 +1436,32 @@ export default function ChapterWorkbenchPage() {
                             <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
                                 <button className="btn btn-secondary" onClick={() => setShowRejectConfirm(false)}>取消</button>
                                 <button className="btn btn-primary" onClick={() => { setShowRejectConfirm(false); reviewDraft('reject') }}>确认退回</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 清空创作台确认对话框 */}
+                {showClearWorkspaceConfirm && (
+                    <div className="modal-backdrop">
+                        <div className="card" style={{ padding: 20, textAlign: 'center', maxWidth: 380 }}>
+                            <p style={{ margin: '0 0 8px', fontWeight: 500 }}>清空当前创作台？</p>
+                            <p className="muted" style={{ margin: '0 0 16px' }}>
+                                该操作只清空当前页面编辑区和本地草稿，不会删除服务器已保存内容与历史章节。
+                            </p>
+                            <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
+                                <button className="btn btn-secondary" onClick={() => setShowClearWorkspaceConfirm(false)}>
+                                    取消
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={() => {
+                                        setShowClearWorkspaceConfirm(false)
+                                        clearWorkspaceLocally()
+                                    }}
+                                >
+                                    确认清空
+                                </button>
                             </div>
                         </div>
                     </div>

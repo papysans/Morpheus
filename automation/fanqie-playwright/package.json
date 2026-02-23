@@ -7,7 +7,9 @@
   "scripts": {
     "run": "node src/run.js",
     "create-book": "node src/run.js create-book",
+    "fill-create-book-form": "node src/run.js fill-create-book-form",
     "publish-chapter": "node src/run.js publish-chapter",
+    "detect-book-id": "node src/run.js detect-book-id",
     "record": "node src/run.js record",
     "inspect": "node src/run.js inspect"
   },

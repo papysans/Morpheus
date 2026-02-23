@@ -100,6 +100,7 @@ class Project(BaseModel):
     genre: str
     style: str
     template_id: Optional[str] = None
+    fanqie_book_id: Optional[str] = None
     target_length: int = 300000
     taboo_constraints: List[str] = Field(default_factory=list)
     status: ProjectStatus = ProjectStatus.INIT

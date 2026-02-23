@@ -9,6 +9,7 @@ export interface ProjectItem {
     genre: string
     style: string
     template_id?: string
+    fanqie_book_id?: string
     status: string
     chapter_count: number
     entity_count: number

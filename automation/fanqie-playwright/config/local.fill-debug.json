@@ -1,0 +1,74 @@
+{
+  "book": {
+    "title": "备份神谕",
+    "intro": "沈砺从车祸中苏醒，接受自己是‘合法意识复活体’的事实，并首次从医生处听到‘神谕台’这一系统名称，同时发现身体对某些药物存在异常反应，暗示他并非普通人类。",
+    "protagonist1": "沈砺",
+    "protagonist2": "",
+    "targetReader": "male",
+    "autoSubmit": false,
+    "persistBookId": true
+  },
+  "chapter": {
+    "bookId": "7609643285363035198",
+    "title": "",
+    "content": "",
+    "contentFile": "../../output/test/长城路猪肉铺2号_第7章_第九号当铺的周末大酬宾.md",
+    "autoPublish": true,
+    "clearBeforeInput": true,
+    "collapseParagraphBlankLines": true
+  },
+  "selectors": {
+    "bookTitle": [
+      "input[placeholder='请输入作品名称']"
+    ],
+    "bookIntro": [
+      "textarea[placeholder*='50-500字以内的作品简介']"
+    ],
+    "protagonist1": [
+      "input[placeholder='请输入主角名1']"
+    ],
+    "protagonist2": [
+      "input[placeholder='请输入主角名2']"
+    ],
+    "targetReaderMale": [
+      "label:has-text('男频')"
+    ],
+    "targetReaderFemale": [
+      "label:has-text('女频')"
+    ],
+    "chapterNumber": [
+      "input.serial-input.byte-input-size-default:not([placeholder])",
+      "input.serial-input.byte-input-size-default"
+    ],
+    "chapterTitle": [
+      "input.serial-editor-input-hint-area[placeholder='请输入标题']",
+      "input[placeholder='请输入标题']"
+    ],
+    "chapterEditor": [
+      "div.syl-editor-container .syl-editor .ProseMirror",
+      "div.syl-editor .ProseMirror",
+      "div.ProseMirror"
+    ],
+    "publishButton": [
+      "button:has-text('下一步')",
+      "button:has-text('发布章节')",
+      "button:has-text('发布')"
+    ],
+    "publishConfirmButton": [
+      "button:has-text('确认发布')",
+      "button:has-text('确定发布')",
+      "button:has-text('确认')"
+    ],
+    "submitButton": [
+      "button.serial-arco-btn:has-text('立即创建')",
+      "button:has-text('立即创建')"
+    ]
+  },
+  "manual": {
+    "pauseAfterOpenPublish": false,
+    "pauseBeforePublish": false
+  },
+  "paths": {
+    "userDataDir": "./state/chromium-profile-debug"
+  }
+}
