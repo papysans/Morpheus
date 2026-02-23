@@ -42,9 +42,40 @@ class ThreeLayerMemory:
         if not memory_file.exists():
             memory_file.write_text(
                 "# MEMORY\n\n"
-                "## Chapter Decisions\n\n"
-                "## Pending Items\n\n"
-                "## Temporary Clues\n\n",
+                "## Rolling Window (Recent 3 Chapters)\n"
+                "（最近 3 章的关键决策与状态将在章末回写时自动填充）\n\n"
+                "## Unresolved Mainline Threads\n"
+                "（未回收的主线伏笔将在 OPEN_THREADS.md 重算时同步更新）\n\n"
+                "## Recent Key Decisions\n"
+                "（从章节计划中提取的关键决策）\n\n"
+                f"---\n_Initialized: {datetime.now().isoformat()}_\n",
+                encoding="utf-8",
+            )
+
+        # Auto-create RUNTIME_STATE.md in L1 directory (Requirements 1.1, 9.1)
+        runtime_state_file = self.l1_dir / "RUNTIME_STATE.md"
+        if not runtime_state_file.exists():
+            runtime_state_file.write_text(
+                "# RUNTIME_STATE\n\n"
+                "## New Characters\n- (暂无)\n\n"
+                "## Character State Changes\n- (暂无)\n\n"
+                "## Recent Mainline Status\n- (暂无)\n\n"
+                "---\n"
+                f"_Last updated: {datetime.now().isoformat()}_\n"
+                "_Source chapters: N/A_\n",
+                encoding="utf-8",
+            )
+
+        # Auto-create OPEN_THREADS.md in memory root directory (Requirements 2.1, 9.1)
+        open_threads_file = self.memory_dir / "OPEN_THREADS.md"
+        if not open_threads_file.exists():
+            open_threads_file.write_text(
+                "# OPEN_THREADS\n\n"
+                "## Open\n- (暂无)\n\n"
+                "## Resolved\n- (暂无)\n\n"
+                "---\n"
+                f"_Last recomputed: {datetime.now().isoformat()}_\n"
+                "_Total: 0 open, 0 resolved_\n",
                 encoding="utf-8",
             )
 
@@ -136,6 +167,80 @@ class ThreeLayerMemory:
             except Exception:
                 continue
         return deleted
+
+    def shift_chapter_indices_after(self, chapter_number: int) -> Dict[str, int]:
+        target = int(chapter_number)
+        updated_l3 = 0
+        summary_pattern = re.compile(r"^Chapter\s+(\d+)\s+summary$", re.IGNORECASE)
+        synopsis_pattern = re.compile(r"^Chapter\s+(\d+)\s+synopsis$", re.IGNORECASE)
+
+        for file_path in sorted(self.l3_dir.glob("*.md")):
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            if not content.startswith("---"):
+                continue
+            parts = content.split("---", 2)
+            if len(parts) < 3:
+                continue
+            try:
+                metadata = yaml.safe_load(parts[1]) or {}
+            except Exception:
+                continue
+            item_type = str(metadata.get("type", "")).strip()
+            if item_type not in ("chapter_summary", "chapter_synopsis"):
+                continue
+            summary = str(metadata.get("summary", "")).strip()
+            pattern = summary_pattern if item_type == "chapter_summary" else synopsis_pattern
+            matched = pattern.match(summary)
+            if not matched:
+                continue
+            chapter_no = int(matched.group(1))
+            if chapter_no <= target:
+                continue
+            label = "summary" if item_type == "chapter_summary" else "synopsis"
+            metadata["summary"] = f"Chapter {chapter_no - 1} {label}"
+            body = parts[2].lstrip("\n")
+            header = f"---\n{yaml.safe_dump(metadata, allow_unicode=True)}---\n\n"
+            try:
+                file_path.write_text(header + body, encoding="utf-8")
+                updated_l3 += 1
+            except Exception:
+                continue
+
+        updated_l2 = 0
+        memory_file = self.l2_dir / "MEMORY.md"
+        if memory_file.exists():
+            try:
+                original = memory_file.read_text(encoding="utf-8")
+            except Exception:
+                original = ""
+            if original:
+                changed = False
+
+                def _replace_heading(match: re.Match) -> str:
+                    nonlocal updated_l2, changed
+                    chapter_no = int(match.group(2))
+                    if chapter_no <= target:
+                        return match.group(0)
+                    changed = True
+                    updated_l2 += 1
+                    return f"{match.group(1)}{chapter_no - 1}{match.group(3)}"
+
+                rewritten = re.sub(
+                    r"(^###\s*Chapter\s+)(\d+)((?:\s*\(.*?\))?)",
+                    _replace_heading,
+                    original,
+                    flags=re.MULTILINE,
+                )
+                if changed and rewritten != original:
+                    try:
+                        memory_file.write_text(rewritten, encoding="utf-8")
+                    except Exception:
+                        pass
+
+        return {"l3_items_shifted": updated_l3, "l2_headings_shifted": updated_l2}
 
     def reflect(self, chapter_content: str, chapter_id: int) -> Dict[str, List[str]]:
         summary = chapter_content[:500].strip()
@@ -608,6 +713,39 @@ class MemoryStore:
             cursor.execute("DELETE FROM events WHERE chapter = ?", (chapter,))
             conn.commit()
 
+    def shift_chapter_references_after(self, chapter: int) -> Dict[str, int]:
+        target = int(chapter)
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE events SET chapter = chapter - 1 WHERE chapter > ?", (target,))
+            shifted_events = int(cursor.rowcount or 0)
+            cursor.execute(
+                """
+                UPDATE entities
+                SET
+                    first_seen_chapter = CASE
+                        WHEN first_seen_chapter > ? THEN first_seen_chapter - 1
+                        ELSE first_seen_chapter
+                    END,
+                    last_seen_chapter = CASE
+                        WHEN last_seen_chapter > ? THEN last_seen_chapter - 1
+                        ELSE last_seen_chapter
+                    END
+                WHERE first_seen_chapter > ? OR last_seen_chapter > ?
+                """,
+                (target, target, target, target),
+            )
+            shifted_entities = int(cursor.rowcount or 0)
+            conn.commit()
+
+        layer_updates = self.three_layer.shift_chapter_indices_after(target)
+        return {
+            "events_shifted": shifted_events,
+            "entities_shifted": shifted_entities,
+            "l3_items_shifted": int(layer_updates.get("l3_items_shifted", 0)),
+            "l2_headings_shifted": int(layer_updates.get("l2_headings_shifted", 0)),
+        }
+
     def _count_rows(self, table: str) -> int:
         sql = f"SELECT COUNT(*) AS total FROM {table}"
         try:
@@ -637,7 +775,9 @@ class MemoryStore:
         now = datetime.now()
         source_files: List[tuple[Layer, Path]] = [
             (Layer.L1, self.three_layer.l1_dir / "IDENTITY.md"),
+            (Layer.L1, self.three_layer.l1_dir / "RUNTIME_STATE.md"),
             (Layer.L2, self.three_layer.l2_dir / "MEMORY.md"),
+            (Layer.L2, self.three_layer.memory_dir / "OPEN_THREADS.md"),
         ]
 
         source_files.extend((Layer.L2, path) for path in sorted(self.three_layer.logs_dir.glob("*.md"))[-30:])
@@ -664,6 +804,22 @@ class MemoryStore:
                 except Exception:
                     pass
             digest = hashlib.sha1(content.encode("utf-8")).hexdigest()[:10]
+            # Differentiated weights by file type
+            source_name = file_path.name
+            if layer == Layer.L1:
+                if "RUNTIME_STATE" in source_name:
+                    imp, rec = 7, 7
+                else:  # IDENTITY.md
+                    imp, rec = 8, 4
+            elif layer == Layer.L2:
+                if "OPEN_THREADS" in source_name:
+                    imp, rec = 6, 6
+                elif file_path.parent.name == "daily":  # logs
+                    imp, rec = 3, 7
+                else:  # MEMORY.md
+                    imp, rec = 5, 5
+            else:  # L3
+                imp, rec = 6, 6
             item = MemoryItem(
                 id=self._file_item_id(file_path),
                 layer=layer,
@@ -672,14 +828,15 @@ class MemoryStore:
                 content=content,
                 entities=[],
                 time_span=None,
-                importance=8 if layer == Layer.L1 else (6 if layer == Layer.L3 else 5),
-                recency=8 if layer == Layer.L2 else (6 if layer == Layer.L3 else 4),
+                importance=imp,
+                recency=rec,
                 created_at=now,
                 updated_at=now,
                 metadata={"synced_from_file": True},
             )
             self.add_memory_item(item)
         self.purge_stale_synced_file_memories()
+        self._purge_old_logs()
 
     def purge_stale_synced_file_memories(self) -> int:
         project_root = self.project_path.resolve()
@@ -715,3 +872,20 @@ class MemoryStore:
                 cursor.execute(f"DELETE FROM memory_items WHERE id IN ({placeholders})", stale_ids)
                 conn.commit()
         return len(stale_ids)
+    def _purge_old_logs(self, max_age_days: int = 30) -> int:
+        """Delete log files older than max_age_days."""
+        import time as _time
+        cutoff = _time.time() - (max_age_days * 86400)
+        removed = 0
+        logs_dir = self.three_layer.logs_dir
+        if not logs_dir.exists():
+            return 0
+        for log_file in logs_dir.glob("*.md"):
+            try:
+                if log_file.stat().st_mtime < cutoff:
+                    log_file.unlink()
+                    removed += 1
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to purge old log {log_file.name}: {e}")
+        return removed
