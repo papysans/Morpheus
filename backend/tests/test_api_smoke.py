@@ -77,6 +77,9 @@ class NovelistApiSmokeTest(unittest.TestCase):
         plan_res = self.client.post(f"/api/chapters/{chapter_id}/plan")
         self.assertEqual(plan_res.status_code, 200)
         self.assertGreaterEqual(len(plan_res.json()["plan"]["beats"]), 1)
+        self.assertIn("quality", plan_res.json())
+        self.assertIn("status", plan_res.json()["quality"])
+        self.assertIn("score", plan_res.json()["quality"])
 
         draft_res = self.client.post(f"/api/chapters/{chapter_id}/draft")
         self.assertEqual(draft_res.status_code, 200)
@@ -867,6 +870,59 @@ class NovelistApiSmokeTest(unittest.TestCase):
 
         events = self.client.get(f"/api/events/{project_id}").json()
         self.assertFalse(any(event.get("chapter") == 6 for event in events))
+
+    def test_delete_chapter_reindexes_following_chapters(self):
+        project_id = self._create_project()
+        ch20 = self._create_chapter(project_id, chapter_number=20)
+        ch21 = self._create_chapter(project_id, chapter_number=21)
+        ch22 = self._create_chapter(project_id, chapter_number=22)
+
+        store = get_or_create_store(project_id)
+        now = datetime.now(timezone.utc)
+        store.add_event(
+            EventEdge(
+                event_id=f"event-shift-{uuid4().hex[:8]}",
+                subject="主角",
+                relation="调查",
+                object="镜城",
+                chapter=21,
+                timestamp=now,
+                confidence=0.9,
+                description="原第21章事件",
+            )
+        )
+        store.add_event(
+            EventEdge(
+                event_id=f"event-shift-{uuid4().hex[:8]}",
+                subject="主角",
+                relation="冲突",
+                object="哨兵",
+                chapter=22,
+                timestamp=now,
+                confidence=0.9,
+                description="原第22章事件",
+            )
+        )
+
+        delete_res = self.client.delete(f"/api/chapters/{ch20}")
+        self.assertEqual(delete_res.status_code, 200)
+        payload = delete_res.json()
+        self.assertEqual(payload.get("status"), "deleted")
+        renumbered = payload.get("renumbered") or []
+        self.assertEqual(len(renumbered), 2)
+        self.assertTrue(any(item.get("from") == 21 and item.get("to") == 20 for item in renumbered))
+        self.assertTrue(any(item.get("from") == 22 and item.get("to") == 21 for item in renumbered))
+
+        list_res = self.client.get(f"/api/projects/{project_id}/chapters")
+        self.assertEqual(list_res.status_code, 200)
+        chapter_map = {item["id"]: item["chapter_number"] for item in list_res.json()}
+        self.assertNotIn(ch20, chapter_map)
+        self.assertEqual(chapter_map.get(ch21), 20)
+        self.assertEqual(chapter_map.get(ch22), 21)
+
+        events = self.client.get(f"/api/events/{project_id}").json()
+        shifted_chapters = sorted({event.get("chapter") for event in events})
+        self.assertEqual(shifted_chapters, [20, 21])
 
     def test_build_outline_messages_includes_continuation_constraints(self):
         project_id = self._create_project()

@@ -32,6 +32,7 @@ pytest-asyncio = "^0.21.1"
 pytest-cov = "^4.1.0"
 black = "^23.12.1"
 ruff = "^0.1.8"
+hypothesis = "^6.92.0"
 
 [build-system]
 requires = ["poetry-core"]

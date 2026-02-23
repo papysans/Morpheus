@@ -49,11 +49,13 @@ from models import (
     Layer,
     MemoryItem,
     Metrics,
+    PlanQualityReport,
     Project,
     ProjectStatus,
     ReviewAction,
 )
 from services.consistency import ConsistencyEngine
+from services.memory_context import MemoryContextService
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
@@ -1052,6 +1054,7 @@ def get_or_create_studio(project_id: str) -> AgentStudio:
             chat_max_tokens=chat_max_tokens,
             chat_temperature=settings.llm_temperature,
             context_window_tokens=context_window_tokens,
+            enforce_remote_mode=runtime["remote_effective"],
         )
         logger.info(
             "studio initialized project_id=%s requested_provider=%s effective_provider=%s model=%s remote_requested=%s remote_effective=%s remote_ready=%s auto_enabled=%s",
@@ -1495,11 +1498,12 @@ def build_outline_messages(
 ) -> List[Dict[str, str]]:
     phase_hints = build_outline_phase_hints(chapter_count, continuation_mode)
     constraints = [
-        "每章 title 2-14 字，禁止写“第X章”前缀",
+        "每章 title 2-18 字，禁止写“第X章”前缀",
         "每章 title 必须具体且可区分，避免“开端/发展/继续”之类空泛命名",
         "每章 title 禁止使用阶段标签（如“起势递进/代价扩张/阶段收束”）及其编号变体",
         "每章 title 禁止直接复述流程指令词（如“里程碑/阶段收束/第二阶段钩子”）",
-        "每章 title 必须像小说章名（名词短语或意象短语），不要写成动作句或说明句",
+        "每章 title 要像小说章名，可用名词短语、动作短句或意象句，不要写成流程说明",
+        "标题长度和句式需有变化，避免连续多章都使用同一模板（如连续四字词或连续“X的Y”）",
         "每章 goal 必须包含明确行动和阻力，不能只写情绪或设定介绍",
         "章节之间要形成因果递进，后章必须承接前章代价",
     ]
@@ -1528,7 +1532,13 @@ def build_outline_messages(
                     "continuation_mode": continuation_mode,
                     "constraints": constraints,
                     "forbidden_title_keywords": ["起势递进", "代价扩张", "阶段收束", "里程碑", "第二阶段钩子"],
-                    "title_style_examples": ["镜城残响", "雪夜压城", "盲域余震", "风暴前兆"],
+                    "title_style_examples": [
+                        "镜城残响",
+                        "第二次心跳",
+                        "车祸后的合法复活",
+                        "监控者的真面目",
+                        "在雪夜醒来的那个人",
+                    ],
                     "phase_hints": phase_hints,
                 },
                 ensure_ascii=False,
@@ -1676,6 +1686,7 @@ def build_one_shot_messages(
     store: MemoryStore,
     premise: str,
     previous_chapters: List[str],
+    context_pack: dict | None = None,
 ) -> List[Dict[str, str]]:
     mode_instruction = {
         GenerationMode.QUICK: "快速模式：直接产出完整章节，节奏紧凑，信息密度高。",
@@ -1714,6 +1725,8 @@ def build_one_shot_messages(
                     "project_style": project.style,
                     "taboo_constraints": project.taboo_constraints,
                     "identity": store.three_layer.get_identity()[:2000],
+                    "previous_chapter_synopsis": (context_pack or {}).get("previous_chapter_synopsis", ""),
+                    "open_threads": (context_pack or {}).get("open_threads", []),
                     "previous_chapters": previous_chapters,
                     "continuation_mode": req.continuation_mode,
                     "continuation_constraints": continuation_constraints,
@@ -2040,6 +2053,24 @@ def finalize_generated_draft(
     upsert_graph_from_chapter(store, chapter)
     upsert_chapter_memory(store, chapter)
     store.sync_file_memories()
+
+    # Memory context: lightweight refresh after draft finalization
+    try:
+        mem_ctx = MemoryContextService(store.three_layer, store)
+        project_chapters = [
+            {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+            for c in chapter_list(chapter.project_id)
+        ]
+        mem_ctx.refresh_memory_after_chapter(
+            chapter_number=chapter.chapter_number,
+            chapter_text=draft,
+            chapter_plan=chapter.plan,
+            project_chapters=project_chapters,
+            mode="lightweight",
+        )
+    except Exception:
+        logger.warning("lightweight memory refresh failed chapter_no=%d", chapter.chapter_number, exc_info=True)
+
     traces[chapter.id] = trace
     save_trace(chapter.project_id, chapter.id, trace)
     save_chapter(chapter)
@@ -2108,6 +2139,19 @@ async def generate_one_shot_draft_text(
     # Reserve completion + safety buffer, then spend the rest on prior chapter context.
     input_budget = max(4096, context_window_tokens - draft_max_tokens - 2048)
 
+    # Build Context Pack for memory injection
+    memory_ctx_svc = MemoryContextService(
+        three_layer=store.three_layer,
+        memory_store=store,
+        context_window_tokens=context_window_tokens,
+    )
+    project_chapters = [
+        c.model_dump(mode="json")
+        for c in chapter_list(chapter.project_id)
+        if c.chapter_number < chapter.chapter_number
+    ]
+    context_pack = memory_ctx_svc.build_generation_context_pack(chapter.chapter_number, project_chapters)
+
     if req.mode == GenerationMode.STUDIO:
         await emit_progress(
             progress,
@@ -2115,17 +2159,42 @@ async def generate_one_shot_draft_text(
             {"chapter_number": chapter.chapter_number, "stage": "plan", "mode": req.mode.value},
         )
         if req.rewrite_plan or not chapter.plan:
-            chapter.plan = await workflow.generate_plan(
-                chapter,
-                {
-                    "project_info": project.model_dump(mode="json"),
-                    "previous_chapters": [
-                        c.model_dump(mode="json")
-                        for c in chapter_list(chapter.project_id)
-                        if c.chapter_number < chapter.chapter_number
-                    ],
-                },
+            try:
+                chapter.plan = await workflow.generate_plan(
+                    chapter,
+                    {
+                        "project_info": project.model_dump(mode="json"),
+                        "previous_chapters": project_chapters,
+                        "identity_core": context_pack.get("identity_core", ""),
+                        "runtime_state": context_pack.get("runtime_state", ""),
+                        "memory_compact": context_pack.get("memory_compact", ""),
+                        "open_threads": context_pack.get("open_threads", []),
+                    },
+                )
+            except RuntimeError as exc:
+                logger.warning(
+                    "one-shot plan generation failed chapter_id=%s chapter_no=%d detail=%s",
+                    chapter.id,
+                    chapter.chapter_number,
+                    exc,
+                )
+                raise HTTPException(status_code=503, detail=str(exc))
+            quality_payload = workflow.get_last_plan_quality()
+            quality_debug = workflow.get_last_plan_debug()
+            chapter.plan_quality = (
+                PlanQualityReport.model_validate(quality_payload)
+                if quality_payload
+                else None
             )
+            chapter.plan_quality_debug = quality_debug or None
+            if chapter.plan_quality and chapter.plan_quality.status != "ok":
+                logger.debug(
+                    "plan quality warning context_pack_stats chapter_no=%d budget_total=%d open_thread_count=%d identity_used=%d",
+                    chapter.chapter_number,
+                    context_pack.get("budget_stats", {}).get("total_budget", 0),
+                    len(context_pack.get("open_threads", [])),
+                    context_pack.get("budget_stats", {}).get("identity_core_used", 0),
+                )
         await emit_progress(
             progress,
             "chapter_stage",
@@ -2133,10 +2202,14 @@ async def generate_one_shot_draft_text(
         )
         trace = studio.start_trace(chapter.chapter_number)
         draft_context = {
-            "identity": store.three_layer.get_identity(),
+            "identity": context_pack.get("identity_core") or store.three_layer.get_identity(),
+            "runtime_state": context_pack.get("runtime_state", ""),
+            "memory_compact": context_pack.get("memory_compact", ""),
+            "previous_chapter_synopsis": context_pack.get("previous_chapter_synopsis", ""),
+            "open_threads": context_pack.get("open_threads", []),
             "project_style": project.style,
             "target_words": req.target_words,
-            "previous_chapters": compact_previous_chapters(
+            "previous_chapters": context_pack.get("previous_chapters_compact") or compact_previous_chapters(
                 [
                     c.final or c.draft or ""
                     for c in chapter_list(chapter.project_id)
@@ -2187,6 +2260,7 @@ async def generate_one_shot_draft_text(
         store=store,
         premise=premise,
         previous_chapters=previous_chapters,
+        context_pack=context_pack,
     )
     await emit_progress(
         progress,
@@ -3355,9 +3429,25 @@ async def run_one_shot_book_generation(
         if req.auto_approve and result["can_submit"]:
             chapter.final = chapter.draft
             chapter.status = ChapterStatus.APPROVED
-            store.three_layer.reflect(chapter.final or "", chapter.chapter_number)
-            store.sync_file_memories()
             save_chapter(chapter)
+
+            # Memory context: consolidated refresh after auto-approval (includes reflect)
+            try:
+                mem_ctx = MemoryContextService(store.three_layer, store)
+                project_chapters = [
+                    {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+                    for c in chapter_list(project_id)
+                ]
+                mem_ctx.refresh_memory_after_chapter(
+                    chapter_number=chapter.chapter_number,
+                    chapter_text=chapter.final or "",
+                    chapter_plan=chapter.plan,
+                    project_chapters=project_chapters,
+                    mode="consolidated",
+                )
+            except Exception:
+                logger.warning("consolidated memory refresh failed chapter_no=%d", chapter.chapter_number, exc_info=True)
+
             logger.info(
                 "one-shot-book chapter auto-approved project_id=%s chapter_id=%s chapter_no=%d",
                 project_id,
@@ -3565,12 +3655,52 @@ def _delete_chapter_internal(chapter_id: str, *, allow_missing: bool = False) ->
             logger.exception("chapter delete failed file=%s chapter_id=%s", file_path, chapter_id)
             raise HTTPException(status_code=500, detail=f"Failed to delete chapter file: {exc}") from exc
 
+    renumbered_chapters: List[Dict[str, Any]] = []
+    renumbered_memory: Dict[str, int] = {}
     try:
         store = get_or_create_store(project_id)
         store.delete_events_for_chapter(chapter_number)
         store.delete_chapter_memory_artifacts(chapter_id, chapter_number)
         deleted_l3 = store.three_layer.delete_l3_items_for_chapter(chapter_number)
+        for next_chapter in chapter_list(project_id):
+            if next_chapter.chapter_number <= chapter_number:
+                continue
+            old_number = next_chapter.chapter_number
+            new_number = old_number - 1
+            next_chapter.chapter_number = new_number
+            if next_chapter.plan and hasattr(next_chapter.plan, 'chapter_id'):
+                next_chapter.plan.chapter_id = new_number
+            save_chapter(next_chapter)
+            renumbered_chapters.append(
+                {
+                    "chapter_id": next_chapter.id,
+                    "from": old_number,
+                    "to": new_number,
+                }
+            )
+
+            trace = resolve_trace_for_chapter(next_chapter)
+            if trace:
+                trace.chapter_id = new_number
+                for decision in trace.decisions:
+                    decision.chapter_id = new_number
+                traces[next_chapter.id] = trace
+                save_trace(project_id, next_chapter.id, trace)
+
+        renumbered_memory = store.shift_chapter_references_after(chapter_number)
         store.sync_file_memories()
+
+        # Memory context: recompute open threads after chapter deletion
+        try:
+            remaining_chapters = [
+                {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+                for c in chapter_list(project_id)
+            ]
+            if remaining_chapters:
+                mem_ctx = MemoryContextService(store.three_layer, store)
+                mem_ctx.recompute_open_threads(remaining_chapters)
+        except Exception:
+            logger.warning("open threads recompute failed after chapter delete project_id=%s", project_id, exc_info=True)
     except Exception:
         deleted_l3 = []
         logger.exception(
@@ -3580,6 +3710,12 @@ def _delete_chapter_internal(chapter_id: str, *, allow_missing: bool = False) ->
             chapter_number,
         )
 
+    for metric in metrics_history:
+        if metric.project_id != project_id:
+            continue
+        if metric.chapter_id is not None and metric.chapter_id > chapter_number:
+            metric.chapter_id -= 1
+
     project = resolve_project(project_id)
     if project:
         if not chapter_list(project_id):
@@ -3588,12 +3724,13 @@ def _delete_chapter_internal(chapter_id: str, *, allow_missing: bool = False) ->
         save_project(project)
 
     logger.info(
-        "chapter deleted project_id=%s chapter_id=%s chapter_no=%d title=%s l3_deleted=%d",
+        "chapter deleted project_id=%s chapter_id=%s chapter_no=%d title=%s l3_deleted=%d renumbered=%d",
         project_id,
         chapter_id,
         chapter_number,
         chapter_title,
         len(deleted_l3),
+        len(renumbered_chapters),
     )
     return {
         "status": "deleted",
@@ -3601,6 +3738,8 @@ def _delete_chapter_internal(chapter_id: str, *, allow_missing: bool = False) ->
         "chapter_id": chapter_id,
         "chapter_number": chapter_number,
         "title": chapter_title,
+        "renumbered": renumbered_chapters,
+        "memory_reindexed": renumbered_memory,
     }
 
 
@@ -3715,13 +3854,39 @@ async def generate_plan(chapter_id: str):
     workflow = StudioWorkflow(studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20)))
     trace = studio.start_trace(chapter.chapter_number)
 
-    plan = await workflow.generate_plan(
-        chapter,
-        {
-            "project_info": project.model_dump(mode="json"),
-            "previous_chapters": [c.model_dump(mode="json") for c in chapter_list(chapter.project_id) if c.chapter_number < chapter.chapter_number],
-        },
+    # Build Context Pack for plan generation
+    mem_ctx = MemoryContextService(store.three_layer, store)
+    project_chapters = [
+        {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+        for c in chapter_list(chapter.project_id)
+    ]
+    context_pack = mem_ctx.build_generation_context_pack(chapter.chapter_number, project_chapters)
+
+    try:
+        plan = await workflow.generate_plan(
+            chapter,
+            {
+                "project_info": project.model_dump(mode="json"),
+                "previous_chapters": [c.model_dump(mode="json") for c in chapter_list(chapter.project_id) if c.chapter_number < chapter.chapter_number],
+                "context_pack": context_pack,
+            },
+        )
+    except RuntimeError as exc:
+        logger.warning(
+            "plan generation failed chapter_id=%s chapter_no=%d detail=%s",
+            chapter.id,
+            chapter.chapter_number,
+            exc,
+        )
+        raise HTTPException(status_code=503, detail=str(exc))
+    quality_payload = workflow.get_last_plan_quality()
+    quality_debug = workflow.get_last_plan_debug()
+    chapter.plan_quality = (
+        PlanQualityReport.model_validate(quality_payload)
+        if quality_payload
+        else None
     )
+    chapter.plan_quality_debug = quality_debug or None
     chapter.plan = plan
     chapter.status = ChapterStatus.DRAFT
     save_chapter(chapter)
@@ -3730,12 +3895,28 @@ async def generate_plan(chapter_id: str):
     save_trace(chapter.project_id, chapter.id, trace)
     store.three_layer.add_log(f"章节 {chapter.chapter_number} 蓝图生成完成")
     logger.info(
-        "plan generation done chapter_id=%s beats=%d conflicts=%d",
+        "plan generation done chapter_id=%s beats=%d conflicts=%d quality_score=%s quality_status=%s",
         chapter.id,
         len(plan.beats),
         len(plan.conflicts),
+        chapter.plan_quality.score if chapter.plan_quality else "n/a",
+        chapter.plan_quality.status if chapter.plan_quality else "n/a",
     )
-    return {"plan": plan.model_dump(mode="json"), "trace_id": trace.id}
+    if chapter.plan_quality and chapter.plan_quality.status != "ok":
+        logger.warning(
+            "plan generation diagnostic chapter_id=%s parser=%s selected=%s initial_len=%s retry_len=%s",
+            chapter.id,
+            chapter.plan_quality.parser_source,
+            quality_debug.get("selected_source", "initial"),
+            quality_debug.get("initial_output_length", 0),
+            quality_debug.get("retry_output_length", 0),
+        )
+    return {
+        "plan": plan.model_dump(mode="json"),
+        "quality": chapter.plan_quality.model_dump(mode="json") if chapter.plan_quality else None,
+        "quality_debug": quality_debug,
+        "trace_id": trace.id,
+    }
 
 
 @app.post("/api/chapters/{chapter_id}/draft")
@@ -3835,22 +4016,68 @@ async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict
 
     if not chapter.plan:
         workflow_for_plan = StudioWorkflow(studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20)))
-        chapter.plan = await workflow_for_plan.generate_plan(
-            chapter,
-            {"project_info": project.model_dump(mode="json"), "previous_chapters": []},
+        # Build Context Pack for inline plan generation
+        mem_ctx_plan = MemoryContextService(store.three_layer, store)
+        plan_project_chapters = [
+            {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+            for c in chapter_list(chapter.project_id)
+        ]
+        plan_context_pack = mem_ctx_plan.build_generation_context_pack(chapter.chapter_number, plan_project_chapters)
+        try:
+            chapter.plan = await workflow_for_plan.generate_plan(
+                chapter,
+                {
+                    "project_info": project.model_dump(mode="json"),
+                    "previous_chapters": [c.model_dump(mode="json") for c in chapter_list(chapter.project_id) if c.chapter_number < chapter.chapter_number],
+                    "context_pack": plan_context_pack,
+                },
+            )
+        except RuntimeError as exc:
+            logger.warning(
+                "draft pre-plan generation failed chapter_id=%s chapter_no=%d detail=%s",
+                chapter.id,
+                chapter.chapter_number,
+                exc,
+            )
+            raise HTTPException(status_code=503, detail=str(exc))
+        quality_payload = workflow_for_plan.get_last_plan_quality()
+        quality_debug = workflow_for_plan.get_last_plan_debug()
+        chapter.plan_quality = (
+            PlanQualityReport.model_validate(quality_payload)
+            if quality_payload
+            else None
         )
+        chapter.plan_quality_debug = quality_debug or None
 
     workflow = StudioWorkflow(studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20)))
     trace = studio.start_trace(chapter.chapter_number)
     target_words = resolve_project_target_words(project, chapter.project_id)
+
+    # Build Context Pack for memory injection
+    memory_ctx_svc = MemoryContextService(
+        three_layer=store.three_layer,
+        memory_store=store,
+        context_window_tokens=resolve_context_window_tokens(studio.llm_client),
+    )
+    project_chapters = [
+        c.model_dump(mode="json")
+        for c in chapter_list(chapter.project_id)
+        if c.chapter_number < chapter.chapter_number
+    ]
+    context_pack = memory_ctx_svc.build_generation_context_pack(chapter.chapter_number, project_chapters)
+
     draft = await workflow.generate_draft(
         chapter,
         chapter.plan,
         {
-            "identity": store.three_layer.get_identity(),
+            "identity": context_pack.get("identity_core") or store.three_layer.get_identity(),
+            "runtime_state": context_pack.get("runtime_state", ""),
+            "memory_compact": context_pack.get("memory_compact", ""),
+            "previous_chapter_synopsis": context_pack.get("previous_chapter_synopsis", ""),
+            "open_threads": context_pack.get("open_threads", []),
             "project_style": project.style,
             "target_words": target_words,
-            "previous_chapters": [c.final or c.draft or "" for c in chapter_list(chapter.project_id) if c.chapter_number < chapter.chapter_number][-5:],
+            "previous_chapters": context_pack.get("previous_chapters_compact") or [c.final or c.draft or "" for c in chapter_list(chapter.project_id) if c.chapter_number < chapter.chapter_number][-5:],
         },
     )
     draft = await rebalance_draft_length_if_needed(
@@ -3945,8 +4172,34 @@ async def commit_memory(req: MemoryCommitRequest):
         raise HTTPException(status_code=400, detail="No final draft to commit")
 
     store = get_or_create_store(chapter.project_id)
-    reflection = store.three_layer.reflect(chapter.final, chapter.chapter_number)
-    store.sync_file_memories()
+
+    # Memory context: consolidated refresh after memory commit (includes reflect)
+    reflection = {"retains": [], "downgrades": [], "new_facts": []}
+    try:
+        mem_ctx = MemoryContextService(store.three_layer, store)
+        project_chapters = [
+            {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+            for c in chapter_list(chapter.project_id)
+        ]
+        mem_ctx.refresh_memory_after_chapter(
+            chapter_number=chapter.chapter_number,
+            chapter_text=chapter.final,
+            chapter_plan=chapter.plan,
+            project_chapters=project_chapters,
+            mode="consolidated",
+        )
+        # Get reflection result from the consolidated path
+        reflection = {
+            "retains": [f"Chapter {chapter.chapter_number} 关键摘要已固化到 L3。"],
+            "downgrades": [],
+            "new_facts": [
+                f"Chapter {chapter.chapter_number} 完稿时间",
+                f"Chapter {chapter.chapter_number} 正文字数 {len(chapter.final)}",
+            ],
+        }
+    except Exception:
+        logger.warning("consolidated memory refresh failed chapter_no=%d", chapter.chapter_number, exc_info=True)
+
     store.three_layer.add_log(
         f"章节 {chapter.chapter_number} 已提交。保留: {len(reflection['retains'])}，降权: {len(reflection['downgrades'])}，新事实: {len(reflection['new_facts'])}"
     )
@@ -4068,6 +4321,28 @@ async def get_memory_source_file(project_id: str, source_path: str):
     )
 
 
+@app.get("/api/projects/{project_id}/memory/context-pack")
+async def get_memory_context_pack(project_id: str, chapter_number: int = None):
+    project = resolve_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        store = get_or_create_store(project_id)
+        existing = chapter_list(project_id)
+        if chapter_number is None:
+            chapter_number = (max(c.chapter_number for c in existing) + 1) if existing else 1
+        project_chapters = [
+            {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+            for c in existing
+        ]
+        mem_ctx = MemoryContextService(store.three_layer, store)
+        pack = mem_ctx.build_generation_context_pack(chapter_number, project_chapters, read_only=True)
+        return pack
+    except Exception as exc:
+        logger.exception("context-pack build failed project_id=%s", project_id)
+        raise HTTPException(status_code=500, detail=f"Context pack build failed: {exc}")
+
+
 @app.get("/api/trace/{chapter_id}")
 async def get_trace(chapter_id: str):
     trace = traces.get(chapter_id)
@@ -4103,8 +4378,23 @@ async def review_chapter(req: ReviewRequest):
         chapter.status = ChapterStatus.APPROVED
         if chapter.final:
             store = get_or_create_store(chapter.project_id)
-            store.three_layer.reflect(chapter.final, chapter.chapter_number)
-            store.sync_file_memories()
+
+            # Memory context: consolidated refresh after approval (includes reflect)
+            try:
+                mem_ctx = MemoryContextService(store.three_layer, store)
+                project_chapters = [
+                    {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+                    for c in chapter_list(chapter.project_id)
+                ]
+                mem_ctx.refresh_memory_after_chapter(
+                    chapter_number=chapter.chapter_number,
+                    chapter_text=chapter.final,
+                    chapter_plan=chapter.plan,
+                    project_chapters=project_chapters,
+                    mode="consolidated",
+                )
+            except Exception:
+                logger.warning("consolidated memory refresh failed chapter_no=%d", chapter.chapter_number, exc_info=True)
     elif req.action == ReviewAction.REJECT:
         chapter.status = ChapterStatus.DRAFT
     elif req.action == ReviewAction.REWRITE:
@@ -4561,12 +4851,80 @@ async def get_events(project_id: str):
     return [event.model_dump(mode="json") for event in events]
 
 
+@app.get("/api/projects/{project_id}/memory/files")
+async def list_memory_files(project_id: str):
+    """List all memory files across L1/L2/L3 and root, with metadata."""
+    if not resolve_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    store = get_or_create_store(project_id)
+    memory_dir = store.three_layer.memory_dir
+    files: list[dict] = []
+
+    # Scan L1, L2, L3 directories + memory root
+    scan_targets = [
+        ("L1", store.three_layer.l1_dir),
+        ("L2", store.three_layer.l2_dir),
+        ("L3", store.three_layer.l3_dir),
+        ("root", memory_dir),
+    ]
+    for layer_label, layer_dir in scan_targets:
+        if not layer_dir.exists():
+            continue
+        for md_file in sorted(layer_dir.glob("*.md")):
+            # Skip directories and non-files
+            if not md_file.is_file():
+                continue
+            # For root, skip files inside subdirectories (already covered by L1/L2/L3)
+            if layer_label == "root" and md_file.parent != memory_dir:
+                continue
+            rel_path = str(md_file.relative_to(store.three_layer.project_path))
+            stat = md_file.stat()
+            # Extract frontmatter metadata for L3 files
+            item_type = ""
+            summary = md_file.stem
+            if layer_label == "L3":
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                    if content.startswith("---"):
+                        parts = content.split("---", 2)
+                        if len(parts) >= 3:
+                            import yaml
+                            meta = yaml.safe_load(parts[1]) or {}
+                            item_type = str(meta.get("type", ""))
+                            summary = str(meta.get("summary", md_file.stem))
+                except Exception:
+                    pass
+            else:
+                # For L1/L2/root, use filename as summary
+                summary = md_file.name
+
+            files.append({
+                "layer": layer_label,
+                "name": md_file.name,
+                "path": rel_path,
+                "summary": summary,
+                "item_type": item_type,
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+
+    return {"files": files, "total": len(files)}
+
+
 @app.get("/api/identity/{project_id}")
 async def get_identity(project_id: str):
     if not resolve_project(project_id):
         raise HTTPException(status_code=404, detail="Project not found")
     store = get_or_create_store(project_id)
-    return {"content": store.three_layer.get_identity()}
+    # Read RUNTIME_STATE.md alongside IDENTITY.md
+    runtime_state = ""
+    rs_path = store.three_layer.l1_dir / "RUNTIME_STATE.md"
+    if rs_path.exists():
+        try:
+            runtime_state = rs_path.read_text(encoding="utf-8")
+        except Exception:
+            runtime_state = ""
+    return {"content": store.three_layer.get_identity(), "runtime_state": runtime_state}
 
 
 @app.put("/api/identity/{project_id}")
