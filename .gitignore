@@ -50,3 +50,6 @@ data/projects/
 # Playwright
 .playwright-cli/
 output/
+
+# Hypothesis
+.hypothesis/
