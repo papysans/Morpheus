@@ -1,9 +1,11 @@
+import ast
 import json
 import re
 import inspect
 import asyncio
 import threading
-from typing import Any, Callable, Dict, List, Optional
+import logging
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from datetime import datetime
 from uuid import uuid4
 from enum import Enum
@@ -16,6 +18,8 @@ from core.chapter_craft import (
     compute_length_bounds,
     strip_leading_chapter_heading,
 )
+
+logger = logging.getLogger("novelist.studio")
 
 
 class AgentState(str, Enum):
@@ -146,8 +150,10 @@ AGENT_PROMPTS = {
 
 要求：
 - beats 3-6条，按时间顺序，且至少包含一次“反转或信息位移”
+- beats 每条必须是“具体事件”，包含角色动作与情境变化，禁止使用抽象流程句
 - conflicts 至少2条，必须有外部阻力与内部价值冲突
 - callback_targets 至少1条，且不可回收全部伏笔
+- 禁止模板句：如“开场建立章节目标”“中段制造冲突”“结尾留下悬念”
 """,
     },
     AgentRole.SETTER: {
@@ -213,8 +219,10 @@ class AgentStudio:
         chat_max_tokens: Optional[int] = None,
         chat_temperature: Optional[float] = None,
         context_window_tokens: Optional[int] = None,
+        enforce_remote_mode: bool = False,
     ):
         self.provider = provider
+        self.enforce_remote_mode = bool(enforce_remote_mode)
         self.llm_client = create_llm_client(
             provider=provider,
             api_key=api_key,
@@ -277,6 +285,71 @@ class StudioWorkflow:
     def __init__(self, studio: AgentStudio, memory_search_func: Callable):
         self.studio = studio
         self.memory_search = memory_search_func
+        self.last_plan_quality: Dict[str, Any] = {}
+        self.last_plan_debug: Dict[str, Any] = {}
+
+    def get_last_plan_quality(self) -> Dict[str, Any]:
+        return dict(self.last_plan_quality or {})
+
+    def get_last_plan_debug(self) -> Dict[str, Any]:
+        return dict(self.last_plan_debug or {})
+
+    def _preview_text(self, text: Any, limit: int = 420) -> str:
+        payload = str(text or "")
+        payload = payload.replace("\r", " ").replace("\n", " ").strip()
+        if len(payload) <= limit:
+            return payload
+        return payload[:limit] + "..."
+
+    def _compact_plan_previous_chapters(self, previous_chapters: Any) -> List[Dict[str, Any]]:
+        if not isinstance(previous_chapters, list):
+            return []
+
+        compacted: List[Dict[str, Any]] = []
+        # Keep latest chapters only; planning does not need full historical drafts.
+        candidates = previous_chapters[-8:]
+        remaining_budget = 14000
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            body = str(item.get("final") or item.get("draft") or "").strip()
+            excerpt = body[-520:] if body else ""
+            compact_item = {
+                "chapter_number": item.get("chapter_number"),
+                "title": str(item.get("title") or "").strip(),
+                "goal": str(item.get("goal") or "").strip(),
+                "status": item.get("status"),
+                "word_count": int(item.get("word_count") or 0),
+                "ending_excerpt": excerpt,
+            }
+            serialized = json.dumps(compact_item, ensure_ascii=False)
+            if len(serialized) > remaining_budget:
+                excerpt_budget = max(120, remaining_budget // 3)
+                compact_item["ending_excerpt"] = excerpt[-excerpt_budget:]
+                serialized = json.dumps(compact_item, ensure_ascii=False)
+                if len(serialized) > remaining_budget:
+                    break
+            compacted.append(compact_item)
+            remaining_budget -= len(serialized)
+            if remaining_budget <= 200:
+                break
+        return compacted
+
+    def _get_agent_llm_meta(self, agent: Optional[Agent]) -> Dict[str, Any]:
+        client = getattr(agent, "llm_client", None)
+        getter = getattr(client, "get_last_chat_meta", None)
+        if callable(getter):
+            try:
+                meta = getter()
+                if isinstance(meta, dict):
+                    return meta
+            except Exception:
+                return {}
+        return {}
+
+    def _contains_offline_placeholder(self, text: str) -> bool:
+        content = str(text or "")
+        return "离线占位输出" in content or "未配置可用模型" in content
 
     async def generate_plan(self, chapter: Chapter, context: Dict[str, Any]) -> ChapterPlan:
         director = self.studio.get_agent(AgentRole.DIRECTOR)
@@ -285,16 +358,142 @@ class StudioWorkflow:
         search_results = self.memory_search(memory_query, fts_top_k=20)
         self.studio.add_memory_hits(search_results)
 
+        previous_chapters_raw = context.get("previous_chapters", [])
+        previous_chapters = self._compact_plan_previous_chapters(previous_chapters_raw)
+        try:
+            raw_chars = len(json.dumps(previous_chapters_raw, ensure_ascii=False))
+        except Exception:
+            raw_chars = len(str(previous_chapters_raw or ""))
+        compact_chars = len(json.dumps(previous_chapters, ensure_ascii=False))
+        logger.info(
+            "plan context compact chapter_no=%s prev_raw_count=%s prev_compact_count=%s raw_chars=%s compact_chars=%s",
+            chapter.chapter_number,
+            len(previous_chapters_raw) if isinstance(previous_chapters_raw, list) else -1,
+            len(previous_chapters),
+            raw_chars,
+            compact_chars,
+        )
+
         ctx = {
             "chapter_id": chapter.chapter_number,
             "chapter_goal": chapter.goal,
-            "previous_chapters": context.get("previous_chapters", []),
+            "previous_chapters": previous_chapters,
             "memory_hits": search_results[:10],
             "project_info": context.get("project_info", {}),
+            # Context Pack fields
+            "identity_core": context.get("identity_core", ""),
+            "runtime_state": context.get("runtime_state", ""),
+            "memory_compact": context.get("memory_compact", ""),
+            "open_threads": context.get("open_threads", []),
         }
 
         plan_text = await director.think(ctx)
-        parsed_plan = self._extract_plan_payload(plan_text, chapter)
+        initial_llm_meta = self._get_agent_llm_meta(director)
+        parsed_plan, quality = self._extract_plan_payload_with_quality(plan_text, chapter)
+        selected_text = plan_text
+
+        initial_quality = dict(quality)
+        retry_quality: Optional[Dict[str, Any]] = None
+        retry_text = ""
+        retry_llm_meta: Dict[str, Any] = {}
+        selected_source = "initial"
+
+        if "离线占位输出" in plan_text:
+            logger.warning(
+                "plan generation got offline placeholder chapter_no=%s text=%s",
+                chapter.chapter_number,
+                self._preview_text(plan_text, limit=180),
+            )
+
+        if self._should_retry_plan(quality):
+            retry_ctx = {
+                **ctx,
+                "previous_output": plan_text,
+                "quality_issues": quality.get("issues", []),
+                "instruction": (
+                    "上次蓝图质量不足，请完整重写。"
+                    "只允许输出严格 JSON 对象，字段固定为 beats/conflicts/foreshadowing/callback_targets/role_goals。"
+                    "beats 必须 3-6 条，每条都要包含具体人物动作与场景推进。"
+                    "禁止使用“开场建立章节目标”“中段制造冲突”“结尾留下悬念”等模板句。"
+                    "conflicts 至少 2 条，分别体现外部阻力与内部价值冲突。"
+                ),
+            }
+            retry_text = await director.think(retry_ctx)
+            retry_llm_meta = self._get_agent_llm_meta(director)
+            retry_plan, retry_quality = self._extract_plan_payload_with_quality(retry_text, chapter)
+            retry_quality["attempt"] = 2
+
+            first_score = int(quality.get("score", 0))
+            retry_score = int(retry_quality.get("score", 0))
+            if retry_score >= first_score:
+                parsed_plan = retry_plan
+                quality = retry_quality
+                selected_text = retry_text
+                selected_source = "retry"
+            quality["attempts"] = 2
+            quality["retried"] = True
+        else:
+            quality["attempts"] = 1
+            quality["retried"] = False
+
+        self.last_plan_quality = quality
+        self.last_plan_debug = {
+            "selected_source": selected_source,
+            "initial_output_length": len(str(plan_text or "")),
+            "initial_output_preview": self._preview_text(plan_text),
+            "initial_quality": initial_quality,
+            "initial_llm_meta": initial_llm_meta,
+            "retry_output_length": len(str(retry_text or "")),
+            "retry_output_preview": self._preview_text(retry_text),
+            "retry_llm_meta": retry_llm_meta,
+            "retry_quality": retry_quality or {},
+            "selected_quality": quality,
+        }
+
+        if self._contains_offline_placeholder(selected_text) and bool(getattr(self.studio, "enforce_remote_mode", False)):
+            hints: List[str] = []
+            for tag, meta in (("初次", initial_llm_meta), ("重试", retry_llm_meta)):
+                if not meta:
+                    continue
+                reason = str(meta.get("reason") or "unknown")
+                mode = str(meta.get("mode") or "unknown")
+                err = str(meta.get("error") or "").strip()
+                if err:
+                    hints.append(f"{tag}[mode={mode}, reason={reason}, error={err}]")
+                else:
+                    hints.append(f"{tag}[mode={mode}, reason={reason}]")
+            hint_text = "；".join(hints) if hints else "未采集到底层错误信息"
+            error_message = (
+                "蓝图生成失败：当前模型调用处于离线占位模式（请检查 API Key/模型配置或账单额度）。"
+                f" 诊断：{hint_text}"
+            )
+            logger.error(
+                "plan generation aborted chapter_no=%s reason=offline_placeholder initial_meta=%s retry_meta=%s",
+                chapter.chapter_number,
+                initial_llm_meta,
+                retry_llm_meta,
+            )
+            raise RuntimeError(error_message)
+
+        if str(quality.get("status", "")).lower() != "ok":
+            logger.warning(
+                (
+                    "plan quality warning chapter_no=%s status=%s score=%s parser=%s "
+                    "used_fallback=%s defaulted_fields=%s template_hits=%s selected=%s "
+                    "initial_len=%s retry_len=%s preview=%s"
+                ),
+                chapter.chapter_number,
+                quality.get("status"),
+                quality.get("score"),
+                quality.get("parser_source"),
+                quality.get("used_fallback"),
+                quality.get("defaulted_fields"),
+                quality.get("template_phrase_hits"),
+                selected_source,
+                len(str(plan_text or "")),
+                len(str(retry_text or "")),
+                self._preview_text(selected_text, limit=260),
+            )
 
         plan = ChapterPlan(
             id=str(uuid4()),
@@ -309,7 +508,8 @@ class StudioWorkflow:
         )
 
         decision = director.decide(ctx, [r["item_id"] for r in search_results[:5]])
-        decision.decision_text = plan_text
+        decision.decision_text = selected_text
+        decision.reasoning = json.dumps({"plan_quality": quality}, ensure_ascii=False)
         self.studio.add_decision(decision)
 
         return plan
@@ -337,6 +537,10 @@ class StudioWorkflow:
             "goal": chapter.goal,
             "plan": plan.model_dump(),
             "identity": context.get("identity", ""),
+            "runtime_state": context.get("runtime_state", ""),
+            "memory_compact": context.get("memory_compact", ""),
+            "previous_chapter_synopsis": context.get("previous_chapter_synopsis", ""),
+            "open_threads": context.get("open_threads", []),
             "project_style": context.get("project_style", ""),
             "memory_hits": memory_hits[:12],
             "previous_chapters": context.get("previous_chapters", []),
@@ -441,6 +645,10 @@ class StudioWorkflow:
             "goal": chapter.goal,
             "plan": plan.model_dump(),
             "identity": context.get("identity", ""),
+            "runtime_state": context.get("runtime_state", ""),
+            "memory_compact": context.get("memory_compact", ""),
+            "previous_chapter_synopsis": context.get("previous_chapter_synopsis", ""),
+            "open_threads": context.get("open_threads", []),
             "project_style": context.get("project_style", ""),
             "memory_hits": memory_hits[:12],
             "previous_chapters": context.get("previous_chapters", []),
@@ -596,25 +804,55 @@ class StudioWorkflow:
         payload = re.sub(r"```$", "", payload).strip()
         return payload
 
-    def _load_json_object_payload(self, text: str) -> Optional[Dict[str, Any]]:
+    def _load_json_object_payload_with_diag(
+        self, text: str
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
         payload = self._strip_json_fence(text)
+        diagnostics: Dict[str, Any] = {
+            "raw_length": len(payload),
+            "candidate_count": 0,
+            "candidates": [],
+            "parsed": False,
+        }
         if not payload:
-            return None
+            return None, diagnostics
 
         candidates = [payload]
         start = payload.find("{")
         end = payload.rfind("}")
         if start >= 0 and end > start:
             candidates.append(payload[start : end + 1])
+        diagnostics["candidate_count"] = len(candidates)
 
-        for candidate in candidates:
+        for index, candidate in enumerate(candidates):
+            candidate_diag: Dict[str, Any] = {
+                "index": index,
+                "length": len(candidate),
+            }
             try:
                 parsed = json.loads(candidate)
-            except Exception:
-                continue
+                candidate_diag["parser"] = "json"
+            except Exception as exc:
+                candidate_diag["json_error"] = str(exc)[:240]
+                try:
+                    # Some models emit Python-style dicts or single quotes.
+                    parsed = ast.literal_eval(candidate)
+                    candidate_diag["parser"] = "ast"
+                except Exception as ast_exc:
+                    candidate_diag["ast_error"] = str(ast_exc)[:240]
+                    diagnostics["candidates"].append(candidate_diag)
+                    continue
             if isinstance(parsed, dict):
-                return parsed
-        return None
+                diagnostics["parsed"] = True
+                diagnostics["candidates"].append(candidate_diag)
+                return parsed, diagnostics
+            candidate_diag["non_dict"] = True
+            diagnostics["candidates"].append(candidate_diag)
+        return None, diagnostics
+
+    def _load_json_object_payload(self, text: str) -> Optional[Dict[str, Any]]:
+        payload, _ = self._load_json_object_payload_with_diag(text)
+        return payload
 
     def _extract_dict(self, text: str, key: str) -> Dict[str, str]:
         try:
@@ -654,43 +892,304 @@ class StudioWorkflow:
             normalized[key] = goal
         return normalized
 
-    def _extract_plan_payload(self, text: str, chapter: Chapter) -> Dict[str, Any]:
-        payload = self._load_json_object_payload(text)
-        if payload:
+    def _normalize_plan_line(self, line: str) -> str:
+        cleaned = str(line or "")
+        cleaned = re.sub(r"^#+\s*", "", cleaned).strip()
+        cleaned = re.sub(r"^[-*•]\s*", "", cleaned).strip()
+        cleaned = re.sub(r"^\d+\s*[.)、]\s*", "", cleaned).strip()
+        cleaned = cleaned.strip("：: \t")
+        return cleaned
+
+    def _extract_plan_sections(self, text: str) -> Dict[str, Any]:
+        lines = [line for line in str(text or "").splitlines() if line.strip()]
+        if not lines:
             return {
+                "beats": [],
+                "conflicts": [],
+                "foreshadowing": [],
+                "callback_targets": [],
+                "role_goals": {},
+            }
+
+        headings = {
+            "beats": ("beats", "节拍"),
+            "conflicts": ("conflicts", "冲突点", "冲突"),
+            "foreshadowing": ("foreshadowing", "伏笔", "埋伏笔"),
+            "callback_targets": ("callback_targets", "回收目标", "回收"),
+            "role_goals": ("role_goals", "角色目标", "角色"),
+        }
+
+        result: Dict[str, Any] = {
+            "beats": [],
+            "conflicts": [],
+            "foreshadowing": [],
+            "callback_targets": [],
+            "role_goals": {},
+        }
+        current_key: Optional[str] = None
+
+        for raw in lines:
+            line = self._normalize_plan_line(raw)
+            if not line:
+                continue
+
+            lowered = line.lower()
+            switched = False
+            for key, aliases in headings.items():
+                if any(lowered == alias for alias in aliases):
+                    current_key = key
+                    switched = True
+                    break
+                if any(lowered.startswith(f"{alias}:") or lowered.startswith(f"{alias}：") for alias in aliases):
+                    current_key = key
+                    line = line.split("：", 1)[1] if "：" in line else line.split(":", 1)[1]
+                    line = self._normalize_plan_line(line)
+                    switched = True
+                    break
+            if switched and not line:
+                continue
+
+            if current_key is None:
+                continue
+
+            if current_key == "role_goals":
+                if "：" in line:
+                    role, goal = line.split("：", 1)
+                elif ":" in line:
+                    role, goal = line.split(":", 1)
+                else:
+                    role, goal = "", ""
+                role = role.strip()
+                goal = goal.strip()
+                if role and goal:
+                    result["role_goals"][role] = goal
+                continue
+
+            # Skip bare section markers accidentally repeated by model.
+            if line in {"冲突", "伏笔", "回收目标", "角色目标", "节拍"}:
+                continue
+
+            bucket = result[current_key]
+            if isinstance(bucket, list) and line and line not in bucket:
+                bucket.append(line)
+
+        return result
+
+    def _goal_core_text(self, chapter: Chapter) -> str:
+        goal = str(chapter.goal or "").strip()
+        if not goal:
+            return ""
+        goal = re.sub(r"^围绕[“\"].*?[”\"]推进[：:]\s*", "", goal)
+        goal = re.sub(r"^围绕.+?推进[：:]\s*", "", goal)
+        goal = goal.strip()
+        return goal
+
+    def _build_goal_based_beats(self, chapter: Chapter) -> List[str]:
+        core = self._goal_core_text(chapter) or chapter.goal or "推进当前主线冲突"
+        fragments = [frag.strip() for frag in re.split(r"[。；;！？!?\n]", core) if frag.strip()]
+        if fragments:
+            start = fragments[0]
+            mid = fragments[1] if len(fragments) > 1 else fragments[0]
+        else:
+            start = core
+            mid = core
+        return [
+            f"{start}，但行动刚启动就遭遇意外阻力。",
+            f"为继续推进“{mid[:30]}”，主角必须做出高代价选择。",
+            "章尾暴露新的变量，阶段目标尚未闭合。",
+        ]
+
+    def _build_goal_based_conflicts(self, chapter: Chapter) -> List[str]:
+        core = self._goal_core_text(chapter) or chapter.title or "当前任务"
+        return [
+            f"外部：主角推进“{core[:28]}”时，遭遇来自环境或敌对方的强压阻断。",
+            f"内部：主角在达成“{core[:28]}”与守住自身底线之间发生价值撕扯。",
+        ]
+
+    def _should_retry_plan(self, quality: Dict[str, Any]) -> bool:
+        status = str(quality.get("status") or "").lower()
+        if status == "bad":
+            return True
+        if bool(quality.get("used_fallback")):
+            return True
+        if int(quality.get("template_phrase_hits", 0)) >= 2:
+            return True
+        return False
+
+    def _detect_template_phrase_hits(self, payload: Dict[str, Any]) -> int:
+        markers = (
+            "开场建立章节目标",
+            "中段制造冲突并推进人物关系",
+            "结尾留下悬念或下一章引子",
+            "主角目标与外部阻力发生碰撞",
+            "内部价值观冲突抬升",
+            "回收上一章未决事项至少一项",
+            "围绕“",
+            "围绕\"",
+        )
+        values: List[str] = []
+        for key in ("beats", "conflicts", "foreshadowing", "callback_targets"):
+            values.extend(payload.get(key) or [])
+        values.extend([f"{k}:{v}" for k, v in (payload.get("role_goals") or {}).items()])
+        joined = "\n".join(str(item or "") for item in values)
+        return sum(1 for marker in markers if marker in joined)
+
+    def _assess_plan_quality(
+        self,
+        payload: Dict[str, Any],
+        *,
+        source: str,
+        defaulted_fields: List[str],
+    ) -> Dict[str, Any]:
+        score = 100
+        issues: List[str] = []
+        warnings: List[str] = []
+
+        beats = payload.get("beats") or []
+        conflicts = payload.get("conflicts") or []
+        foreshadowing = payload.get("foreshadowing") or []
+        callback_targets = payload.get("callback_targets") or []
+        role_goals = payload.get("role_goals") or {}
+
+        used_fallback = source == "goal_fallback"
+        if used_fallback:
+            score -= 45
+            issues.append("模型输出未成功解析，已启用兜底蓝图。")
+        elif source != "json_object":
+            score -= 10
+            warnings.append("模型未返回标准 JSON，已通过容错解析。")
+
+        if "beats" in defaulted_fields:
+            score -= 18
+            issues.append("节拍缺失，已自动补齐。")
+        if "conflicts" in defaulted_fields:
+            score -= 14
+            issues.append("冲突点缺失，已自动补齐。")
+        if "foreshadowing" in defaulted_fields:
+            score -= 8
+            warnings.append("伏笔为空，已补最小占位。")
+        if "callback_targets" in defaulted_fields:
+            score -= 8
+            warnings.append("回收目标为空，已补最小占位。")
+
+        if len(beats) < 3:
+            score -= 25
+            issues.append("节拍数量不足（应至少 3 条）。")
+        if len(conflicts) < 2:
+            score -= 18
+            issues.append("冲突数量不足（应至少 2 条）。")
+        if len(foreshadowing) < 1:
+            score -= 8
+        if len(callback_targets) < 1:
+            score -= 8
+        if not role_goals:
+            score -= 6
+            warnings.append("缺少角色目标，后续可在章节工作台补充。")
+
+        avg_beat_len = 0
+        if beats:
+            avg_beat_len = int(sum(len(str(item)) for item in beats) / max(1, len(beats)))
+        if beats and avg_beat_len < 14:
+            score -= 10
+            warnings.append("节拍描述偏短，可能缺少动作与因果。")
+
+        template_phrase_hits = self._detect_template_phrase_hits(payload)
+        if template_phrase_hits > 0:
+            penalty = min(36, template_phrase_hits * 12)
+            score -= penalty
+            issues.append("检测到模板化蓝图语句，建议重试生成。")
+
+        score = max(0, min(100, int(score)))
+        if score >= 82:
+            status = "ok"
+        elif score >= 62:
+            status = "warn"
+        else:
+            status = "bad"
+
+        return {
+            "status": status,
+            "score": score,
+            "parser_source": source,
+            "used_fallback": used_fallback,
+            "defaulted_fields": defaulted_fields,
+            "template_phrase_hits": template_phrase_hits,
+            "issues": issues,
+            "warnings": warnings,
+        }
+
+    def _extract_plan_payload_with_quality(self, text: str, chapter: Chapter) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        source = "goal_fallback"
+        payload, parse_diag = self._load_json_object_payload_with_diag(text)
+        if payload:
+            normalized = {
                 "beats": self._normalize_list(payload.get("beats")),
                 "conflicts": self._normalize_list(payload.get("conflicts")),
                 "foreshadowing": self._normalize_list(payload.get("foreshadowing")),
                 "callback_targets": self._normalize_list(payload.get("callback_targets")),
                 "role_goals": self._normalize_role_goals(payload.get("role_goals")),
             }
+            source = "json_object"
+        else:
+            beats = self._extract_list(text, "beats")
+            conflicts = self._extract_list(text, "conflicts")
+            foreshadowing = self._extract_list(text, "foreshadowing")
+            callback_targets = self._extract_list(text, "callback_targets")
+            role_goals = self._normalize_role_goals(self._extract_dict(text, "role_goals"))
+            section_values = self._extract_plan_sections(text)
 
-        beats = self._extract_list(text, "beats")
-        conflicts = self._extract_list(text, "conflicts")
-        foreshadowing = self._extract_list(text, "foreshadowing")
-        callback_targets = self._extract_list(text, "callback_targets")
-        role_goals = self._normalize_role_goals(self._extract_dict(text, "role_goals"))
+            if not beats:
+                beats = self._normalize_list(section_values.get("beats"))
+            if not conflicts:
+                conflicts = self._normalize_list(section_values.get("conflicts"))
+            if not foreshadowing:
+                foreshadowing = self._normalize_list(section_values.get("foreshadowing"))
+            if not callback_targets:
+                callback_targets = self._normalize_list(section_values.get("callback_targets"))
+            if not role_goals:
+                role_goals = self._normalize_role_goals(section_values.get("role_goals"))
 
-        if not beats:
-            beats = [
-                f"开场建立章节目标：{chapter.goal}",
-                "中段制造冲突并推进人物关系",
-                "结尾留下悬念或下一章引子",
-            ]
-        if not conflicts:
-            conflicts = ["主角目标与外部阻力发生碰撞", "内部价值观冲突抬升"]
-        if not foreshadowing:
-            foreshadowing = [f"围绕“{chapter.title}”埋下可回收细节"]
-        if not callback_targets:
-            callback_targets = ["回收上一章未决事项至少一项"]
+            normalized = {
+                "beats": beats,
+                "conflicts": conflicts,
+                "foreshadowing": foreshadowing,
+                "callback_targets": callback_targets,
+                "role_goals": role_goals,
+            }
 
-        return {
-            "beats": beats,
-            "conflicts": conflicts,
-            "foreshadowing": foreshadowing,
-            "callback_targets": callback_targets,
-            "role_goals": role_goals,
-        }
+            has_section_values = any(
+                normalized.get(key) for key in ("beats", "conflicts", "foreshadowing", "callback_targets")
+            ) or bool(normalized.get("role_goals"))
+            if has_section_values:
+                source = "markdown_sections"
+
+        defaulted_fields: List[str] = []
+        if not normalized["beats"]:
+            normalized["beats"] = self._build_goal_based_beats(chapter)
+            defaulted_fields.append("beats")
+            source = "goal_fallback"
+        if not normalized["conflicts"]:
+            normalized["conflicts"] = self._build_goal_based_conflicts(chapter)
+            defaulted_fields.append("conflicts")
+            source = "goal_fallback"
+        if not normalized["foreshadowing"]:
+            normalized["foreshadowing"] = [f"围绕“{chapter.title}”埋下可回收细节"]
+            defaulted_fields.append("foreshadowing")
+        if not normalized["callback_targets"]:
+            normalized["callback_targets"] = ["回收上一章未决事项至少一项"]
+            defaulted_fields.append("callback_targets")
+
+        quality = self._assess_plan_quality(
+            normalized,
+            source=source,
+            defaulted_fields=defaulted_fields,
+        )
+        quality["parse_diagnostics"] = parse_diag
+        return normalized, quality
+
+    def _extract_plan_payload(self, text: str, chapter: Chapter) -> Dict[str, Any]:
+        payload, _ = self._extract_plan_payload_with_quality(text, chapter)
+        return payload
 
     def _normalize_list(self, value: Any) -> List[str]:
         if not value:

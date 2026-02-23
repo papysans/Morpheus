@@ -121,6 +121,19 @@ class ChapterPlan(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
 
 
+class PlanQualityReport(BaseModel):
+    status: str = "ok"
+    score: int = Field(default=100, ge=0, le=100)
+    parser_source: str = "json_object"
+    used_fallback: bool = False
+    retried: bool = False
+    attempts: int = 1
+    template_phrase_hits: int = 0
+    defaulted_fields: List[str] = Field(default_factory=list)
+    issues: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
 class Chapter(BaseModel):
     id: str
     project_id: str
@@ -128,6 +141,8 @@ class Chapter(BaseModel):
     title: str
     goal: str
     plan: Optional[ChapterPlan] = None
+    plan_quality: Optional[PlanQualityReport] = None
+    plan_quality_debug: Optional[Dict[str, Any]] = None
     draft: Optional[str] = None
     final: Optional[str] = None
     status: ChapterStatus = ChapterStatus.DRAFT

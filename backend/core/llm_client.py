@@ -103,6 +103,13 @@ class LLMClient:
         self._client = None
         self._logger = logging.getLogger("novelist.llm")
         self._offline_warnings: set[str] = set()
+        self._last_chat_meta: Dict[str, Any] = {}
+
+    def _set_last_chat_meta(self, **kwargs: Any):
+        self._last_chat_meta = dict(kwargs)
+
+    def get_last_chat_meta(self) -> Dict[str, Any]:
+        return dict(self._last_chat_meta or {})
 
     def _warn_offline_once(self, reason: str):
         if reason in self._offline_warnings:
@@ -135,6 +142,12 @@ class LLMClient:
     ) -> Union[str, Any]:
         if not self.config.api_key:
             self._warn_offline_once("missing_api_key")
+            self._set_last_chat_meta(
+                mode="offline",
+                reason="missing_api_key",
+                provider=self.config.provider.value,
+                model=self.config.model,
+            )
             return self._offline_chat(messages)
 
         started = time.perf_counter()
@@ -158,6 +171,14 @@ class LLMClient:
                 )
                 return response
             content = response.choices[0].message.content
+            self._set_last_chat_meta(
+                mode="remote",
+                reason="success",
+                provider=self.config.provider.value,
+                model=self.config.model,
+                latency_ms=(time.perf_counter() - started) * 1000,
+                chars=len(content or ""),
+            )
             self._logger.info(
                 "llm chat remote success provider=%s model=%s latency_ms=%.2f chars=%d",
                 self.config.provider.value,
@@ -167,6 +188,13 @@ class LLMClient:
             )
             return content
         except Exception as exc:
+            self._set_last_chat_meta(
+                mode="offline",
+                reason="remote_exception",
+                provider=self.config.provider.value,
+                model=self.config.model,
+                error=str(exc)[:280],
+            )
             self._logger.warning(
                 "llm chat remote failed provider=%s model=%s error=%s fallback=offline",
                 self.config.provider.value,

@@ -240,15 +240,17 @@ def _select_goal_phrase(goal: str) -> str:
         candidate = seg
         if not candidate:
             continue
-        candidate = candidate[:14]
+        candidate = candidate[:18]
         score = 0
         length = len(candidate)
-        if 4 <= length <= 10:
-            score += 4
-        elif 3 <= length <= 12:
-            score += 2
-        elif length > 12:
-            score -= 1
+        if 3 <= length <= 16:
+            score += 3
+            if 6 <= length <= 12:
+                score += 1
+        elif length <= 2:
+            score -= 4
+        else:
+            score -= 2
         if not any(sw in candidate for sw in _TITLE_STOPWORDS):
             score += 2
         if candidate[:1] in _TITLE_BAD_PREFIXES:
@@ -264,7 +266,7 @@ def _select_goal_phrase(goal: str) -> str:
 def derive_title_from_goal(goal: str, chapter_number: int, phase: Optional[str] = None) -> str:
     phrase = _select_goal_phrase(goal)
     if phrase and not _is_bad_title(phrase):
-        return phrase[:18]
+        return phrase[:20]
 
     if phase:
         phase_candidate = _normalize_title_base(phase)
@@ -272,8 +274,11 @@ def derive_title_from_goal(goal: str, chapter_number: int, phase: Optional[str] 
             return phase_candidate[:18]
 
     fallback_bank = ["异响", "盲区", "裂缝", "回声", "错位", "重影", "阈值", "倒计时"]
-    word = fallback_bank[(max(chapter_number, 1) - 1) % len(fallback_bank)]
-    return f"{word}之夜"
+    suffix_bank = ["之夜", "逼近", "回响", "之后"]
+    idx = max(chapter_number, 1) - 1
+    word = fallback_bank[idx % len(fallback_bank)]
+    suffix = suffix_bank[idx % len(suffix_bank)]
+    return f"{word}{suffix}"
 
 
 def normalize_chapter_title(
@@ -288,8 +293,8 @@ def normalize_chapter_title(
     if _is_bad_title(title):
         title = derive_title_from_goal(goal, chapter_number, phase=phase)
 
-    if len(title) > 12:
-        title = title[:12].rstrip("，。！？；：:、-—_·. ")
+    if len(title) > 16:
+        title = title[:16].rstrip("，。！？；：:、-—_·. ")
     if _is_bad_title(title):
         title = derive_title_from_goal(goal, chapter_number, phase=phase)
 
