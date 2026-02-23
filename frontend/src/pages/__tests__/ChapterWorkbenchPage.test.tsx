@@ -46,6 +46,7 @@ const sampleChapter = {
         callback_targets: ['复仇'],
         role_goals: {},
     },
+    plan_quality: null,
     draft: '这是草稿内容，主角走在雪地里。',
     final: null,
     status: 'draft',
@@ -393,6 +394,28 @@ describe('ChapterWorkbenchPage', () => {
         })
     })
 
+    it('蓝图质量告警会显示在蓝图面板顶部', async () => {
+        mockApiGet.mockResolvedValue({
+            data: {
+                ...sampleChapter,
+                plan_quality: {
+                    status: 'warn',
+                    score: 58,
+                    issues: ['检测到模板化蓝图语句，建议重试生成。'],
+                    warnings: ['缺少角色目标，后续可在章节工作台补充。'],
+                    retried: true,
+                    attempts: 2,
+                },
+            },
+        })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('蓝图质量告警')).toBeTruthy()
+            expect(screen.getByText('评分 58')).toBeTruthy()
+            expect(screen.getByText('检测到模板化蓝图语句，建议重试生成。')).toBeTruthy()
+        })
+    })
+
     it('蓝图键值流会合并为单条而不是拆散成噪声卡片', async () => {
         mockApiGet.mockResolvedValue({
             data: {
@@ -511,6 +534,30 @@ describe('ChapterWorkbenchPage', () => {
         await waitFor(() => {
             expect(mockAddToast).toHaveBeenCalledWith('error', '蓝图生成失败', expect.objectContaining({
                 context: '蓝图生成',
+            }))
+        })
+    })
+
+    it('蓝图生成存在质量风险时触发 warning Toast', async () => {
+        mockApiPost.mockResolvedValue({
+            data: {
+                plan: sampleChapter.plan,
+                quality: {
+                    status: 'warn',
+                    score: 61,
+                    issues: ['节拍缺失，已自动补齐。'],
+                    warnings: ['缺少角色目标，后续可在章节工作台补充。'],
+                },
+            },
+        })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('重新生成蓝图')).toBeTruthy()
+        })
+        fireEvent.click(screen.getByText('重新生成蓝图'))
+        await waitFor(() => {
+            expect(mockAddToast).toHaveBeenCalledWith('warning', '蓝图质量告警', expect.objectContaining({
+                context: expect.stringContaining('质量分 61'),
             }))
         })
     })

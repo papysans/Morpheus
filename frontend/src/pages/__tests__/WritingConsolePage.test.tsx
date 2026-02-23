@@ -68,6 +68,7 @@ const mockStreamStore: Record<string, any> = {
     logs: [],
     error: null,
     generating: false,
+    clearStream: vi.fn(),
 }
 
 vi.mock('../../stores/useStreamStore', () => ({
@@ -124,7 +125,9 @@ describe('WritingConsolePage', () => {
         mockStreamStore.chapters = []
         mockStreamStore.logs = []
         mockStreamStore.error = null
+        mockStreamStore.clearStream = vi.fn()
         mockReadingMode = false
+        vi.stubGlobal('confirm', vi.fn(() => true))
     })
 
     it('渲染页面标题和项目名', () => {
@@ -218,6 +221,31 @@ describe('WritingConsolePage', () => {
         expect(screen.getByText('这是正文内容')).toBeTruthy()
     })
 
+    it('计划 JSON 会结构化展示而不是原样输出', () => {
+        mockStreamStore.sections = [
+            {
+                chapterId: 'ch-1',
+                chapterNumber: 1,
+                title: '序章',
+                body: JSON.stringify({
+                    beats: ['主角潜入镜城', '发现旧日志'],
+                    conflicts: ['外部阻力：哨兵追捕'],
+                    foreshadowing: ['日志指向导师编号'],
+                    callback_targets: ['回收第19章镜灵警告'],
+                    role_goals: { 林深: '带陈默活着离开' },
+                }),
+                waiting: false,
+            },
+        ]
+        renderPage()
+        expect(screen.getByText('章节计划草稿')).toBeTruthy()
+        expect(screen.getByText('主角潜入镜城')).toBeTruthy()
+        expect(
+            screen.getAllByText((_, node) => node?.textContent?.trim() === '林深：带陈默活着离开').length,
+        ).toBeGreaterThan(0)
+        expect(screen.queryByText(/"beats":/)).toBeNull()
+    })
+
     it('无内容时显示占位提示', () => {
         renderPage()
         expect(screen.getByText(/输入创作提示并点击/)).toBeTruthy()
@@ -251,6 +279,22 @@ describe('WritingConsolePage', () => {
         mockStreamStore.error = '连接超时'
         renderPage()
         expect(screen.getByText('连接超时')).toBeTruthy()
+    })
+
+    it('点击清空当前草稿只清空工作台展示区', () => {
+        mockStreamStore.sections = [
+            { chapterId: 'ch-1', chapterNumber: 1, title: '序章', body: '内容', waiting: false },
+        ]
+        mockStreamStore.chapters = [
+            { id: 'ch-1', chapter_number: 1, title: '序章', status: 'done', word_count: 1234, p0_count: 0 },
+        ]
+        mockStreamStore.logs = ['log-1']
+        renderPage()
+
+        fireEvent.click(screen.getByText('清空当前草稿'))
+
+        expect(mockStreamStore.clearStream).toHaveBeenCalledTimes(1)
+        expect(mockAddToast).toHaveBeenCalledWith('success', '已清空当前创作草稿显示区')
     })
 
     it('渲染高级设置区域', () => {

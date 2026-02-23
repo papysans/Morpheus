@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
-import { api } from '../lib/api'
+import { api, LLM_TIMEOUT } from '../lib/api'
 import { useProjectStore } from '../stores/useProjectStore'
 import { useToastStore } from '../stores/useToastStore'
 import { useActivityStore } from '../stores/useActivityStore'
@@ -43,12 +43,33 @@ interface Plan {
     role_goals: Record<string, string>
 }
 
+interface PlanQuality {
+    status: 'ok' | 'warn' | 'bad' | string
+    score: number
+    parser_source?: string
+    used_fallback?: boolean
+    retried?: boolean
+    attempts?: number
+    template_phrase_hits?: number
+    defaulted_fields?: string[]
+    issues?: string[]
+    warnings?: string[]
+}
+
+interface PlanQualityDebug {
+    selected_source?: string
+    initial_output_length?: number
+    retry_output_length?: number
+    initial_output_preview?: string
+}
+
 interface Chapter {
     id: string
     chapter_number: number
     title: string
     goal: string
     plan?: Plan
+    plan_quality?: PlanQuality | null
     draft?: string
     final?: string
     status: string
@@ -412,6 +433,14 @@ export default function ChapterWorkbenchPage() {
         [chapter?.plan?.callback_targets],
     )
 
+    const planQuality = chapter?.plan_quality || null
+    const planQualityMessages = useMemo(() => {
+        if (!planQuality) return [] as string[]
+        const issues = Array.isArray(planQuality.issues) ? planQuality.issues : []
+        const warnings = Array.isArray(planQuality.warnings) ? planQuality.warnings : []
+        return [...issues, ...warnings].filter(Boolean)
+    }, [planQuality])
+
     /* ── 章节导航（阅读模式用） ── */
     const sortedChapters = useMemo(
         () => [...storeChapters].sort((a, b) => a.chapter_number - b.chapter_number),
@@ -468,9 +497,28 @@ export default function ChapterWorkbenchPage() {
         if (!chapterId) return
         setLoadingPlan(true)
         try {
-            await api.post(`/chapters/${chapterId}/plan`)
+            const response = await api.post(`/chapters/${chapterId}/plan`, null, { timeout: LLM_TIMEOUT })
+            const quality = response?.data?.quality as PlanQuality | undefined
+            const qualityDebug = response?.data?.quality_debug as PlanQualityDebug | undefined
+            if (response?.data?.plan) {
+                setChapter((prev) => (prev ? {
+                    ...prev,
+                    plan: response.data.plan,
+                    plan_quality: quality || prev.plan_quality || null,
+                } : prev))
+            }
             await loadChapter()
             addToast('success', '蓝图生成成功')
+            if (quality && String(quality.status).toLowerCase() !== 'ok') {
+                const debugMeta = qualityDebug
+                    ? `解析来源=${quality.parser_source || '-'}；选用=${qualityDebug.selected_source || '-'}；初次输出长度=${qualityDebug.initial_output_length ?? 0}；重试输出长度=${qualityDebug.retry_output_length ?? 0}`
+                    : ''
+                const detail = [...(quality.issues || []), ...(quality.warnings || []), debugMeta].filter(Boolean).join('；')
+                addToast('warning', '蓝图质量告警', {
+                    context: `质量分 ${quality.score ?? '-'}，建议继续重试或手动微调`,
+                    detail: detail || '蓝图已生成，但结构质量未达到最佳阈值。',
+                })
+            }
             addRecord({ type: 'generate', description: '蓝图生成成功', status: 'success' })
         } catch (err: any) {
             console.error(err)
@@ -538,7 +586,7 @@ export default function ChapterWorkbenchPage() {
     const reviewDraft = async (action: 'approve' | 'reject') => {
         if (!chapterId) return
         try {
-            await api.post('/review', { chapter_id: chapterId, action })
+            await api.post('/review', { chapter_id: chapterId, action }, { timeout: LLM_TIMEOUT })
             if (projectId) invalidateCache('chapters', projectId)
             await loadChapter()
             addToast('success', action === 'approve' ? '审批通过，可进入下一章节继续创作' : '已退回重写')
@@ -596,7 +644,7 @@ export default function ChapterWorkbenchPage() {
                 target_words: oneShotWords,
                 override_goal: true,
                 rewrite_plan: true,
-            })
+            }, { timeout: LLM_TIMEOUT })
             if (response.data?.chapter) {
                 setChapter(response.data.chapter)
                 setDraftContent(response.data.chapter.draft ?? response.data.draft ?? '')
@@ -1132,6 +1180,29 @@ export default function ChapterWorkbenchPage() {
                         {/* 章节蓝图 */}
                         <section className="card" style={{ padding: 14 }}>
                             <h2 className="section-title">章节蓝图</h2>
+                            {planQuality && String(planQuality.status).toLowerCase() !== 'ok' && (
+                                <div
+                                    className={`blueprint-quality-alert ${String(planQuality.status).toLowerCase() === 'bad' ? 'blueprint-quality-alert--bad' : ''}`}
+                                    role="status"
+                                >
+                                    <div className="blueprint-quality-alert__head">
+                                        <span>蓝图质量告警</span>
+                                        <span>评分 {planQuality.score ?? '-'}</span>
+                                    </div>
+                                    {planQualityMessages.length > 0 && (
+                                        <ul className="blueprint-quality-alert__list">
+                                            {planQualityMessages.map((msg, idx) => (
+                                                <li key={`${msg}-${idx}`}>{msg}</li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                    {planQuality?.retried && (
+                                        <p className="blueprint-quality-alert__meta">
+                                            已自动重试 {planQuality.attempts || 1} 次；仍建议人工微调蓝图后再生成正文。
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                             {!chapter.plan && <p className="muted">尚未生成蓝图。</p>}
                             {chapter.plan && (
                                 <div className="blueprint-panel">
