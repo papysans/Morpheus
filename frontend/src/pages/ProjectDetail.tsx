@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { useProjectStore } from '../stores/useProjectStore'
+import { useProjectStore, type ChapterItem } from '../stores/useProjectStore'
 import { useToastStore } from '../stores/useToastStore'
 import { useActivityStore } from '../stores/useActivityStore'
 import { useRecentAccessStore } from '../stores/useRecentAccessStore'
@@ -36,6 +36,52 @@ export default function ProjectDetail() {
   const [chapterNumberInput, setChapterNumberInput] = useState('1')
   const [fieldErrors, setFieldErrors] = useState<Record<string, FieldError | null>>({})
   const projectReady = Boolean(projectId && currentProject && currentProject.id === projectId)
+
+  // Chapter list: search, filter, sort
+  const [chapterSearch, setChapterSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
+  type SortKey = 'chapter_number' | 'word_count' | 'conflict_count'
+  type SortDir = 'asc' | 'desc'
+  const [sortKey, setSortKey] = useState<SortKey>('chapter_number')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
+  const sortIndicator = (key: SortKey) =>
+    sortKey === key ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''
+
+  const filteredChapters = useMemo(() => {
+    let list: ChapterItem[] = chapters
+
+    // status filter
+    if (statusFilter !== 'all') {
+      list = list.filter((c) => c.status === statusFilter)
+    }
+
+    // keyword search
+    if (chapterSearch.trim()) {
+      const q = chapterSearch.trim().toLowerCase()
+      list = list.filter(
+        (c) =>
+          c.title.toLowerCase().includes(q) ||
+          (c.synopsis || '').toLowerCase().includes(q) ||
+          String(c.chapter_number).includes(q),
+      )
+    }
+
+    // sort
+    const dir = sortDir === 'asc' ? 1 : -1
+    list = [...list].sort((a, b) => (a[sortKey] - b[sortKey]) * dir)
+
+    return list
+  }, [chapters, statusFilter, chapterSearch, sortKey, sortDir])
 
   const isDirty = form.title !== '' || form.goal !== ''
   const { confirmClose, showConfirm, handleConfirm, handleCancel, message: confirmMessage } = useConfirmClose({ isDirty })
@@ -333,7 +379,29 @@ export default function ProjectDetail() {
         <section className="card" style={{ padding: 14, marginTop: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
             <h2 className="section-title">章节列表</h2>
-            <span className="chip">共 {chapters.length} 章</span>
+            <span className="chip">共 {chapters.length} 章{filteredChapters.length !== chapters.length ? ` · 筛选 ${filteredChapters.length} 章` : ''}</span>
+          </div>
+          {/* 搜索 + 筛选 + 排序 工具栏 */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
+            <input
+              className="input"
+              style={{ flex: 1, minWidth: 180, maxWidth: 320 }}
+              placeholder="搜索标题、概述或章节号..."
+              value={chapterSearch}
+              onChange={(e) => setChapterSearch(e.target.value)}
+            />
+            <select
+              className="input"
+              style={{ width: 120 }}
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="all">全部状态</option>
+              <option value="draft">draft</option>
+              <option value="reviewing">reviewing</option>
+              <option value="revised">revised</option>
+              <option value="approved">approved</option>
+            </select>
           </div>
           {chaptersError && (
             <div className="card-strong" style={{ padding: 10, marginBottom: 10 }}>
@@ -351,16 +419,23 @@ export default function ProjectDetail() {
             <table>
               <thead>
                 <tr>
-                  <th>#</th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('chapter_number')}>#{sortIndicator('chapter_number')}</th>
                   <th>标题</th>
-                  <th>章节目标</th>
+                  <th>章节概述</th>
                   <th>状态</th>
-                  <th>字数</th>
-                  <th>冲突数</th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('word_count')}>字数{sortIndicator('word_count')}</th>
+                  <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('conflict_count')}>冲突数{sortIndicator('conflict_count')}</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
+                {filteredChapters.length === 0 && chapters.length > 0 && (
+                  <tr>
+                    <td colSpan={7} className="muted">
+                      无匹配章节
+                    </td>
+                  </tr>
+                )}
                 {chapters.length === 0 && (
                   <tr>
                     <td colSpan={7} className="muted">
@@ -368,11 +443,11 @@ export default function ProjectDetail() {
                     </td>
                   </tr>
                 )}
-                {chapters.map((chapter) => (
+                {filteredChapters.map((chapter) => (
                   <tr key={chapter.id}>
                     <td>{chapter.chapter_number}</td>
                     <td>{chapter.title}</td>
-                    <td className="line-clamp-2" style={{ maxWidth: 360 }}>{chapter.goal}</td>
+                    <td style={{ maxWidth: 420, whiteSpace: 'pre-line', wordBreak: 'break-word' }}>{chapter.synopsis || <span className="muted">暂无概述</span>}</td>
                     <td><span className="chip">{chapter.status}</span></td>
                     <td>{chapter.word_count}</td>
                     <td>{chapter.conflict_count}</td>

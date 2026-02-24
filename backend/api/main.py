@@ -3146,12 +3146,28 @@ async def list_chapters(project_id: str):
     project = resolve_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Build chapter_number -> synopsis mapping from L3 memory
+    synopsis_map: Dict[int, str] = {}
+    try:
+        store = get_or_create_store(project_id)
+        synopses = store.three_layer.get_l3_items("chapter_synopsis")
+        for item in synopses:
+            summary = item.get("summary", "")
+            match = re.match(r"Chapter\s+(\d+)\s+synopsis", summary, re.IGNORECASE)
+            if match:
+                ch_num = int(match.group(1))
+                synopsis_map[ch_num] = item.get("content", "")
+    except Exception:
+        pass
+
     return [
         {
             "id": chapter.id,
             "chapter_number": chapter.chapter_number,
             "title": chapter.title,
             "goal": chapter.goal,
+            "synopsis": synopsis_map.get(chapter.chapter_number, ""),
             "status": chapter.status.value,
             "word_count": chapter.word_count,
             "conflict_count": len(chapter.conflicts),

@@ -35,6 +35,7 @@ export interface ChapterItem {
     chapter_number: number
     title: string
     goal: string
+    synopsis: string
     status: string
     word_count: number
     conflict_count: number
