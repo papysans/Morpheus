@@ -153,6 +153,7 @@ export default function MemoryBrowserPage() {
     const [expandedFileContent, setExpandedFileContent] = useState<string>('')
     const [fileContentLoading, setFileContentLoading] = useState(false)
     const [overviewFilter, setOverviewFilter] = useState<string>('')
+    const [fileSearchQuery, setFileSearchQuery] = useState('')
 
     // Load project context
     useEffect(() => {
@@ -251,7 +252,20 @@ export default function MemoryBrowserPage() {
         void searchMemory({ query: queryText, layer, silentWhenEmpty: true })
     }
 
-    const filteredFiles = overviewFilter ? memoryFiles.filter((f) => f.layer === overviewFilter) : memoryFiles
+    const filteredFiles = (() => {
+        let list = overviewFilter ? memoryFiles.filter((f) => f.layer === overviewFilter) : memoryFiles
+        if (fileSearchQuery.trim()) {
+            const q = fileSearchQuery.trim().toLowerCase()
+            list = list.filter(
+                (f) =>
+                    f.name.toLowerCase().includes(q) ||
+                    f.summary.toLowerCase().includes(q) ||
+                    f.path.toLowerCase().includes(q) ||
+                    (f.item_type || '').toLowerCase().includes(q),
+            )
+        }
+        return list
+    })()
 
     return (
         <PageTransition>
@@ -476,6 +490,16 @@ export default function MemoryBrowserPage() {
                                             </button>
                                         ))}
                                     </div>
+
+                                    {/* File search */}
+                                    <input
+                                        className="composer-input"
+                                        style={{ marginBottom: 8, fontSize: '0.84rem' }}
+                                        placeholder="搜索文件名、摘要、路径..."
+                                        value={fileSearchQuery}
+                                        onChange={(e) => setFileSearchQuery(e.target.value)}
+                                        aria-label="记忆文件搜索"
+                                    />
 
                                     {/* File list */}
                                     <div className="mb-file-list">
