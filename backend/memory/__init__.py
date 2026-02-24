@@ -118,13 +118,19 @@ class ThreeLayerMemory:
     def get_l3_items(self, item_type: Optional[str] = None) -> List[Dict[str, Any]]:
         items: List[Dict[str, Any]] = []
         for file_path in sorted(self.l3_dir.glob("*.md")):
-            content = file_path.read_text(encoding="utf-8")
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
             if not content.startswith("---"):
                 continue
             parts = content.split("---", 2)
             if len(parts) < 3:
                 continue
-            metadata = yaml.safe_load(parts[1]) or {}
+            try:
+                metadata = yaml.safe_load(parts[1]) or {}
+            except Exception:
+                continue
             entry = {
                 "id": metadata.get("id", file_path.stem),
                 "type": metadata.get("type", "unknown"),
@@ -140,7 +146,11 @@ class ThreeLayerMemory:
 
     def delete_l3_items_for_chapter(self, chapter_number: int) -> List[str]:
         deleted: List[str] = []
-        summary_pattern = re.compile(rf"^Chapter\s+{int(chapter_number)}\s+summary$", re.IGNORECASE)
+        chapter_pattern = re.compile(
+            rf"^Chapter\s+{int(chapter_number)}\s+(summary|synopsis)$",
+            re.IGNORECASE,
+        )
+        chapter_types = {"chapter_summary", "chapter_synopsis"}
         for file_path in sorted(self.l3_dir.glob("*.md")):
             try:
                 content = file_path.read_text(encoding="utf-8")
@@ -157,9 +167,9 @@ class ThreeLayerMemory:
                 continue
             item_type = str(metadata.get("type", "")).strip()
             summary = str(metadata.get("summary", "")).strip()
-            if item_type != "chapter_summary":
+            if item_type not in chapter_types:
                 continue
-            if not summary_pattern.match(summary):
+            if not chapter_pattern.match(summary):
                 continue
             try:
                 file_path.unlink()
@@ -254,19 +264,32 @@ class ThreeLayerMemory:
             f"Chapter {chapter_id} 正文字数 {len(chapter_content)}",
         ]
 
+        # NOTE: do NOT call delete_l3_items_for_chapter here.
+        # The caller (refresh_memory_after_chapter) already deleted old items
+        # and created a fresh synopsis. Deleting again would destroy that synopsis.
+        # We only need to add the summary item here.
         self.add_l3_item(
             summary=f"Chapter {chapter_id} summary",
             content=chapter_content,
             item_type="chapter_summary",
         )
 
+        # Dedup: replace existing chapter entry in MEMORY.md instead of appending
         memory = self.get_memory()
-        memory += (
+        new_entry = (
             f"\n### Chapter {chapter_id}\n"
             f"- 状态: 已完成\n"
             f"- 字数: {len(chapter_content)}\n"
             f"- 更新时间: {datetime.now().isoformat()}\n"
         )
+        pattern = re.compile(
+            rf"(\n###\s*Chapter\s+{chapter_id}\b.*?)(?=\n###\s|\n##\s|\Z)",
+            re.DOTALL,
+        )
+        if pattern.search(memory):
+            memory = pattern.sub(new_entry.rstrip(), memory)
+        else:
+            memory += new_entry
         self.update_memory(memory)
 
         return {"retains": retains, "downgrades": downgrades, "new_facts": new_facts}

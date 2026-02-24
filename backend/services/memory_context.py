@@ -677,6 +677,9 @@ class MemoryContextService:
         """
         result: dict = {"mode": mode, "chapter_number": chapter_number}
 
+        # Common: remove old L3 items for this chapter before adding new ones
+        self.three_layer.delete_l3_items_for_chapter(chapter_number)
+
         # Common: generate synopsis and add as L3 item
         synopsis = self.generate_chapter_synopsis(chapter_number, chapter_text, chapter_plan)
         self.three_layer.add_l3_item(
