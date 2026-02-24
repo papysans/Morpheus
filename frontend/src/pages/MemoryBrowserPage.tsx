@@ -264,6 +264,23 @@ export default function MemoryBrowserPage() {
                     (f.item_type || '').toLowerCase().includes(q),
             )
         }
+        // Sort L3 files by chapter number extracted from summary
+        const chapterNumFromSummary = (s: string): number => {
+            const m = s.match(/Chapter\s+(\d+)/i)
+            return m ? parseInt(m[1], 10) : Infinity
+        }
+        list = [...list].sort((a, b) => {
+            // Layer order: L1 < L2 < L3 < root
+            const layerOrder: Record<string, number> = { L1: 0, L2: 1, L3: 2, root: 3 }
+            const la = layerOrder[a.layer] ?? 4
+            const lb = layerOrder[b.layer] ?? 4
+            if (la !== lb) return la - lb
+            // Within L3, sort by chapter number
+            if (a.layer === 'L3' && b.layer === 'L3') {
+                return chapterNumFromSummary(a.summary) - chapterNumFromSummary(b.summary)
+            }
+            return 0
+        })
         return list
     })()
 
