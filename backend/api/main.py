@@ -12,7 +12,7 @@ import tempfile
 import sqlite3
 import zipfile
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4, uuid5, NAMESPACE_URL
@@ -42,6 +42,7 @@ from models import (
     AgentRole,
     AgentTrace,
     Chapter,
+    CharacterProfile,
     ChapterPlan,
     ChapterStatus,
     Conflict,
@@ -91,6 +92,8 @@ class Settings(BaseSettings):
     enable_http_logging: bool = True
     log_file: Optional[str] = None
     graph_feature_enabled: bool = False
+    l4_profile_enabled: bool = True
+    l4_auto_extract_enabled: bool = True
 
     model_config = SettingsConfigDict(
         extra="ignore",
@@ -303,8 +306,25 @@ def resolve_embedding_runtime(runtime: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+class _ChapterStore(dict):
+    """Dict supporting both flat chapters[cid] and nested chapters[pid][cid] access."""
+    def __getitem__(self, key):
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            view = {cid: ch for cid, ch in super().items() if ch.project_id == key}
+            if view:
+                return view
+            raise
+    def get(self, key, default=None):
+        val = super().get(key)
+        if val is not None:
+            return val
+        view = {cid: ch for cid, ch in super().items() if ch.project_id == key}
+        return view if view else default
+
 projects: Dict[str, Project] = {}
-chapters: Dict[str, Chapter] = {}
+chapters: _ChapterStore = _ChapterStore()
 memory_stores: Dict[str, MemoryStore] = {}
 studios: Dict[str, AgentStudio] = {}
 traces: Dict[str, AgentTrace] = {}
@@ -1116,6 +1136,33 @@ def get_or_create_studio(project_id: str) -> AgentStudio:
                 project_id,
             )
     return studios[project_id]
+
+def get_llm_client():
+    """Get LLM client from a temporary studio instance."""
+    tmp_id = "__llm_client_helper__"
+    studio = get_or_create_studio(tmp_id)
+    return studio.llm_client
+
+
+def trigger_l4_extraction_async(store, chapter_text: str, chapter_number: int, project_id: str) -> None:
+    """Trigger L4 character profile extraction for a chapter. Errors are swallowed."""
+    if not settings.l4_profile_enabled or not settings.l4_auto_extract_enabled:
+        return
+    try:
+        from services.character_profile_extraction import CharacterProfileExtractionService
+        from services.character_profile_merge import ProfileMergeEngine
+        llm = get_llm_client()
+        svc = CharacterProfileExtractionService(llm_client=llm)
+        result = svc.extract(chapter_text=chapter_text, chapter=chapter_number, project_id=project_id)
+        if not result.success:
+            return
+        engine = ProfileMergeEngine()
+        for incoming in result.profiles:
+            existing = store.get_profile(incoming.profile_id)
+            merged = engine.merge(existing=existing, incoming=incoming)
+            store.upsert_profile(merged)
+    except Exception:
+        logger.warning("L4 extraction failed chapter_no=%d project_id=%s", chapter_number, project_id, exc_info=True)
 
 
 def chapter_list(project_id: str) -> List[Chapter]:
@@ -3076,6 +3123,16 @@ async def export_project(project_id: str):
         tmp_copy,
         ignore=shutil.ignore_patterns("index", "graph"),
     )
+    # Write export_meta.json with version info
+    export_meta = {
+        "export_version": "2",
+        "exported_at": datetime.now(tz=timezone.utc).isoformat(),
+        "project_id": project_id,
+    }
+    (tmp_copy / "export_meta.json").write_text(
+        json.dumps(export_meta, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     archive_base = tmp_dir / f"archive-{project_id}"
     archive_path = Path(
         shutil.make_archive(
@@ -3139,6 +3196,7 @@ async def import_project(file: UploadFile = File(...)):
 
         project_root = project_file_path.parent
         project_data = json.loads(project_file_path.read_text(encoding="utf-8"))
+        old_project_id = project_data.get("id", "")
         new_project_id = str(uuid4())
         project_data["id"] = new_project_id
         project_data["fanqie_book_id"] = None
@@ -3181,6 +3239,36 @@ async def import_project(file: UploadFile = File(...)):
             await sync_method()
         else:
             sync_method()
+
+        # Re-map L4 profiles from old project_id to new project_id
+        try:
+            old_db_path = destination / "novelist.db"
+            if old_db_path.exists():
+                import sqlite3 as _sqlite3
+                _conn = _sqlite3.connect(str(old_db_path))
+                _conn.row_factory = _sqlite3.Row
+                try:
+                    _rows = _conn.execute(
+                        "SELECT profile_id, data FROM character_profiles WHERE project_id = ?",
+                        (old_project_id,),
+                    ).fetchall()
+                except Exception:
+                    _rows = []
+                finally:
+                    _conn.close()
+                if _rows:
+                    for _old_pid, _data_json in _rows:
+                        try:
+                            _profile_data = json.loads(_data_json)
+                            _profile_data["project_id"] = new_project_id
+                            _char_name = _profile_data.get("character_name", "")
+                            _profile_data["profile_id"] = MemoryStore.make_profile_id(new_project_id, _char_name)
+                            _profile = CharacterProfile(**_profile_data)
+                            store.upsert_profile(_profile)
+                        except Exception:
+                            logger.warning("L4 profile re-map failed for old_pid=%s", _old_pid, exc_info=True)
+        except Exception:
+            logger.warning("L4 import re-map failed project_id=%s", new_project_id, exc_info=True)
 
         return {
             "project_id": new_project_id,
@@ -3660,6 +3748,17 @@ async def run_one_shot_book_generation(
                     chapter.chapter_number,
                     exc_info=True,
                 )
+
+            # L4: auto-extract character profiles after auto-approval
+            try:
+                trigger_l4_extraction_async(
+                    store=store,
+                    chapter_text=chapter.final or "",
+                    chapter_number=chapter.chapter_number,
+                    project_id=project_id,
+                )
+            except Exception:
+                logger.warning("L4 trigger failed chapter_id=%s", chapter.id, exc_info=True)
 
             logger.info(
                 "one-shot-book chapter auto-approved project_id=%s chapter_id=%s chapter_no=%d",
@@ -4669,6 +4768,17 @@ async def review_chapter(req: ReviewRequest):
                     chapter.chapter_number,
                     exc_info=True,
                 )
+
+            # L4: auto-extract character profiles after chapter approval
+            try:
+                trigger_l4_extraction_async(
+                    store=store,
+                    chapter_text=chapter.final,
+                    chapter_number=chapter.chapter_number,
+                    project_id=chapter.project_id,
+                )
+            except Exception:
+                logger.warning("L4 trigger failed chapter_id=%s", chapter.id, exc_info=True)
     elif req.action == ReviewAction.REJECT:
         chapter.status = ChapterStatus.DRAFT
     elif req.action == ReviewAction.REWRITE:
@@ -5150,6 +5260,113 @@ async def get_events(project_id: str):
     events = sanitize_graph_events(store.get_all_events())
     return [event.model_dump(mode="json") for event in events]
 
+
+@app.get("/api/projects/{project_id}/graph")
+async def get_graph_data(project_id: str):
+    """Return graph nodes and edges from L4 character profiles."""
+    store = get_or_create_store(project_id)
+    try:
+        profiles = store.list_profiles(project_id)
+    except Exception:
+        return {"nodes": [], "edges": []}
+    nodes = []
+    edges = []
+    seen_edge_ids: set = set()
+    for profile in profiles:
+        nodes.append({
+            "id": profile.profile_id,
+            "label": profile.character_name,
+            "overview": profile.overview or "",
+            "personality": profile.personality or "",
+        })
+        for rel in (profile.relationships or []):
+            target_pid = MemoryStore.make_profile_id(project_id, rel.target_character)
+            edge_key = f"{profile.profile_id}:{target_pid}:{rel.relation_type}"
+            edge_id = hashlib.md5(edge_key.encode()).hexdigest()[:12]
+            if edge_id not in seen_edge_ids:
+                seen_edge_ids.add(edge_id)
+                edges.append({
+                    "id": edge_id,
+                    "source": profile.profile_id,
+                    "target": target_pid,
+                    "label": rel.relation_type or "",
+                })
+    return {"nodes": nodes, "edges": edges}
+
+@app.get("/api/projects/{project_id}/profiles")
+async def list_profiles(project_id: str):
+    store = get_or_create_store(project_id)
+    profiles = store.list_profiles(project_id)
+    return [p.model_dump(mode="json") for p in profiles]
+
+
+@app.get("/api/projects/{project_id}/profiles/{profile_id}")
+async def get_profile(project_id: str, profile_id: str):
+    store = get_or_create_store(project_id)
+    profile = store.get_profile(profile_id)
+    if not profile or profile.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile.model_dump(mode="json")
+
+
+from pydantic import model_validator as _mv
+class RebuildRequest(BaseModel):
+    start_chapter: Optional[int] = Field(default=None, ge=1)
+    end_chapter: Optional[int] = Field(default=None, ge=1)
+    character_names: Optional[List[str]] = None
+    @_mv(mode='after')
+    def check_range(self):
+        if self.start_chapter is not None and self.end_chapter is not None:
+            if self.start_chapter > self.end_chapter:
+                raise ValueError('start_chapter must be <= end_chapter')
+        return self
+
+@app.post("/api/projects/{project_id}/profiles/rebuild")
+async def rebuild_profiles(project_id: str, req: RebuildRequest = None):
+    if not resolve_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    if req is None:
+        req = RebuildRequest()
+    store = get_or_create_store(project_id)
+    chapters_data = chapters.get(project_id, {})
+    processed = 0
+    updated = 0
+    skipped = 0
+    errors = 0
+    for ch_id, chapter in (chapters_data.items() if isinstance(chapters_data, dict) else []):
+        ch_num = chapter.chapter_number
+        if req.start_chapter is not None and ch_num < req.start_chapter:
+            skipped += 1
+            continue
+        if req.end_chapter is not None and ch_num > req.end_chapter:
+            skipped += 1
+            continue
+        text = chapter.final or chapter.draft or ""
+        if not text.strip():
+            skipped += 1
+            continue
+        processed += 1
+        try:
+            llm = get_llm_client()
+            from services.character_profile_extraction import CharacterProfileExtractionService
+            from services.character_profile_merge import ProfileMergeEngine
+            svc = CharacterProfileExtractionService(llm_client=llm)
+            result = svc.extract(chapter_text=text, chapter=ch_num, project_id=project_id)
+            if not result.success:
+                errors += 1
+                continue
+            engine = ProfileMergeEngine()
+            for incoming in result.profiles:
+                if req.character_names and incoming.character_name not in req.character_names:
+                    continue
+                existing = store.get_profile(incoming.profile_id)
+                merged = engine.merge(existing=existing, incoming=incoming)
+                store.upsert_profile(merged)
+                updated += 1
+        except Exception:
+            logger.warning("rebuild extraction failed ch=%d project=%s", ch_num, project_id, exc_info=True)
+            errors += 1
+    return {"processed": processed, "updated": updated, "skipped": skipped, "errors": errors}
 
 @app.get("/api/projects/{project_id}/memory/files")
 async def list_memory_files(project_id: str):

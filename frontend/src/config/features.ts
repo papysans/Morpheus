@@ -6,4 +6,6 @@ const parseBool = (value: unknown, fallback: boolean): boolean => {
     return fallback
 }
 
-export const GRAPH_FEATURE_ENABLED = parseBool(import.meta.env.VITE_GRAPH_FEATURE_ENABLED, false)
+export const GRAPH_FEATURE_ENABLED = parseBool(import.meta.env.VITE_GRAPH_FEATURE_ENABLED, true)
+export const L4_PROFILE_ENABLED = parseBool(import.meta.env.VITE_L4_PROFILE_ENABLED, true)
+export const L4_AUTO_EXTRACT_ENABLED = parseBool(import.meta.env.VITE_L4_AUTO_EXTRACT_ENABLED, true)

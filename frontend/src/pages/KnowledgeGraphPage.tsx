@@ -45,6 +45,20 @@ export interface BuildGraphEdgeOptions {
     latestPerPair?: boolean
 }
 
+export interface L4GraphNode {
+    id: string
+    label: string
+    overview?: string
+    personality?: string
+}
+
+export interface L4GraphEdge {
+    id: string
+    source: string
+    target: string
+    label: string
+}
+
 /* ── Style config ── */
 
 export const ENTITY_STYLES: Record<string, { color: string; borderColor: string; textColor: string; shape: string; label: string }> = {
@@ -586,6 +600,50 @@ export function sanitizeGraphData(
     return { entities: sanitizedEntities, events: sanitizedEvents }
 }
 
+export function buildL4GraphNodes(l4Nodes: L4GraphNode[]): Node<EntityNodeData>[] {
+    const cols = 4
+    const xGap = 200
+    const yGap = 160
+    return l4Nodes.map((node, i) => {
+        const col = i % cols
+        const row = Math.floor(i / cols)
+        return {
+            id: node.id,
+            type: 'entity',
+            position: { x: col * xGap + 50, y: row * yGap + 50 },
+            data: {
+                label: node.label,
+                entityType: 'character' as const,
+                attrs: {
+                    ...(node.overview ? { 概述: node.overview } : {}),
+                    ...(node.personality ? { 性格: node.personality } : {}),
+                },
+                firstSeen: 0,
+                lastSeen: 0,
+                highlighted: false,
+                dimmed: false,
+            },
+        }
+    })
+}
+
+export function buildL4GraphEdges(l4Edges: L4GraphEdge[]): Edge[] {
+    return l4Edges.map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        type: 'default',
+        label: edge.label,
+        animated: false,
+        style: { stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
+        labelStyle: { fill: '#5a6e8d', fontSize: 11 },
+        labelBgStyle: { fill: 'rgba(255, 255, 255, 0.9)', fillOpacity: 0.9 },
+        labelBgPadding: [6, 4] as [number, number],
+        labelBgBorderRadius: 4,
+        markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(102, 124, 164, 0.3)' },
+    }))
+}
+
 /* ── Main Page Component ── */
 
 export default function KnowledgeGraphPage() {
@@ -594,8 +652,10 @@ export default function KnowledgeGraphPage() {
     const currentProject = useProjectStore((s) => s.currentProject)
     const addToast = useToastStore((s) => s.addToast)
 
-    const [entities, setEntities] = useState<EntityNode[]>([])
+    const [_entities, setEntities] = useState<EntityNode[]>([])
     const [events, setEvents] = useState<EventEdge[]>([])
+    const [l4Nodes, setL4Nodes] = useState<L4GraphNode[]>([])
+    const [l4Edges, setL4Edges] = useState<L4GraphEdge[]>([])
     const [loading, setLoading] = useState(true)
     const [tab, setTab] = useState<'graph' | 'timeline'>('graph')
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -635,15 +695,15 @@ export default function KnowledgeGraphPage() {
         setEdges([])
         setSelectedNodeId(null)
         try {
-            const [entityRes, eventRes] = await Promise.all([
-                api.get(`/entities/${projectId}`),
+            const [graphRes, eventRes] = await Promise.all([
+                api.get(`/projects/${projectId}/graph`),
                 api.get(`/events/${projectId}`),
             ])
-            const loadedEntities: EntityNode[] = entityRes.data ?? []
-            const loadedEvents: EventEdge[] = eventRes.data ?? []
-            const sanitized = sanitizeGraphData(loadedEntities, loadedEvents)
-            setEntities(sanitized.entities)
-            setEvents(sanitized.events)
+            const newL4Nodes: L4GraphNode[] = graphRes.data?.nodes ?? []
+            const newL4Edges: L4GraphEdge[] = graphRes.data?.edges ?? []
+            setL4Nodes(newL4Nodes)
+            setL4Edges(newL4Edges)
+            setEvents(eventRes.data ?? [])
         } catch (error) {
             addToast('error', '加载知识图谱数据失败')
             console.error(error)
@@ -655,7 +715,7 @@ export default function KnowledgeGraphPage() {
 
     useEffect(() => {
         if (!GRAPH_FEATURE_ENABLED) return
-        if (entities.length === 0) {
+        if (l4Nodes.length === 0) {
             setNodes([])
             setEdges([])
             return
@@ -664,13 +724,10 @@ export default function KnowledgeGraphPage() {
         layoutRunRef.current = currentRun
         setLayoutLoading(true)
 
-        const baseNodes = buildGraphNodes(entities)
-        const baseEdges = buildGraphEdges(events, entities, {
-            includeProgress: showProgressEdges,
-            latestPerPair: !showAllPairEdges,
-        })
+        const rfNodes = buildL4GraphNodes(l4Nodes)
+        const rfEdges = buildL4GraphEdges(l4Edges)
 
-        void layoutGraphWithElk(baseNodes, baseEdges)
+        void layoutGraphWithElk(rfNodes, rfEdges)
             .then((layouted) => {
                 if (layoutRunRef.current !== currentRun) return
                 setNodes(layouted.nodes)
@@ -683,15 +740,15 @@ export default function KnowledgeGraphPage() {
             .catch((error) => {
                 if (layoutRunRef.current !== currentRun) return
                 console.error('ELK layout failed, fallback to static positions', error)
-                setNodes(baseNodes)
-                setEdges(baseEdges)
+                setNodes(rfNodes)
+                setEdges(rfEdges)
                 setSelectedNodeId(null)
             })
             .finally(() => {
                 if (layoutRunRef.current !== currentRun) return
                 setLayoutLoading(false)
             })
-    }, [events, entities, showProgressEdges, showAllPairEdges, setEdges, setNodes])
+    }, [l4Nodes, l4Edges, setEdges, setNodes])
 
     // Handle node click → highlight neighbors
     const onNodeClick = useCallback(
@@ -869,8 +926,8 @@ export default function KnowledgeGraphPage() {
                                 position: 'relative',
                             }}
                         >
-                            {entities.length === 0 ? (
-                                <p className="muted" style={{ padding: 24 }}>暂无实体数据，请先生成章节。</p>
+                            {l4Nodes.length === 0 ? (
+                                <p className="muted" style={{ padding: 24 }}>暂无角色档案，完成章节后自动生成</p>
                             ) : (
                                 <ReactFlow
                                     nodes={nodes}
@@ -887,7 +944,7 @@ export default function KnowledgeGraphPage() {
                                     style={{ background: 'transparent' }}
                                 />
                             )}
-                            {layoutLoading && entities.length > 0 && (
+                            {layoutLoading && l4Nodes.length > 0 && (
                                 <div
                                     style={{
                                         position: 'absolute',

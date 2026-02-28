@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { api } from '../lib/api'
+import { L4_PROFILE_ENABLED } from '../config/features'
 import { useProjectStore } from '../stores/useProjectStore'
 import { useToastStore } from '../stores/useToastStore'
 import PageTransition from '../components/ui/PageTransition'
@@ -20,6 +21,14 @@ interface MemoryResult {
     score?: number
 }
 
+interface CharacterProfile {
+    profile_id: string
+    character_name: string
+    overview?: string
+    personality?: string
+    relationships?: Array<{ source_character: string; target_character: string; relation_type: string; chapter: number }>
+    state_changes?: Array<{ character: string; attribute: string; before: string; after: string; chapter: number }>
+}
 interface MemoryFileItem {
     layer: string
     name: string
@@ -37,7 +46,8 @@ const LAYER_OPTIONS = [
     { value: 'L1', label: '仅 L1' },
     { value: 'L2', label: '仅 L2' },
     { value: 'L3', label: '仅 L3' },
-] as const
+    ...(L4_PROFILE_ENABLED ? [{ value: 'L4', label: '角色档案 L4' }] : []),
+]
 
 const QUICK_QUERIES = [
     { label: '主角动机', query: '主角 目标 动机', layer: '' },
@@ -155,6 +165,11 @@ export default function MemoryBrowserPage() {
     const [overviewFilter, setOverviewFilter] = useState<string>('')
     const [fileSearchQuery, setFileSearchQuery] = useState('')
 
+    // L4 profile state
+    const [profiles, setProfiles] = useState<CharacterProfile[]>([])
+    const [profilesLoading, setProfilesLoading] = useState(false)
+    const [rebuilding, setRebuilding] = useState(false)
+
     // Load project context
     useEffect(() => {
         if (projectId && currentProject?.id !== projectId) fetchProject(projectId)
@@ -217,6 +232,39 @@ export default function MemoryBrowserPage() {
             addToast('error', '保存身份设定失败')
         } finally {
             setSaving(false)
+        }
+    }
+
+    const loadProfiles = useCallback(async () => {
+        if (!projectId) return
+        setProfilesLoading(true)
+        try {
+            const res = await api.get(`/projects/${projectId}/profiles`)
+            setProfiles(res.data ?? [])
+        } catch {
+            addToast('error', '加载角色档案失败')
+        } finally {
+            setProfilesLoading(false)
+        }
+    }, [projectId, addToast])
+
+    useEffect(() => {
+        if (layerFilter === 'L4' && L4_PROFILE_ENABLED) {
+            void loadProfiles()
+        }
+    }, [layerFilter, loadProfiles])
+
+    const rebuildProfiles = async () => {
+        if (!projectId) return
+        setRebuilding(true)
+        try {
+            await api.post(`/projects/${projectId}/profiles/rebuild`, {})
+            addToast('success', 'L4 档案重建完成')
+            void loadProfiles()
+        } catch {
+            addToast('error', 'L4 档案重建失败')
+        } finally {
+            setRebuilding(false)
         }
     }
 
@@ -371,7 +419,8 @@ export default function MemoryBrowserPage() {
                                         </div>
                                     </div>
 
-                                    {/* Quick queries */}
+                                    {/* Quick queries + Search results (hidden when L4 selected) */}
+                                    {layerFilter !== 'L4' && (<>
                                     {!searching && filteredResults.length === 0 && !query.trim() && (
                                         <div className="mb-quick-queries">
                                             <span className="muted" style={{ fontSize: '0.8rem' }}>快速检索:</span>
@@ -475,6 +524,50 @@ export default function MemoryBrowserPage() {
                                             })}
                                         </AnimatePresence>
                                     </div>
+                                    </>
+                                    )}
+
+                                    {/* L4 Character Profiles */}
+                                    {layerFilter === 'L4' && L4_PROFILE_ENABLED && (
+                                        <div style={{ padding: '12px 0' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                                <span style={{ fontSize: '0.84rem', color: 'var(--text-muted, #888)' }}>角色档案</span>
+                                                <button
+                                                    className="chip-btn"
+                                                    onClick={rebuildProfiles}
+                                                    disabled={rebuilding}
+                                                    style={{ fontSize: '0.76rem', padding: '3px 10px' }}
+                                                >
+                                                    {rebuilding ? '重建中...' : '重跑 L4'}
+                                                </button>
+                                            </div>
+                                            {profilesLoading && <div className="muted" style={{ fontSize: '0.84rem' }}>加载中...</div>}
+                                            {!profilesLoading && profiles.length === 0 && (
+                                                <p className="muted" style={{ padding: '8px 0', fontSize: '0.84rem' }}>暂无角色档案。</p>
+                                            )}
+                                            {!profilesLoading && profiles.map((profile) => (
+                                                <div key={profile.profile_id} className="card" style={{ marginBottom: 8, padding: 12 }}>
+                                                    <h3 style={{ margin: '0 0 4px', fontSize: '1rem' }}>{profile.character_name}</h3>
+                                                    {profile.overview && <p style={{ margin: '0 0 4px', color: 'var(--text-muted, #666)', fontSize: '0.85rem' }}>{profile.overview}</p>}
+                                                    {profile.personality && <p style={{ margin: '0 0 4px', color: 'var(--text-muted, #666)', fontSize: '0.85rem' }}>{profile.personality}</p>}
+                                                    {profile.relationships && profile.relationships.length > 0 && (
+                                                        <ul style={{ margin: '4px 0', paddingLeft: 16, fontSize: '0.82rem' }}>
+                                                            {profile.relationships.map((r, i) => (
+                                                                <li key={i}>{r.source_character} → {r.target_character}（{r.relation_type}）</li>
+                                                            ))}
+                                                        </ul>
+                                                    )}
+                                                    {profile.state_changes && profile.state_changes.length > 0 && (
+                                                        <ul style={{ margin: '4px 0', paddingLeft: 16, fontSize: '0.82rem' }}>
+                                                            {profile.state_changes.map((s, i) => (
+                                                                <li key={i}>{s.character}：{s.attribute} {s.before} → {s.after}</li>
+                                                            ))}
+                                                        </ul>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </section>
 
                                 {/* Right: File Browser */}

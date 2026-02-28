@@ -27,11 +27,13 @@ function filterMotionProps(props: Record<string, any>) {
 
 const mockApiGet = vi.fn()
 const mockApiPut = vi.fn()
+const mockApiPost = vi.fn()
 
 vi.mock('../../lib/api', () => ({
     api: {
         get: (...args: any[]) => mockApiGet(...args),
         put: (...args: any[]) => mockApiPut(...args),
+        post: (...args: any[]) => mockApiPost(...args),
     },
 }))
 
@@ -506,6 +508,85 @@ describe('MemoryBrowserPage', () => {
 
         await waitFor(() => {
             expect(screen.queryByText('过程记忆')).not.toBeInTheDocument()
+        })
+    })
+})
+
+describe('L4 Character Profiles', () => {
+    it('shows L4 layer option in filter', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url.includes('/identity/')) return Promise.resolve({ data: { content: '' } })
+            if (url.includes('/memory/files')) return Promise.resolve({ data: { files: [] } })
+            if (url.includes('/profiles')) return Promise.resolve({ data: [] })
+            return Promise.resolve({ data: {} })
+        })
+
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByLabelText('层级筛选')).toBeInTheDocument()
+        })
+
+        const select = screen.getByLabelText('层级筛选')
+        const options = Array.from(select.querySelectorAll('option'))
+        expect(options.some((o) => (o as HTMLOptionElement).value === 'L4')).toBe(true)
+    })
+
+    it('renders character profile cards when L4 selected', async () => {
+        const sampleProfiles = [{
+            profile_id: 'prof-1',
+            character_name: '张三',
+            overview: '主角',
+            personality: '冷静',
+            relationships: [{ source_character: '张三', target_character: '李四', relation_type: '师徒', chapter: 1 }],
+            state_changes: [{ character: '张三', attribute: '心情', before: '平静', after: '愤怒', chapter: 1 }],
+        }]
+
+        mockApiGet.mockImplementation((url: string) => {
+            if (url.includes('/identity/')) return Promise.resolve({ data: { content: '' } })
+            if (url.includes('/memory/files')) return Promise.resolve({ data: { files: [] } })
+            if (url.includes('/profiles')) return Promise.resolve({ data: sampleProfiles })
+            return Promise.resolve({ data: {} })
+        })
+
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByLabelText('层级筛选')).toBeInTheDocument()
+        })
+
+        fireEvent.change(screen.getByLabelText('层级筛选'), { target: { value: 'L4' } })
+
+        await waitFor(() => {
+            expect(screen.getByText('张三')).toBeInTheDocument()
+            expect(screen.getByText('主角')).toBeInTheDocument()
+        })
+    })
+
+    it('shows rebuild button and calls rebuild API on click', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url.includes('/identity/')) return Promise.resolve({ data: { content: '' } })
+            if (url.includes('/memory/files')) return Promise.resolve({ data: { files: [] } })
+            if (url.includes('/profiles')) return Promise.resolve({ data: [] })
+            return Promise.resolve({ data: {} })
+        })
+        mockApiPost.mockResolvedValueOnce({ data: { processed: 2, updated: 1, skipped: 0, errors: 0 } })
+
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByLabelText('层级筛选')).toBeInTheDocument()
+        })
+
+        fireEvent.change(screen.getByLabelText('层级筛选'), { target: { value: 'L4' } })
+
+        await waitFor(() => {
+            expect(screen.getByText(/重跑 L4/)).toBeInTheDocument()
+        })
+
+        fireEvent.click(screen.getByText(/重跑 L4/))
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith('/projects/proj-1/profiles/rebuild', {})
+            const toasts = useToastStore.getState().toasts
+            expect(toasts.some((t) => t.type === 'success')).toBe(true)
         })
     })
 })
