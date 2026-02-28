@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { api } from '../lib/api'
@@ -106,12 +106,7 @@ export default function TraceReplayPage() {
         fetchChapters(projectId).finally(() => setLoading(false))
     }, [projectId, chapterId, fetchChapters])
 
-    useEffect(() => {
-        if (!chapterId) return
-        loadTrace()
-    }, [chapterId])
-
-    const loadTrace = async () => {
+    const loadTrace = useCallback(async () => {
         setLoading(true)
         try {
             const response = await api.get(`/trace/${chapterId}`)
@@ -123,7 +118,12 @@ export default function TraceReplayPage() {
         } finally {
             setLoading(false)
         }
-    }
+    }, [addToast, chapterId])
+
+    useEffect(() => {
+        if (!chapterId) return
+        void loadTrace()
+    }, [chapterId, loadTrace])
 
     const selectedDecision = useMemo(
         () => trace?.decisions.find((d) => d.id === selectedDecisionId) ?? null,

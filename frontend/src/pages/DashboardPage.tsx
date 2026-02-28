@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -132,11 +132,7 @@ export default function DashboardPage() {
         [metrics, selectedDrillKey],
     )
 
-    useEffect(() => {
-        loadData()
-    }, [])
-
-    const loadData = async () => {
+    const loadData = useCallback(async () => {
         setLoading(true)
         try {
             const [metricRes, projectRes] = await Promise.all([
@@ -150,7 +146,11 @@ export default function DashboardPage() {
         } finally {
             setLoading(false)
         }
-    }
+    }, [addToast])
+
+    useEffect(() => {
+        void loadData()
+    }, [loadData])
 
     if (loading) {
         return (
