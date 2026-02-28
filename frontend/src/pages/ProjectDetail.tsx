@@ -44,6 +44,8 @@ export default function ProjectDetail() {
   type SortDir = 'asc' | 'desc'
   const [sortKey, setSortKey] = useState<SortKey>('chapter_number')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [selectedChapterIds, setSelectedChapterIds] = useState<string[]>([])
+  const [batchDeleting, setBatchDeleting] = useState(false)
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -82,6 +84,26 @@ export default function ProjectDetail() {
 
     return list
   }, [chapters, statusFilter, chapterSearch, sortKey, sortDir])
+
+  const filteredChapterIds = useMemo(() => filteredChapters.map((c) => c.id), [filteredChapters])
+
+  const toggleChapterSelection = (id: string, selected: boolean) => {
+    setSelectedChapterIds((prev) => {
+      const current = new Set(prev)
+      if (selected) current.add(id)
+      else current.delete(id)
+      return Array.from(current)
+    })
+  }
+
+  const handleSelectAllChapters = () => {
+    const allSelected = filteredChapterIds.length > 0 && filteredChapterIds.every((id) => selectedChapterIds.includes(id))
+    if (allSelected) {
+      setSelectedChapterIds((prev) => prev.filter((id) => !filteredChapterIds.includes(id)))
+    } else {
+      setSelectedChapterIds((prev) => [...new Set([...prev, ...filteredChapterIds])])
+    }
+  }
 
   const isDirty = form.title !== '' || form.goal !== ''
   const { confirmClose, showConfirm, handleConfirm, handleCancel, message: confirmMessage } = useConfirmClose({ isDirty })
@@ -134,6 +156,11 @@ export default function ProjectDetail() {
       setChapterNumberInput(String(nextChapterNumber))
     }
   }, [currentProject])
+
+  useEffect(() => {
+    const existingIds = new Set(chapters.map((c) => c.id))
+    setSelectedChapterIds((prev) => prev.filter((id) => existingIds.has(id)))
+  }, [chapters])
 
   const createChapter = async () => {
     if (!projectId || !form.title.trim() || !form.goal.trim()) return
@@ -237,6 +264,43 @@ export default function ProjectDetail() {
     } finally {
       setDeletingChapterId(null)
     }
+  }
+
+  const handleBatchDeleteChapters = async () => {
+    if (selectedChapterIds.length === 0 || !projectId) return
+    const confirmed = window.confirm(`确认删除已选中的 ${selectedChapterIds.length} 个章节？此操作不可恢复。`)
+    if (!confirmed) return
+    setBatchDeleting(true)
+    let deletedCount = 0
+    let failedCount = 0
+    for (const chapterId of selectedChapterIds) {
+      try {
+        try {
+          await api.delete(`/chapters/${chapterId}`)
+        } catch (error: any) {
+          if (error?.response?.status === 405) {
+            await api.post(`/chapters/${chapterId}/delete`)
+          } else {
+            throw error
+          }
+        }
+        deletedCount++
+      } catch {
+        failedCount++
+      }
+    }
+    if (failedCount === 0) {
+      addToast('success', `已删除 ${deletedCount} 个章节`)
+      addRecord({ type: 'delete', description: `批量删除 ${deletedCount} 个章节`, status: 'success' })
+    } else {
+      addToast('warning', `删除 ${deletedCount} 个，失败 ${failedCount} 个`)
+    }
+    setSelectedChapterIds([])
+    invalidateCache('chapters', projectId)
+    invalidateCache('project', projectId)
+    await fetchProject(projectId, { force: true })
+    await fetchChapters(projectId, { force: true })
+    setBatchDeleting(false)
   }
 
   // Loading skeleton
@@ -403,6 +467,25 @@ export default function ProjectDetail() {
               <option value="approved">approved</option>
             </select>
           </div>
+          {selectedChapterIds.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+              <button
+                className="danger-btn"
+                style={{ fontSize: '0.85rem' }}
+                onClick={() => void handleBatchDeleteChapters()}
+                disabled={batchDeleting}
+              >
+                {batchDeleting ? '删除中...' : `批量删除 (${selectedChapterIds.length})`}
+              </button>
+              <button
+                className="btn btn-secondary"
+                style={{ fontSize: '0.85rem' }}
+                onClick={() => setSelectedChapterIds([])}
+              >
+                清空选择
+              </button>
+            </div>
+          )}
           {chaptersError && (
             <div className="card-strong" style={{ padding: 10, marginBottom: 10 }}>
               <p style={{ margin: 0 }}>{chaptersError}</p>
@@ -419,6 +502,14 @@ export default function ProjectDetail() {
             <table>
               <thead>
                 <tr>
+                  <th style={{ width: 36 }}>
+                    <input
+                      type="checkbox"
+                      checked={filteredChapterIds.length > 0 && filteredChapterIds.every((id) => selectedChapterIds.includes(id))}
+                      onChange={handleSelectAllChapters}
+                      aria-label="全选章节"
+                    />
+                  </th>
                   <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('chapter_number')}>#{sortIndicator('chapter_number')}</th>
                   <th>标题</th>
                   <th>章节概述</th>
@@ -431,20 +522,28 @@ export default function ProjectDetail() {
               <tbody>
                 {filteredChapters.length === 0 && chapters.length > 0 && (
                   <tr>
-                    <td colSpan={7} className="muted">
+                    <td colSpan={8} className="muted">
                       无匹配章节
                     </td>
                   </tr>
                 )}
                 {chapters.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="muted">
+                    <td colSpan={8} className="muted">
                       暂无章节，先创建第一章并进入章节工作台生成蓝图。
                     </td>
                   </tr>
                 )}
                 {filteredChapters.map((chapter) => (
                   <tr key={chapter.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedChapterIds.includes(chapter.id)}
+                        onChange={(e) => toggleChapterSelection(chapter.id, e.target.checked)}
+                        aria-label={`选择第 ${chapter.chapter_number} 章`}
+                      />
+                    </td>
                     <td>{chapter.chapter_number}</td>
                     <td>{chapter.title}</td>
                     <td style={{ maxWidth: 420, whiteSpace: 'pre-line', wordBreak: 'break-word' }}>{chapter.synopsis || <span className="muted">暂无概述</span>}</td>
