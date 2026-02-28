@@ -63,6 +63,7 @@ const mockApiPut = vi.fn()
 const mockApiDelete = vi.fn()
 
 vi.mock('../../lib/api', () => ({
+    LLM_TIMEOUT: 120_000,
     api: {
         get: (...args: any[]) => mockApiGet(...args),
         post: (...args: any[]) => mockApiPost(...args),

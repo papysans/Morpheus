@@ -44,6 +44,7 @@ const sampleChapters = [
         chapter_number: 1,
         title: '雪夜惊变',
         goal: '主角在雪夜遭遇背叛',
+        synopsis: '雪夜突发背叛，主角被迫逃离。',
         status: 'completed',
         word_count: 1600,
         conflict_count: 0,
@@ -53,6 +54,7 @@ const sampleChapters = [
         chapter_number: 2,
         title: '潜伏反击',
         goal: '主角开始策划反击',
+        synopsis: '主角潜伏布局，准备反击。',
         status: 'draft',
         word_count: 1200,
         conflict_count: 1,
@@ -155,13 +157,13 @@ describe('ProjectDetailPage', () => {
         expect(screen.getByText(/暂无章节/)).toBeInTheDocument()
     })
 
-    it('renders sub-page navigation links', () => {
+    it('does not render sub-page navigation links when quick navigation is disabled', () => {
         useProjectStore.setState({ currentProject: sampleProject, chapters: [], loading: false })
         renderPage()
-        expect(screen.getByText('创作控制台')).toBeInTheDocument()
-        expect(screen.getByText('记忆浏览器')).toBeInTheDocument()
-        expect(screen.getByText('知识图谱')).toBeInTheDocument()
-        expect(screen.getByText('评测看板')).toBeInTheDocument()
+        expect(screen.queryByText('创作控制台')).not.toBeInTheDocument()
+        expect(screen.queryByText('记忆浏览器')).not.toBeInTheDocument()
+        expect(screen.queryByText('知识图谱')).not.toBeInTheDocument()
+        expect(screen.queryByText('评测看板')).not.toBeInTheDocument()
     })
 
     it('renders export book button', () => {
@@ -365,20 +367,15 @@ describe('ProjectDetailPage', () => {
             useProjectStore.setState({ currentProject: sampleProject, chapters: sampleChapters, loading: false })
         })
 
-        it('renders quick start section with synopsis textarea', () => {
+        it('does not render quick start section when entry is disabled', () => {
             renderPage()
-            expect(screen.getByText('创作起点')).toBeInTheDocument()
-            expect(screen.getByPlaceholderText('先写一句话梗概，带着它进入创作控制台继续生成。')).toBeInTheDocument()
+            expect(screen.queryByText('创作起点')).not.toBeInTheDocument()
+            expect(screen.queryByPlaceholderText('先写一句话梗概，带着它进入创作控制台继续生成。')).not.toBeInTheDocument()
         })
 
-        it('builds writing console link with prompt and scope', () => {
+        it('does not render writing console entry link when quick start section is disabled', () => {
             renderPage()
-            const textarea = screen.getByPlaceholderText('先写一句话梗概，带着它进入创作控制台继续生成。')
-            fireEvent.change(textarea, { target: { value: '测试梗概' } })
-            fireEvent.change(screen.getByDisplayValue('整卷模式'), { target: { value: 'book' } })
-
-            const link = screen.getByText('进入创作控制台').closest('a')
-            expect(link).toHaveAttribute('href', '/project/p1/write?prompt=%E6%B5%8B%E8%AF%95%E6%A2%97%E6%A6%82&scope=book')
+            expect(screen.queryByText('进入创作控制台')).not.toBeInTheDocument()
         })
     })
 })
