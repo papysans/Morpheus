@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProjectStore } from '../stores/useProjectStore'
 import { useToastStore } from '../stores/useToastStore'
@@ -7,7 +7,7 @@ import Skeleton from '../components/ui/Skeleton'
 import ProjectCreateModal from '../components/project/ProjectCreateModal'
 
 export default function ProjectList() {
-  const { projects, loading, projectsError, fetchProjects, deleteProject, deleteProjects } = useProjectStore()
+  const { projects, loading, projectsError, fetchProjects, deleteProject, deleteProjects, importProject } = useProjectStore()
   const addToast = useToastStore((s) => s.addToast)
   const navigate = useNavigate()
 
@@ -15,6 +15,8 @@ export default function ProjectList() {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
+  const [importLoading, setImportLoading] = useState(false)
+  const importInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetchProjects()
@@ -125,17 +127,65 @@ export default function ProjectList() {
     }
   }
 
+  const handleImportClick = () => {
+    importInputRef.current?.click()
+  }
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setImportLoading(true)
+    try {
+      const result = await importProject(file)
+      addToast('success', `项目「${result.name}」导入成功，共 ${result.chapter_count} 章`)
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      addToast('error', typeof detail === 'string' ? detail : '导入失败，请检查文件格式')
+    } finally {
+      setImportLoading(false)
+    }
+  }
+
+  const handleExport = (id: string, name: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const a = document.createElement('a')
+    a.href = `/api/projects/${id}/export`
+    a.download = `${name}.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
   return (
     <PageTransition>
       <div>
         <div className="page-head">
           <div>
             <h1 className="title">创作项目</h1>
-            <p className="subtitle">以多 Agent 编剧室驱动你的长篇小说，保持设定一致与叙事张力。</p>
+            <p className="subtitle">以多 Agent 编剧室驱动你的长篇小说，保持设定一致与叙事张功。</p>
           </div>
-          <button className="btn btn-primary" onClick={() => setShowModal(true)}>
-            新建项目
-          </button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".zip"
+              style={{ display: 'none' }}
+              onChange={handleImportFileChange}
+              aria-label="选择项目 zip 文件"
+            />
+            <button
+              className="btn btn-secondary"
+              onClick={handleImportClick}
+              disabled={importLoading}
+              aria-label="导入项目"
+            >
+              {importLoading ? '导入中…' : '导入项目'}
+            </button>
+            <button className="btn btn-primary" onClick={() => setShowModal(true)}>
+              新建项目
+            </button>
+          </div>
         </div>
 
         {/* 统计卡片 */}
@@ -304,6 +354,14 @@ export default function ProjectList() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span className="chip">{project.status}</span>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+                      onClick={(e) => handleExport(project.id, project.name, e)}
+                      aria-label={`导出项目 ${project.name}`}
+                    >
+                      导出
+                    </button>
                     <button
                       className="btn btn-secondary"
                       style={{ padding: '4px 10px', fontSize: '0.8rem' }}

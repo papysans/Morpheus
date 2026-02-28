@@ -74,6 +74,7 @@ interface ProjectStore {
     createProject: (form: ProjectCreateForm) => Promise<string>
     deleteProject: (id: string) => Promise<void>
     deleteProjects: (ids: string[]) => Promise<BatchDeleteProjectsResult>
+    importProject: (file: File) => Promise<{ project_id: string; name: string; chapter_count: number }>
     invalidateCache: (scope: 'projects' | 'project' | 'chapters', id?: string) => void
 }
 
@@ -421,6 +422,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
                 return result
             } catch (error) {
                 console.error('批量删除项目失败', error)
+                throw error
+            } finally {
+                endLoading()
+            }
+        },
+        importProject: async (file: File) => {
+            beginLoading()
+            try {
+                const formData = new FormData()
+                formData.append('file', file)
+                const response = await api.post('/projects/import', formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                })
+                void get().fetchProjects({ force: true })
+                return response.data
+            } catch (error) {
+                console.error('导入项目失败', error)
                 throw error
             } finally {
                 endLoading()
