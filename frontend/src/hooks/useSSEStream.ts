@@ -101,15 +101,15 @@ export function useSSEStream() {
 
     /* ── buffer helpers ── */
 
-    const clearBuffers = () => {
+    const clearBuffers = useCallback(() => {
         chunkBuffers.current = {}
         if (flushTimer.current !== null) {
             window.clearTimeout(flushTimer.current)
             flushTimer.current = null
         }
-    }
+    }, [])
 
-    const flushBuffers = () => {
+    const flushBuffers = useCallback(() => {
         if (flushTimer.current !== null) {
             window.clearTimeout(flushTimer.current)
             flushTimer.current = null
@@ -134,19 +134,19 @@ export function useSSEStream() {
             }
             return next
         })
-    }
+    }, [setSections])
 
-    const scheduleFlush = () => {
+    const scheduleFlush = useCallback(() => {
         if (flushTimer.current !== null) return
         flushTimer.current = window.setTimeout(() => {
             flushTimer.current = null
             flushBuffers()
         }, 25)
-    }
+    }, [flushBuffers])
 
     /* ── SSE event dispatcher ── */
 
-    const handleEvent = (
+    const handleEvent = useCallback((
         eventName: string,
         payload: any,
         opts: UseSSEStreamOptions,
@@ -250,7 +250,7 @@ export function useSSEStream() {
 
         // Forward other events as logs
         appendLog(`事件 ${eventName}`)
-    }
+    }, [appendLog, flushBuffers, setChapters, setError, setSections, scheduleFlush])
 
     /* ── public API ── */
 
@@ -305,7 +305,7 @@ export function useSSEStream() {
             setGenerating(false)
             abortRef.current = null
         }
-    }, [generating, setGenerating, setError, setSections, setChapters, appendLog])
+    }, [appendLog, clearBuffers, flushBuffers, generating, handleEvent, setChapters, setError, setGenerating, setSections])
 
     const stop = useCallback(() => {
         abortRef.current?.abort()

@@ -276,6 +276,9 @@ export default function ChapterWorkbenchPage() {
         content: editing ? draftContent : '',
         debounceMs: 2000,
     })
+    const hasLocalDraft = autoSave.hasDraft
+    const localDraftContent = autoSave.draftContent
+    const clearLocalDraft = autoSave.clearDraft
     const [showDraftRestore, setShowDraftRestore] = useState(false)
     const [showRejectConfirm, setShowRejectConfirm] = useState(false)
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -344,18 +347,18 @@ export default function ChapterWorkbenchPage() {
 
     // 检测本地草稿：只有本地草稿与服务端内容不一致时才提示恢复
     useEffect(() => {
-        if (loading || !chapter || !autoSave.hasDraft) return
-        const localDraft = autoSave.draftContent ?? ''
+        if (loading || !chapter || !hasLocalDraft) return
+        const localDraft = localDraftContent ?? ''
         const remoteDraft = chapter.draft ?? chapter.final ?? ''
         if (!localDraft) return
 
         if (localDraft === remoteDraft) {
-            autoSave.clearDraft()
+            clearLocalDraft()
             setShowDraftRestore(false)
             return
         }
         setShowDraftRestore(true)
-    }, [loading, chapter, autoSave.hasDraft, autoSave.draftContent, autoSave.clearDraft])
+    }, [loading, chapter, hasLocalDraft, localDraftContent, clearLocalDraft])
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
