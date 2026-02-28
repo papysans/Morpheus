@@ -26,13 +26,16 @@ httpx = "^0.25.2"
 sse-starlette = "^1.8.2"
 requests = "^2.31.0"
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
 pytest = "^7.4.3"
 pytest-asyncio = "^0.21.1"
 pytest-cov = "^4.1.0"
 black = "^23.12.1"
-ruff = "^0.1.8"
+ruff = ">=0.15.4,<0.16.0"
 hypothesis = "^6.92.0"
+mypy = ">=1.19.1,<2.0.0"
+types-pyyaml = "^6.0.12.20250915"
+types-requests = "^2.32.4.20260107"
 
 [build-system]
 requires = ["poetry-core"]
@@ -45,3 +48,13 @@ target-version = ['py311']
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E402", "F401", "F841", "E741"]
+
+[tool.mypy]
+python_version = "3.11"
+explicit_package_bases = true
+mypy_path = "."
+ignore_missing_imports = true
+exclude = "(^tests/)|(^api/main.py$)|(^agents/studio.py$)|(^scripts/)"
