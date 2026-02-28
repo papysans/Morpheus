@@ -41,7 +41,7 @@ describe('Sidebar', () => {
     describe('基本渲染', () => {
         it('renders brand and navigation sections', () => {
             renderSidebar()
-            expect(screen.getByText('编剧室')).toBeInTheDocument()
+            expect(screen.getByText('Morpheus')).toBeInTheDocument()
             expect(screen.getByText('项目列表')).toBeInTheDocument()
             expect(screen.getByText('评测看板')).toBeInTheDocument()
         })
@@ -49,7 +49,7 @@ describe('Sidebar', () => {
         it('hides text labels when collapsed', () => {
             useUIStore.setState({ sidebarCollapsed: true })
             renderSidebar()
-            expect(screen.queryByText('编剧室')).not.toBeInTheDocument()
+            expect(screen.queryByText('Morpheus')).not.toBeInTheDocument()
             expect(screen.queryByText('项目列表')).not.toBeInTheDocument()
         })
 
@@ -78,7 +78,6 @@ describe('Sidebar', () => {
             expect(screen.getByText('创作控制台')).toBeInTheDocument()
             expect(screen.getByText('章节工作台')).toBeInTheDocument()
             expect(screen.getByText('记忆浏览器')).toBeInTheDocument()
-            expect(screen.getByText('知识图谱')).toBeInTheDocument()
             expect(screen.getByText('决策回放')).toBeInTheDocument()
         })
 
@@ -162,8 +161,7 @@ describe('Sidebar', () => {
         it('highlights 决策回放 on /project/:id/trace/:chapterId (prefix match)', () => {
             const { container } = renderSidebar('/project/p1/trace/ch1')
             const subNavLinks = container.querySelectorAll('.sidebar__section:nth-child(2) .sidebar__link')
-            // 决策回放 is the last sub-nav link
-            expect(subNavLinks[5].classList.contains('sidebar__link--active')).toBe(true)
+            expect(subNavLinks[4].classList.contains('sidebar__link--active')).toBe(true)
         })
 
         it('highlights 评测看板 on /dashboard', () => {
