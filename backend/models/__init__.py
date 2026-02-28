@@ -8,7 +8,12 @@ class Layer(str, Enum):
     L1 = "L1"
     L2 = "L2"
     L3 = "L3"
+    L4 = "L4"
 
+
+class OverrideSource(str, Enum):
+    LLM_EXTRACTED = "llm_extracted"
+    USER_OVERRIDE = "user_override"
 
 class Severity(str, Enum):
     P0 = "P0"
@@ -223,3 +228,55 @@ class Metrics(BaseModel):
     chapter_id: Optional[int] = None
     project_id: Optional[str] = None
     recorded_at: datetime = Field(default_factory=datetime.now)
+
+
+class CharacterRelationship(BaseModel):
+    source_character: str
+    target_character: str
+    relation_type: str
+    description: str = ""
+    chapter: int
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    override_source: OverrideSource = OverrideSource.LLM_EXTRACTED
+    provenance: str = ""
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class CharacterStateChange(BaseModel):
+    character: str
+    attribute: str
+    from_value: str = ""
+    to_value: str
+    chapter: int
+    trigger_event: str = ""
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    override_source: OverrideSource = OverrideSource.LLM_EXTRACTED
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class ChapterEvent(BaseModel):
+    character: str
+    chapter: int
+    event_summary: str
+    significance: str = "minor"
+    related_characters: List[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    override_source: OverrideSource = OverrideSource.LLM_EXTRACTED
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class CharacterProfile(BaseModel):
+    profile_id: str
+    project_id: str
+    character_name: str
+    overview: str = ""
+    personality: str = ""
+    relationships: List[CharacterRelationship] = Field(default_factory=list)
+    state_changes: List[CharacterStateChange] = Field(default_factory=list)
+    chapter_events: List[ChapterEvent] = Field(default_factory=list)
+    last_updated_chapter: int = 0
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    override_source: OverrideSource = OverrideSource.LLM_EXTRACTED
+    provenance: str = ""
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
