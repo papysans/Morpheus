@@ -3011,8 +3011,14 @@ async def export_project(project_id: str):
         raise HTTPException(status_code=404, detail="Project directory not found")
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="novelist-export-"))
-    archive_base = tmp_dir / f"project-{project_id}"
-    archive_path = Path(shutil.make_archive(str(archive_base), "zip", root_dir=str(base)))
+    tmp_copy = tmp_dir / f"project-{project_id}"
+    shutil.copytree(
+        base,
+        tmp_copy,
+        ignore=shutil.ignore_patterns("index", "graph"),
+    )
+    archive_base = tmp_dir / f"archive-{project_id}"
+    archive_path = Path(shutil.make_archive(str(archive_base), "zip", root_dir=str(tmp_dir), base_dir=f"project-{project_id}"))
 
     safe_name = re.sub(r"[\\/:*?\"<>|]+", "_", project.name).strip() or "project"
     download_name = f"{safe_name}-{project_id}.zip"
