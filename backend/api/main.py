@@ -10,13 +10,14 @@ import os
 import inspect
 import tempfile
 import sqlite3
+import zipfile
 from enum import Enum
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4, uuid5, NAMESPACE_URL
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
@@ -117,12 +118,15 @@ if settings.log_file:
     log_path = Path(settings.log_file).expanduser().resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     if not any(
-        isinstance(handler, logging.FileHandler) and getattr(handler, "baseFilename", None) == str(log_path)
+        isinstance(handler, logging.FileHandler)
+        and getattr(handler, "baseFilename", None) == str(log_path)
         for handler in logger.handlers
     ):
         file_handler = logging.FileHandler(log_path, encoding="utf-8")
         file_handler.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
-        file_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s"))
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+        )
         logger.addHandler(file_handler)
         logger.info("file logging enabled path=%s", log_path)
 
@@ -133,9 +137,7 @@ SSE_HEADERS = {
 }
 
 
-THINK_BLOCK_PATTERN = re.compile(
-    r"(?is)<\s*think(?:ing)?\s*>.*?<\s*/\s*think(?:ing)?\s*>"
-)
+THINK_BLOCK_PATTERN = re.compile(r"(?is)<\s*think(?:ing)?\s*>.*?<\s*/\s*think(?:ing)?\s*>")
 THINKING_BLOCK_PATTERN = re.compile(r"(?is)```(?:thinking|reasoning)\s*[\s\S]*?```")
 THINKING_LINE_PATTERN = re.compile(r"(?im)^\s*(thinking|thoughts?|reasoning)\s*[:：].*(?:\n|$)")
 EDITORIAL_NOTE_BRACKET_PATTERN = re.compile(r"[（(]([^（）()]{1,80})[）)]")
@@ -213,8 +215,10 @@ def resolve_llm_runtime() -> Dict[str, Any]:
     remote_env_raw = os.getenv("REMOTE_LLM_ENABLED")
     auto_enabled = False
     remote_effective = remote_requested
-    if remote_env_raw is None and not remote_requested and (
-        has_openai_key or has_minimax_key or has_deepseek_key
+    if (
+        remote_env_raw is None
+        and not remote_requested
+        and (has_openai_key or has_minimax_key or has_deepseek_key)
     ):
         # Auto-enable remote mode if keys are present and REMOTE_LLM_ENABLED was not explicitly set.
         remote_effective = True
@@ -297,6 +301,7 @@ def resolve_embedding_runtime(runtime: Dict[str, Any]) -> Dict[str, str]:
         "provider_key": provider_key,
         "provider_base_url": provider_base_url,
     }
+
 
 projects: Dict[str, Project] = {}
 chapters: Dict[str, Chapter] = {}
@@ -462,7 +467,9 @@ def purge_project_state(project_id: str):
     studios.pop(project_id, None)
     vector_index_signatures.pop(project_id, None)
 
-    chapter_ids = [chapter_id for chapter_id, chapter in chapters.items() if chapter.project_id == project_id]
+    chapter_ids = [
+        chapter_id for chapter_id, chapter in chapters.items() if chapter.project_id == project_id
+    ]
     for chapter_id in chapter_ids:
         chapters.pop(chapter_id, None)
         traces.pop(chapter_id, None)
@@ -588,9 +595,13 @@ def sync_projects_index_from_disk() -> None:
             continue
         disk_projects[project.id] = project
 
-    stale_ids = [project_id for project_id in list(projects.keys()) if project_id not in disk_projects]
+    stale_ids = [
+        project_id for project_id in list(projects.keys()) if project_id not in disk_projects
+    ]
     for stale_id in stale_ids:
-        logger.warning("purging stale in-memory project project_id=%s reason=missing_on_disk", stale_id)
+        logger.warning(
+            "purging stale in-memory project project_id=%s reason=missing_on_disk", stale_id
+        )
         purge_project_state(stale_id)
 
     for project_id, project in disk_projects.items():
@@ -655,7 +666,9 @@ def get_or_create_store(project_id: str) -> MemoryStore:
     if project_id not in memory_stores:
         path = project_path(project_id)
         memory_stores[project_id] = MemoryStore(str(path), str(path / "novelist.db"))
-        logger.info("memory store initialized project_id=%s db=%s", project_id, path / "novelist.db")
+        logger.info(
+            "memory store initialized project_id=%s db=%s", project_id, path / "novelist.db"
+        )
     return memory_stores[project_id]
 
 
@@ -745,7 +758,19 @@ GRAPH_ROLE_PREFIX_BLOCKLIST = {
     "这个",
     "那个",
 }
-GRAPH_ROLE_INVALID_TRAILING_CHARS = {"没", "不", "了", "着", "过", "都", "也", "正", "谁", "啥", "么"}
+GRAPH_ROLE_INVALID_TRAILING_CHARS = {
+    "没",
+    "不",
+    "了",
+    "着",
+    "过",
+    "都",
+    "也",
+    "正",
+    "谁",
+    "啥",
+    "么",
+}
 GRAPH_ROLE_INVALID_INTERNAL_CHARS = {"者", "说", "没"}
 
 GRAPH_TITLE_SUFFIXES = ("教授", "医生", "老板", "队长", "先生", "小姐", "同学")
@@ -785,11 +810,15 @@ def validate_graph_role_name(name: str, *, allow_placeholders: bool = True) -> s
         return ""
     if len(normalized) == 2 and normalized[1] in GRAPH_ROLE_INVALID_TRAILING_CHARS:
         return ""
-    if len(normalized) >= 3 and any(ch in normalized[1:] for ch in GRAPH_ROLE_INVALID_INTERNAL_CHARS):
+    if len(normalized) >= 3 and any(
+        ch in normalized[1:] for ch in GRAPH_ROLE_INVALID_INTERNAL_CHARS
+    ):
         return ""
     if len(normalized) >= 3 and normalized[-1] in GRAPH_ROLE_INVALID_TRAILING_CHARS:
         return ""
-    matched_title = next((suffix for suffix in GRAPH_TITLE_SUFFIXES if normalized.endswith(suffix)), None)
+    matched_title = next(
+        (suffix for suffix in GRAPH_TITLE_SUFFIXES if normalized.endswith(suffix)), None
+    )
     if matched_title:
         stem = normalized[: -len(matched_title)]
         if not stem or len(stem) > 2:
@@ -874,7 +903,11 @@ def sanitize_graph_events(events: List[EventEdge]) -> List[EventEdge]:
         subject = validate_graph_role_name(event.subject, allow_placeholders=True)
         if not subject:
             continue
-        obj = validate_graph_role_name(event.object, allow_placeholders=True) if event.object else None
+        obj = (
+            validate_graph_role_name(event.object, allow_placeholders=True)
+            if event.object
+            else None
+        )
         if obj == subject:
             obj = None
         copied = event.model_copy(deep=True)
@@ -1040,7 +1073,11 @@ def get_or_create_studio(project_id: str) -> AgentStudio:
         runtime = resolve_llm_runtime()
         provider_key = runtime["provider_key"] if runtime["remote_effective"] else ""
         effective_provider = runtime["effective_provider"]
-        chat_max_tokens = settings.deepseek_max_tokens if effective_provider == "deepseek" else settings.llm_max_tokens
+        chat_max_tokens = (
+            settings.deepseek_max_tokens
+            if effective_provider == "deepseek"
+            else settings.llm_max_tokens
+        )
         context_window_tokens = (
             settings.deepseek_context_window_tokens
             if effective_provider == "deepseek"
@@ -1115,7 +1152,8 @@ def is_generated_chapter(chapter: Chapter) -> bool:
         bool(chapter.draft)
         or bool(chapter.final)
         or chapter.word_count > 0
-        or chapter.status in {ChapterStatus.REVIEWING, ChapterStatus.REVISED, ChapterStatus.APPROVED}
+        or chapter.status
+        in {ChapterStatus.REVIEWING, ChapterStatus.REVISED, ChapterStatus.APPROVED}
     )
 
 
@@ -1175,7 +1213,9 @@ def collect_project_metrics(project_id: Optional[str] = None) -> Dict[str, Any]:
         if first_pass_ok:
             first_pass_ok_count += 1
 
-        p1_total += len([conflict for conflict in chapter_conflicts if conflict.severity.value == "P1"])
+        p1_total += len(
+            [conflict for conflict in chapter_conflicts if conflict.severity.value == "P1"]
+        )
         p1_exempted += len(
             [
                 conflict
@@ -1514,7 +1554,7 @@ def build_outline_messages(
             "role": "system",
             "content": (
                 "你是长篇小说策划编辑。仅输出 JSON 数组，不要解释。"
-                "数组每项格式：{\"title\":\"...\",\"goal\":\"...\"}。"
+                '数组每项格式：{"title":"...","goal":"..."}。'
                 "标题不允许包含“第X章”。"
             ),
         },
@@ -1531,7 +1571,13 @@ def build_outline_messages(
                     "identity": identity,
                     "continuation_mode": continuation_mode,
                     "constraints": constraints,
-                    "forbidden_title_keywords": ["起势递进", "代价扩张", "阶段收束", "里程碑", "第二阶段钩子"],
+                    "forbidden_title_keywords": [
+                        "起势递进",
+                        "代价扩张",
+                        "阶段收束",
+                        "里程碑",
+                        "第二阶段钩子",
+                    ],
                     "title_style_examples": [
                         "镜城残响",
                         "第二次心跳",
@@ -1692,7 +1738,9 @@ def build_one_shot_messages(
         GenerationMode.QUICK: "快速模式：直接产出完整章节，节奏紧凑，信息密度高。",
         GenerationMode.CINEMATIC: "电影模式：强调场景调度、对白张力和镜头感，篇幅更饱满。",
     }[req.mode]
-    continuation_constraints = build_serial_continuation_constraints() if req.continuation_mode else []
+    continuation_constraints = (
+        build_serial_continuation_constraints() if req.continuation_mode else []
+    )
     rhythm_hint = build_micro_arc_hint(
         chapter_number=chapter.chapter_number,
         target_words=req.target_words,
@@ -1725,7 +1773,9 @@ def build_one_shot_messages(
                     "project_style": project.style,
                     "taboo_constraints": project.taboo_constraints,
                     "identity": store.three_layer.get_identity()[:2000],
-                    "previous_chapter_synopsis": (context_pack or {}).get("previous_chapter_synopsis", ""),
+                    "previous_chapter_synopsis": (context_pack or {}).get(
+                        "previous_chapter_synopsis", ""
+                    ),
                     "open_threads": (context_pack or {}).get("open_threads", []),
                     "previous_chapters": previous_chapters,
                     "continuation_mode": req.continuation_mode,
@@ -1777,9 +1827,7 @@ def resolve_project_target_words(project: Project, project_id: str) -> int:
         return min(max(template_words, 300), 12000)
 
     existing_word_counts = [
-        c.word_count
-        for c in chapter_list(project_id)
-        if c.word_count and c.word_count >= 300
+        c.word_count for c in chapter_list(project_id) if c.word_count and c.word_count >= 300
     ]
     if existing_word_counts:
         existing_word_counts.sort()
@@ -1789,7 +1837,9 @@ def resolve_project_target_words(project: Project, project_id: str) -> int:
     estimated_total_chapters = 24
     if project.target_length > 0:
         estimated_total_chapters = max(12, min(60, int(project.target_length / 12000) + 1))
-    fallback = int(project.target_length / estimated_total_chapters) if project.target_length > 0 else 1800
+    fallback = (
+        int(project.target_length / estimated_total_chapters) if project.target_length > 0 else 1800
+    )
     return min(max(fallback, 1200), 4200)
 
 
@@ -1994,7 +2044,9 @@ def resolve_context_window_tokens(llm_client: Any) -> int:
     configured = 32768
     config = getattr(llm_client, "config", None)
     if config is not None:
-        configured = max(4096, int(getattr(config, "context_window_tokens", configured) or configured))
+        configured = max(
+            4096, int(getattr(config, "context_window_tokens", configured) or configured)
+        )
     return configured
 
 
@@ -2069,7 +2121,9 @@ def finalize_generated_draft(
             mode="lightweight",
         )
     except Exception:
-        logger.warning("lightweight memory refresh failed chapter_no=%d", chapter.chapter_number, exc_info=True)
+        logger.warning(
+            "lightweight memory refresh failed chapter_no=%d", chapter.chapter_number, exc_info=True
+        )
 
     traces[chapter.id] = trace
     save_trace(chapter.project_id, chapter.id, trace)
@@ -2150,7 +2204,9 @@ async def generate_one_shot_draft_text(
         for c in chapter_list(chapter.project_id)
         if c.chapter_number < chapter.chapter_number
     ]
-    context_pack = memory_ctx_svc.build_generation_context_pack(chapter.chapter_number, project_chapters)
+    context_pack = memory_ctx_svc.build_generation_context_pack(
+        chapter.chapter_number, project_chapters
+    )
 
     if req.mode == GenerationMode.STUDIO:
         await emit_progress(
@@ -2182,9 +2238,7 @@ async def generate_one_shot_draft_text(
             quality_payload = workflow.get_last_plan_quality()
             quality_debug = workflow.get_last_plan_debug()
             chapter.plan_quality = (
-                PlanQualityReport.model_validate(quality_payload)
-                if quality_payload
-                else None
+                PlanQualityReport.model_validate(quality_payload) if quality_payload else None
             )
             chapter.plan_quality_debug = quality_debug or None
             if chapter.plan_quality and chapter.plan_quality.status != "ok":
@@ -2209,7 +2263,8 @@ async def generate_one_shot_draft_text(
             "open_threads": context_pack.get("open_threads", []),
             "project_style": project.style,
             "target_words": req.target_words,
-            "previous_chapters": context_pack.get("previous_chapters_compact") or compact_previous_chapters(
+            "previous_chapters": context_pack.get("previous_chapters_compact")
+            or compact_previous_chapters(
                 [
                     c.final or c.draft or ""
                     for c in chapter_list(chapter.project_id)
@@ -2238,7 +2293,11 @@ async def generate_one_shot_draft_text(
         await emit_progress(
             progress,
             "chapter_stage",
-            {"chapter_number": chapter.chapter_number, "stage": "consistency", "mode": req.mode.value},
+            {
+                "chapter_number": chapter.chapter_number,
+                "stage": "consistency",
+                "mode": req.mode.value,
+            },
         )
         return draft, trace
 
@@ -2542,7 +2601,9 @@ def _persist_book_id_to_automation_config(automation_dir: Path, book_id: str) ->
     state_payload["latestBookId"] = normalized
     state_payload["history"] = history[-50:]
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    state_path.write_text(
+        json.dumps(state_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _extract_book_id_from_create_output(stdout: str) -> str:
@@ -2663,7 +2724,9 @@ async def _detect_book_id_via_playwright(automation_dir: Path, timeout_sec: int 
         env=env,
     )
     try:
-        stdout_bytes, _stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_sec)
+        stdout_bytes, _stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout_sec
+        )
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
@@ -2922,9 +2985,7 @@ async def create_project(req: CreateProjectRequest):
     merged_taboos = list(dict.fromkeys([*req.taboo_constraints, *template_taboos]))
 
     recommended_target_length = (
-        selected_template.get("recommended", {}).get("target_length")
-        if selected_template
-        else None
+        selected_template.get("recommended", {}).get("target_length") if selected_template else None
     )
     resolved_target_length = (
         int(recommended_target_length)
@@ -2971,9 +3032,7 @@ async def create_project(req: CreateProjectRequest):
         identity += f"- {selected_template.get('prompt_hint', '')}\n\n"
     else:
         identity += "- (未指定)\n\n"
-    identity += (
-        "## Hard Taboos\n"
-    )
+    identity += "## Hard Taboos\n"
     if merged_taboos:
         identity += "".join(f"- {item}\n" for item in merged_taboos)
     else:
@@ -3018,7 +3077,11 @@ async def export_project(project_id: str):
         ignore=shutil.ignore_patterns("index", "graph"),
     )
     archive_base = tmp_dir / f"archive-{project_id}"
-    archive_path = Path(shutil.make_archive(str(archive_base), "zip", root_dir=str(tmp_dir), base_dir=f"project-{project_id}"))
+    archive_path = Path(
+        shutil.make_archive(
+            str(archive_base), "zip", root_dir=str(tmp_dir), base_dir=f"project-{project_id}"
+        )
+    )
 
     safe_name = re.sub(r"[\\/:*?\"<>|]+", "_", project.name).strip() or "project"
     download_name = f"{safe_name}-{project_id}.zip"
@@ -3033,6 +3096,114 @@ async def export_project(project_id: str):
         filename=download_name,
         background=BackgroundTask(cleanup_export_file, str(archive_path), str(tmp_dir)),
     )
+
+
+@app.post("/api/projects/import")
+async def import_project(file: UploadFile = File(...)):
+    tmp_dir = None
+    tmp_path = None
+    extract_dir = None
+
+    try:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="novelist-import-upload-"))
+        tmp_path = tmp_dir / "upload.zip"
+        size = 0
+        with tmp_path.open("wb") as output:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > 500 * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="File too large")
+                output.write(chunk)
+
+        if not zipfile.is_zipfile(tmp_path):
+            raise HTTPException(status_code=400, detail="Invalid zip file")
+
+        with zipfile.ZipFile(tmp_path) as zf:
+            for name in zf.namelist():
+                if ".." in name or name.startswith("/"):
+                    raise HTTPException(status_code=400, detail="Invalid zip entry")
+            extract_dir = Path(tempfile.mkdtemp(prefix="novelist-import-"))
+            zf.extractall(extract_dir)
+
+        project_file_path = None
+        for candidate in extract_dir.rglob("project.json"):
+            if candidate.is_file():
+                project_file_path = candidate
+                break
+
+        if not project_file_path:
+            raise HTTPException(status_code=400, detail="project.json not found")
+
+        project_root = project_file_path.parent
+        project_data = json.loads(project_file_path.read_text(encoding="utf-8"))
+        new_project_id = str(uuid4())
+        project_data["id"] = new_project_id
+        project_data["fanqie_book_id"] = None
+        project_data["updated_at"] = datetime.utcnow().isoformat()
+        project_file_path.write_text(
+            json.dumps(project_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        chapter_files = list((project_root / "chapters").glob("*.json"))
+        for chapter_file in chapter_files:
+            chapter_data = json.loads(chapter_file.read_text(encoding="utf-8"))
+            chapter_data["project_id"] = new_project_id
+            chapter_file.write_text(
+                json.dumps(chapter_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        destination = projects_root() / new_project_id
+        shutil.copytree(project_root, destination)
+
+        project_obj = Project.model_validate(project_data)
+        projects[new_project_id] = project_obj
+
+        for chapter_file in chapter_files:
+            chapter_data = json.loads(chapter_file.read_text(encoding="utf-8"))
+            chapter_obj = Chapter.model_validate(chapter_data)
+            chapters[chapter_obj.id] = chapter_obj
+
+        trace_dir = project_root / "traces"
+        if trace_dir.exists():
+            for trace_file in trace_dir.glob("*.json"):
+                trace_data = json.loads(trace_file.read_text(encoding="utf-8"))
+                trace_obj = AgentTrace.model_validate(trace_data)
+                traces[trace_file.stem] = trace_obj
+
+        store = get_or_create_store(new_project_id)
+        sync_method = store.sync_file_memories
+        if inspect.iscoroutinefunction(sync_method):
+            await sync_method()
+        else:
+            sync_method()
+
+        return {
+            "project_id": new_project_id,
+            "name": project_data.get("name", ""),
+            "chapter_count": len(chapter_files),
+        }
+    finally:
+        try:
+            if extract_dir and extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
+        except Exception:
+            logger.exception("import cleanup failed extract_dir=%s", extract_dir)
+        try:
+            if tmp_dir and tmp_dir.exists():
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            logger.exception("import cleanup failed tmp_dir=%s", tmp_dir)
+        try:
+            close_result = file.close()
+            if inspect.isawaitable(close_result):
+                await close_result
+        except Exception:
+            logger.exception("import cleanup failed file=%s", getattr(file, "filename", None))
 
 
 @app.delete("/api/projects/{project_id}")
@@ -3055,7 +3226,9 @@ def _delete_project_internal(project_id: str, *, allow_missing: bool = False) ->
             shutil.rmtree(base)
     except Exception as exc:
         logger.exception("project delete failed project_id=%s", project_id)
-        raise HTTPException(status_code=500, detail=f"Failed to delete project files: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete project files: {exc}"
+        ) from exc
 
     project_name = project.name if project else project_id
     logger.info("project deleted project_id=%s name=%s", project_id, project_name)
@@ -3064,7 +3237,9 @@ def _delete_project_internal(project_id: str, *, allow_missing: bool = False) ->
 
 @app.delete("/api/projects")
 async def batch_delete_projects(req: BatchDeleteProjectsRequest):
-    requested = [str(project_id).strip() for project_id in req.project_ids if str(project_id).strip()]
+    requested = [
+        str(project_id).strip() for project_id in req.project_ids if str(project_id).strip()
+    ]
     if not requested:
         raise HTTPException(status_code=400, detail="project_ids is required")
 
@@ -3215,7 +3390,9 @@ async def run_one_shot_book_generation(
 
     existing = chapter_list(project_id)
     existing_numbers = {c.chapter_number for c in existing}
-    next_number = req.start_chapter_number or ((max(existing_numbers) + 1) if existing_numbers else 1)
+    next_number = req.start_chapter_number or (
+        (max(existing_numbers) + 1) if existing_numbers else 1
+    )
 
     await emit_progress(
         progress,
@@ -3410,7 +3587,12 @@ async def run_one_shot_book_generation(
         )
 
         streamed_text = "".join(streamed_fragments)
-        if stream_markdown and streamed_offset > 0 and chapter.draft and chapter.draft != streamed_text:
+        if (
+            stream_markdown
+            and streamed_offset > 0
+            and chapter.draft
+            and chapter.draft != streamed_text
+        ):
             await emit_progress(
                 progress,
                 "chapter_replace",
@@ -3457,7 +3639,12 @@ async def run_one_shot_book_generation(
             try:
                 mem_ctx = MemoryContextService(store.three_layer, store)
                 project_chapters = [
-                    {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+                    {
+                        "chapter_number": c.chapter_number,
+                        "plan": c.plan,
+                        "draft": c.draft,
+                        "final": c.final,
+                    }
                     for c in chapter_list(project_id)
                 ]
                 mem_ctx.refresh_memory_after_chapter(
@@ -3468,7 +3655,11 @@ async def run_one_shot_book_generation(
                     mode="consolidated",
                 )
             except Exception:
-                logger.warning("consolidated memory refresh failed chapter_no=%d", chapter.chapter_number, exc_info=True)
+                logger.warning(
+                    "consolidated memory refresh failed chapter_no=%d",
+                    chapter.chapter_number,
+                    exc_info=True,
+                )
 
             logger.info(
                 "one-shot-book chapter auto-approved project_id=%s chapter_id=%s chapter_no=%d",
@@ -3675,7 +3866,9 @@ def _delete_chapter_internal(chapter_id: str, *, allow_missing: bool = False) ->
                 file_path.unlink()
         except Exception as exc:
             logger.exception("chapter delete failed file=%s chapter_id=%s", file_path, chapter_id)
-            raise HTTPException(status_code=500, detail=f"Failed to delete chapter file: {exc}") from exc
+            raise HTTPException(
+                status_code=500, detail=f"Failed to delete chapter file: {exc}"
+            ) from exc
 
     renumbered_chapters: List[Dict[str, Any]] = []
     renumbered_memory: Dict[str, int] = {}
@@ -3690,7 +3883,7 @@ def _delete_chapter_internal(chapter_id: str, *, allow_missing: bool = False) ->
             old_number = next_chapter.chapter_number
             new_number = old_number - 1
             next_chapter.chapter_number = new_number
-            if next_chapter.plan and hasattr(next_chapter.plan, 'chapter_id'):
+            if next_chapter.plan and hasattr(next_chapter.plan, "chapter_id"):
                 next_chapter.plan.chapter_id = new_number
             save_chapter(next_chapter)
             renumbered_chapters.append(
@@ -3715,14 +3908,23 @@ def _delete_chapter_internal(chapter_id: str, *, allow_missing: bool = False) ->
         # Memory context: recompute open threads after chapter deletion
         try:
             remaining_chapters = [
-                {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+                {
+                    "chapter_number": c.chapter_number,
+                    "plan": c.plan,
+                    "draft": c.draft,
+                    "final": c.final,
+                }
                 for c in chapter_list(project_id)
             ]
             if remaining_chapters:
                 mem_ctx = MemoryContextService(store.three_layer, store)
                 mem_ctx.recompute_open_threads(remaining_chapters)
         except Exception:
-            logger.warning("open threads recompute failed after chapter delete project_id=%s", project_id, exc_info=True)
+            logger.warning(
+                "open threads recompute failed after chapter delete project_id=%s",
+                project_id,
+                exc_info=True,
+            )
     except Exception:
         deleted_l3 = []
         logger.exception(
@@ -3873,7 +4075,9 @@ async def generate_plan(chapter_id: str):
         chapter.chapter_number,
     )
 
-    workflow = StudioWorkflow(studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20)))
+    workflow = StudioWorkflow(
+        studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20))
+    )
     trace = studio.start_trace(chapter.chapter_number)
 
     # Build Context Pack for plan generation
@@ -3889,7 +4093,11 @@ async def generate_plan(chapter_id: str):
             chapter,
             {
                 "project_info": project.model_dump(mode="json"),
-                "previous_chapters": [c.model_dump(mode="json") for c in chapter_list(chapter.project_id) if c.chapter_number < chapter.chapter_number],
+                "previous_chapters": [
+                    c.model_dump(mode="json")
+                    for c in chapter_list(chapter.project_id)
+                    if c.chapter_number < chapter.chapter_number
+                ],
                 "context_pack": context_pack,
             },
         )
@@ -3904,9 +4112,7 @@ async def generate_plan(chapter_id: str):
     quality_payload = workflow.get_last_plan_quality()
     quality_debug = workflow.get_last_plan_debug()
     chapter.plan_quality = (
-        PlanQualityReport.model_validate(quality_payload)
-        if quality_payload
-        else None
+        PlanQualityReport.model_validate(quality_payload) if quality_payload else None
     )
     chapter.plan_quality_debug = quality_debug or None
     chapter.plan = plan
@@ -4004,15 +4210,23 @@ async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict
 
     if chapter.draft and not force:
         consistency_cached = {
-            "can_submit": not any(c.severity.value == "P0" and not c.exempted for c in chapter.conflicts),
+            "can_submit": not any(
+                c.severity.value == "P0" and not c.exempted for c in chapter.conflicts
+            ),
             "total_conflicts": len(chapter.conflicts),
             "p0_count": len([c for c in chapter.conflicts if c.severity.value == "P0"]),
             "p1_count": len([c for c in chapter.conflicts if c.severity.value == "P1"]),
             "p2_count": len([c for c in chapter.conflicts if c.severity.value == "P2"]),
             "conflicts": [c.model_dump(mode="json") for c in chapter.conflicts],
-            "p0_conflicts": [c.model_dump(mode="json") for c in chapter.conflicts if c.severity.value == "P0"],
-            "p1_conflicts": [c.model_dump(mode="json") for c in chapter.conflicts if c.severity.value == "P1"],
-            "p2_conflicts": [c.model_dump(mode="json") for c in chapter.conflicts if c.severity.value == "P2"],
+            "p0_conflicts": [
+                c.model_dump(mode="json") for c in chapter.conflicts if c.severity.value == "P0"
+            ],
+            "p1_conflicts": [
+                c.model_dump(mode="json") for c in chapter.conflicts if c.severity.value == "P1"
+            ],
+            "p2_conflicts": [
+                c.model_dump(mode="json") for c in chapter.conflicts if c.severity.value == "P2"
+            ],
         }
         return {
             "draft": chapter.draft,
@@ -4037,20 +4251,28 @@ async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict
     store.three_layer.add_log(f"开始生成章节 {chapter.chapter_number} 草稿")
 
     if not chapter.plan:
-        workflow_for_plan = StudioWorkflow(studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20)))
+        workflow_for_plan = StudioWorkflow(
+            studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20))
+        )
         # Build Context Pack for inline plan generation
         mem_ctx_plan = MemoryContextService(store.three_layer, store)
         plan_project_chapters = [
             {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
             for c in chapter_list(chapter.project_id)
         ]
-        plan_context_pack = mem_ctx_plan.build_generation_context_pack(chapter.chapter_number, plan_project_chapters)
+        plan_context_pack = mem_ctx_plan.build_generation_context_pack(
+            chapter.chapter_number, plan_project_chapters
+        )
         try:
             chapter.plan = await workflow_for_plan.generate_plan(
                 chapter,
                 {
                     "project_info": project.model_dump(mode="json"),
-                    "previous_chapters": [c.model_dump(mode="json") for c in chapter_list(chapter.project_id) if c.chapter_number < chapter.chapter_number],
+                    "previous_chapters": [
+                        c.model_dump(mode="json")
+                        for c in chapter_list(chapter.project_id)
+                        if c.chapter_number < chapter.chapter_number
+                    ],
                     "context_pack": plan_context_pack,
                 },
             )
@@ -4065,13 +4287,13 @@ async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict
         quality_payload = workflow_for_plan.get_last_plan_quality()
         quality_debug = workflow_for_plan.get_last_plan_debug()
         chapter.plan_quality = (
-            PlanQualityReport.model_validate(quality_payload)
-            if quality_payload
-            else None
+            PlanQualityReport.model_validate(quality_payload) if quality_payload else None
         )
         chapter.plan_quality_debug = quality_debug or None
 
-    workflow = StudioWorkflow(studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20)))
+    workflow = StudioWorkflow(
+        studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20))
+    )
     trace = studio.start_trace(chapter.chapter_number)
     target_words = resolve_project_target_words(project, chapter.project_id)
 
@@ -4086,7 +4308,9 @@ async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict
         for c in chapter_list(chapter.project_id)
         if c.chapter_number < chapter.chapter_number
     ]
-    context_pack = memory_ctx_svc.build_generation_context_pack(chapter.chapter_number, project_chapters)
+    context_pack = memory_ctx_svc.build_generation_context_pack(
+        chapter.chapter_number, project_chapters
+    )
 
     draft = await workflow.generate_draft(
         chapter,
@@ -4099,7 +4323,12 @@ async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict
             "open_threads": context_pack.get("open_threads", []),
             "project_style": project.style,
             "target_words": target_words,
-            "previous_chapters": context_pack.get("previous_chapters_compact") or [c.final or c.draft or "" for c in chapter_list(chapter.project_id) if c.chapter_number < chapter.chapter_number][-5:],
+            "previous_chapters": context_pack.get("previous_chapters_compact")
+            or [
+                c.final or c.draft or ""
+                for c in chapter_list(chapter.project_id)
+                if c.chapter_number < chapter.chapter_number
+            ][-5:],
         },
     )
     draft = await rebalance_draft_length_if_needed(
@@ -4220,7 +4449,11 @@ async def commit_memory(req: MemoryCommitRequest):
             ],
         }
     except Exception:
-        logger.warning("consolidated memory refresh failed chapter_no=%d", chapter.chapter_number, exc_info=True)
+        logger.warning(
+            "consolidated memory refresh failed chapter_no=%d",
+            chapter.chapter_number,
+            exc_info=True,
+        )
 
     store.three_layer.add_log(
         f"章节 {chapter.chapter_number} 已提交。保留: {len(reflection['retains'])}，降权: {len(reflection['downgrades'])}，新事实: {len(reflection['new_facts'])}"
@@ -4238,7 +4471,9 @@ async def query_memory(project_id: str, query: str, layers: Optional[str] = None
     items = store.get_all_items()
     signature = build_memory_signature(items)
     vector_dir = project_path(project_id) / "index" / "lancedb"
-    signature_changed = vector_index_signatures.get(project_id) != signature or not vector_dir.exists()
+    signature_changed = (
+        vector_index_signatures.get(project_id) != signature or not vector_dir.exists()
+    )
     if signature_changed and vector_dir.exists():
         shutil.rmtree(vector_dir, ignore_errors=True)
     if signature_changed:
@@ -4358,7 +4593,9 @@ async def get_memory_context_pack(project_id: str, chapter_number: int = None):
             for c in existing
         ]
         mem_ctx = MemoryContextService(store.three_layer, store)
-        pack = mem_ctx.build_generation_context_pack(chapter_number, project_chapters, read_only=True)
+        pack = mem_ctx.build_generation_context_pack(
+            chapter_number, project_chapters, read_only=True
+        )
         return pack
     except Exception as exc:
         logger.exception("context-pack build failed project_id=%s", project_id)
@@ -4388,14 +4625,20 @@ async def review_chapter(req: ReviewRequest):
         raise HTTPException(status_code=404, detail="Chapter not found")
 
     if req.action == ReviewAction.APPROVE:
-        p0_conflicts = [conflict for conflict in chapter.conflicts if conflict.severity.value == "P0" and not conflict.exempted]
+        p0_conflicts = [
+            conflict
+            for conflict in chapter.conflicts
+            if conflict.severity.value == "P0" and not conflict.exempted
+        ]
         if p0_conflicts:
             logger.warning(
                 "review blocked by P0 chapter_id=%s p0_count=%d",
                 chapter.id,
                 len(p0_conflicts),
             )
-            raise HTTPException(status_code=400, detail="P0 conflicts must be resolved or exempted before approval")
+            raise HTTPException(
+                status_code=400, detail="P0 conflicts must be resolved or exempted before approval"
+            )
         chapter.final = chapter.draft
         chapter.status = ChapterStatus.APPROVED
         if chapter.final:
@@ -4405,7 +4648,12 @@ async def review_chapter(req: ReviewRequest):
             try:
                 mem_ctx = MemoryContextService(store.three_layer, store)
                 project_chapters = [
-                    {"chapter_number": c.chapter_number, "plan": c.plan, "draft": c.draft, "final": c.final}
+                    {
+                        "chapter_number": c.chapter_number,
+                        "plan": c.plan,
+                        "draft": c.draft,
+                        "final": c.final,
+                    }
                     for c in chapter_list(chapter.project_id)
                 ]
                 mem_ctx.refresh_memory_after_chapter(
@@ -4416,7 +4664,11 @@ async def review_chapter(req: ReviewRequest):
                     mode="consolidated",
                 )
             except Exception:
-                logger.warning("consolidated memory refresh failed chapter_no=%d", chapter.chapter_number, exc_info=True)
+                logger.warning(
+                    "consolidated memory refresh failed chapter_no=%d",
+                    chapter.chapter_number,
+                    exc_info=True,
+                )
     elif req.action == ReviewAction.REJECT:
         chapter.status = ChapterStatus.DRAFT
     elif req.action == ReviewAction.REWRITE:
@@ -4447,9 +4699,16 @@ async def create_fanqie_book(project_id: str, req: ExternalCreateBookRequest):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    automation_dir = Path(
-        os.getenv("FANQIE_AUTOMATION_DIR", str((BACKEND_ROOT.parent / "automation" / "fanqie-playwright")))
-    ).expanduser().resolve()
+    automation_dir = (
+        Path(
+            os.getenv(
+                "FANQIE_AUTOMATION_DIR",
+                str((BACKEND_ROOT.parent / "automation" / "fanqie-playwright")),
+            )
+        )
+        .expanduser()
+        .resolve()
+    )
     if not automation_dir.exists():
         raise HTTPException(status_code=500, detail=f"Automation dir not found: {automation_dir}")
 
@@ -4554,7 +4813,11 @@ async def create_fanqie_book(project_id: str, req: ExternalCreateBookRequest):
         try:
             _persist_book_id_to_automation_config(automation_dir, book_id)
         except Exception:
-            logger.warning("persist create book_id failed book_id=%s automation_dir=%s", book_id, automation_dir)
+            logger.warning(
+                "persist create book_id failed book_id=%s automation_dir=%s",
+                book_id,
+                automation_dir,
+            )
         _bind_project_fanqie_book_id(project, book_id)
 
         logger.info(
@@ -4654,7 +4917,9 @@ async def suggest_fanqie_create_book(project_id: str, req: FanqieCreateSuggestio
         protagonist1 = _normalize_fanqie_role_name(role_candidates[0])
     if not protagonist2 and len(role_candidates) > 1:
         protagonist2 = _normalize_fanqie_role_name(role_candidates[1])
-    target_reader = _normalize_fanqie_target_reader(parsed.get("target_reader") or fallback_target_reader)
+    target_reader = _normalize_fanqie_target_reader(
+        parsed.get("target_reader") or fallback_target_reader
+    )
 
     logger.info(
         "fanqie create suggestion generated project_id=%s title_reference=%s target_reader=%s",
@@ -4685,9 +4950,16 @@ async def publish_chapter_external(chapter_id: str, req: ExternalPublishRequest)
         raise HTTPException(status_code=400, detail="No chapter content to publish")
 
     chapter_title = (req.title or f"第{chapter.chapter_number}章 {chapter.title}").strip()
-    automation_dir = Path(
-        os.getenv("FANQIE_AUTOMATION_DIR", str((BACKEND_ROOT.parent / "automation" / "fanqie-playwright")))
-    ).expanduser().resolve()
+    automation_dir = (
+        Path(
+            os.getenv(
+                "FANQIE_AUTOMATION_DIR",
+                str((BACKEND_ROOT.parent / "automation" / "fanqie-playwright")),
+            )
+        )
+        .expanduser()
+        .resolve()
+    )
     if not automation_dir.exists():
         raise HTTPException(status_code=500, detail=f"Automation dir not found: {automation_dir}")
 
@@ -4716,9 +4988,15 @@ async def publish_chapter_external(chapter_id: str, req: ExternalPublishRequest)
             book_id_source = "detect-book-id"
             try:
                 _persist_book_id_to_automation_config(automation_dir, book_id)
-                logger.info("persisted detected book_id=%s automation_dir=%s", book_id, automation_dir)
+                logger.info(
+                    "persisted detected book_id=%s automation_dir=%s", book_id, automation_dir
+                )
             except Exception:
-                logger.warning("persist detected book_id failed book_id=%s automation_dir=%s", book_id, automation_dir)
+                logger.warning(
+                    "persist detected book_id failed book_id=%s automation_dir=%s",
+                    book_id,
+                    automation_dir,
+                )
     if not book_id:
         raise HTTPException(
             status_code=400,
@@ -4911,6 +5189,7 @@ async def list_memory_files(project_id: str):
                         parts = content.split("---", 2)
                         if len(parts) >= 3:
                             import yaml
+
                             meta = yaml.safe_load(parts[1]) or {}
                             item_type = str(meta.get("type", ""))
                             summary = str(meta.get("summary", md_file.stem))
@@ -4920,15 +5199,17 @@ async def list_memory_files(project_id: str):
                 # For L1/L2/root, use filename as summary
                 summary = md_file.name
 
-            files.append({
-                "layer": layer_label,
-                "name": md_file.name,
-                "path": rel_path,
-                "summary": summary,
-                "item_type": item_type,
-                "size_bytes": stat.st_size,
-                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            })
+            files.append(
+                {
+                    "layer": layer_label,
+                    "name": md_file.name,
+                    "path": rel_path,
+                    "summary": summary,
+                    "item_type": item_type,
+                    "size_bytes": stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                }
+            )
 
     return {"files": files, "total": len(files)}
 
