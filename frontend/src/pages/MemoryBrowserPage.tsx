@@ -160,14 +160,7 @@ export default function MemoryBrowserPage() {
         if (projectId && currentProject?.id !== projectId) fetchProject(projectId)
     }, [projectId, currentProject, fetchProject])
 
-    // Load identity + files on mount
-    useEffect(() => {
-        if (!projectId) return
-        loadIdentity()
-        loadMemoryFiles()
-    }, [projectId])
-
-    const loadIdentity = async () => {
+    const loadIdentity = useCallback(async () => {
         setIdentityLoading(true)
         try {
             const res = await api.get(`/identity/${projectId}`)
@@ -178,9 +171,9 @@ export default function MemoryBrowserPage() {
         } finally {
             setIdentityLoading(false)
         }
-    }
+    }, [addToast, projectId])
 
-    const loadMemoryFiles = async () => {
+    const loadMemoryFiles = useCallback(async () => {
         if (!projectId) return
         setMemoryFilesLoading(true)
         try {
@@ -191,7 +184,14 @@ export default function MemoryBrowserPage() {
         } finally {
             setMemoryFilesLoading(false)
         }
-    }
+    }, [addToast, projectId])
+
+    // Load identity + files on mount
+    useEffect(() => {
+        if (!projectId) return
+        void loadIdentity()
+        void loadMemoryFiles()
+    }, [loadIdentity, loadMemoryFiles, projectId])
 
     const loadFileContent = async (sourcePath: string) => {
         if (!projectId) return
