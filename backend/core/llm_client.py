@@ -80,7 +80,7 @@ def _safe_positive_int(value: Any, fallback: int) -> int:
         parsed = int(value)
         if parsed > 0:
             return parsed
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return fallback
 
@@ -127,10 +127,8 @@ class LLMClient:
             return self._client
 
         from openai import OpenAI
-        self._client = OpenAI(
-            api_key=self.config.api_key,
-            base_url=self.config.base_url
-        )
+
+        self._client = OpenAI(api_key=self.config.api_key, base_url=self.config.base_url)
         return self._client
 
     def chat(
@@ -298,19 +296,16 @@ class LLMClient:
             self._warn_offline_once("embedding_missing_api_key")
             return self._offline_embedding(text, dim=self.config.embedding_dimension)
         import requests
-        
+
         url = "https://api.minimax.chat/v1/text/embedding"
-        
+
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-        
-        payload = {
-            "model": self.config.embedding_model,
-            "text": text
-        }
-        
+
+        payload = {"model": self.config.embedding_model, "text": text}
+
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             response.raise_for_status()
@@ -328,18 +323,20 @@ class LLMClient:
     def _embed_batch_minimax(self, texts: List[str]) -> List[List[float]]:
         if not self.config.api_key:
             self._warn_offline_once("embedding_batch_missing_api_key")
-            return [self._offline_embedding(text, dim=self.config.embedding_dimension) for text in texts]
+            return [
+                self._offline_embedding(text, dim=self.config.embedding_dimension) for text in texts
+            ]
         import requests
-        
+
         url = "https://api.minimax.chat/v1/text/embedding"
-        
+
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-        
+
         embeddings = []
-        
+
         for text in texts:
             payload = {"model": self.config.embedding_model, "text": text}
             try:
@@ -354,8 +351,10 @@ class LLMClient:
                     self.config.embedding_model,
                     exc,
                 )
-                embeddings.append(self._offline_embedding(text, dim=self.config.embedding_dimension))
-        
+                embeddings.append(
+                    self._offline_embedding(text, dim=self.config.embedding_dimension)
+                )
+
         return embeddings
 
     def _offline_chat(self, messages: List[Dict[str, str]]) -> str:
@@ -417,10 +416,7 @@ class LLMClient:
         return vector
 
 
-def create_llm_client(
-    provider: str = "openai",
-    **kwargs
-) -> LLMClient:
+def create_llm_client(provider: str = "openai", **kwargs) -> LLMClient:
     candidate = (provider or "openai").strip().lower()
     try:
         llm_provider = LLMProvider(candidate)

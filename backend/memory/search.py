@@ -1,7 +1,10 @@
 import json
+import logging
 import numpy as np
 from typing import List, Dict, Optional, Any
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 try:
     import lancedb
@@ -62,6 +65,10 @@ class VectorStore:
         if self._fallback_mode:
             self._add_fallback(item_id, embedding, metadata)
             return
+        if self.table is None:
+            self._init_fallback()
+            self._add_fallback(item_id, embedding, metadata)
+            return
 
         record = {
             "id": item_id,
@@ -77,17 +84,21 @@ class VectorStore:
 
         try:
             self.table.delete(f"id = '{item_id}'")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("vector delete failed before upsert id=%s err=%s", item_id, exc)
         self.table.add([record])
 
     def _add_fallback(self, item_id: str, embedding: List[float], metadata: Dict[str, Any]):
         data = json.loads(self.embeddings_file.read_text(encoding="utf-8"))
         data[item_id] = {"embedding": embedding, "metadata": metadata}
-        self.embeddings_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.embeddings_file.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
     def search(self, query_embedding: List[float], top_k: int = 20) -> List[Dict]:
         if self._fallback_mode:
+            return self._search_fallback(query_embedding, top_k)
+        if self.table is None:
             return self._search_fallback(query_embedding, top_k)
 
         results = (

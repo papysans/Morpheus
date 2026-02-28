@@ -2642,7 +2642,7 @@ def _extract_first_json_object(text: str) -> Dict[str, Any]:
     try:
         payload = json.loads(raw)
         return payload if isinstance(payload, dict) else {}
-    except Exception:
+    except json.JSONDecodeError:
         pass
 
     start = raw.find("{")
@@ -2660,7 +2660,7 @@ def _extract_first_json_object(text: str) -> Dict[str, Any]:
                 try:
                     payload = json.loads(candidate)
                     return payload if isinstance(payload, dict) else {}
-                except Exception:
+                except json.JSONDecodeError:
                     return {}
     return {}
 
@@ -3339,8 +3339,8 @@ async def list_chapters(project_id: str):
             if match:
                 ch_num = int(match.group(1))
                 synopsis_map[ch_num] = item.get("content", "")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("failed to build chapter synopsis map project=%s err=%s", project_id, exc)
 
     return [
         {
@@ -4549,8 +4549,8 @@ async def query_memory(project_id: str, query: str, layers: Optional[str] = None
         if db and hasattr(db, "close"):
             try:
                 db.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("vector db close failed project=%s err=%s", project_id, exc)
     return {"query": query, "results": results, "total": len(results)}
 
 
@@ -4859,7 +4859,6 @@ async def suggest_fanqie_create_book(project_id: str, req: FanqieCreateSuggestio
 
     title_reference = str(project.name or "").strip()[:15]
     role_candidates = _derive_fanqie_role_candidates(project_id)
-    fallback_intro = _build_fanqie_intro(project, "")
     fallback_target_reader = "male"
 
     chapters = chapter_list(project_id)
@@ -5193,8 +5192,8 @@ async def list_memory_files(project_id: str):
                             meta = yaml.safe_load(parts[1]) or {}
                             item_type = str(meta.get("type", ""))
                             summary = str(meta.get("summary", md_file.stem))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("memory file yaml parse failed path=%s err=%s", md_file, exc)
             else:
                 # For L1/L2/root, use filename as summary
                 summary = md_file.name

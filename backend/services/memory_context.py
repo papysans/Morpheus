@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Optional, TypedDict
 
 from memory import ThreeLayerMemory, MemoryStore
 from utils.text_cleaner import clean_foreshadowing_text, extract_keywords
@@ -78,7 +78,9 @@ class MemoryContextService:
         self.context_window_tokens = context_window_tokens
         self.input_budget_ratio = input_budget_ratio
 
-    def _compute_field_budgets(self, chapter_number: int, input_budget_tokens: int | None = None) -> dict:
+    def _compute_field_budgets(
+        self, chapter_number: int, input_budget_tokens: int | None = None
+    ) -> dict[str, int]:
         """Compute per-field token budgets based on context window and input budget ratio.
 
         Ensures total budget never exceeds input_budget_tokens by scaling down
@@ -132,7 +134,7 @@ class MemoryContextService:
         project_chapters: list[dict],
         top_k_threads: int = 10,
         read_only: bool = False,
-    ) -> dict:
+    ) -> ContextPack:
         """
         Build a Context_Pack with 7 fields for generation injection.
 
@@ -146,7 +148,9 @@ class MemoryContextService:
 
         # 1. identity_core
         identity_raw = self.three_layer.get_identity()
-        identity_core, identity_used = self._truncate_to_budget(identity_raw, budgets["identity_core"])
+        identity_core, identity_used = self._truncate_to_budget(
+            identity_raw, budgets["identity_core"]
+        )
 
         # 2. runtime_state
         rs_raw = self._read_file_safe(self.three_layer.l1_dir / "RUNTIME_STATE.md")
@@ -170,7 +174,9 @@ class MemoryContextService:
                 # Fallback: use the last synopsis available
                 if synopses:
                     prev_synopsis = synopses[-1].get("content", "")
-        prev_synopsis, prev_syn_used = self._truncate_to_budget(prev_synopsis, budgets["previous_synopsis"])
+        prev_synopsis, prev_syn_used = self._truncate_to_budget(
+            prev_synopsis, budgets["previous_synopsis"]
+        )
 
         # 5. open_threads (confidence-scored, then top-k)
         if read_only:
@@ -179,7 +185,9 @@ class MemoryContextService:
             all_threads = self.recompute_open_threads(project_chapters)
         open_only = [t for t in all_threads if t.get("status") == "open"]
         selected_threads = self._select_threads_by_confidence(
-            open_only, chapter_number, top_k=top_k_threads,
+            open_only,
+            chapter_number,
+            top_k=top_k_threads,
         )
         # Estimate tokens for threads
         threads_text = str(selected_threads)
@@ -188,8 +196,12 @@ class MemoryContextService:
         # 6. previous_chapters_compact
         prev_chapters = []
         prev_ch_used = 0
-        recent_chapters = [c for c in project_chapters if c.get("chapter_number", 0) < chapter_number]
-        recent_chapters = sorted(recent_chapters, key=lambda c: c.get("chapter_number", 0))[-5:]  # last 5
+        recent_chapters = [
+            c for c in project_chapters if c.get("chapter_number", 0) < chapter_number
+        ]
+        recent_chapters = sorted(recent_chapters, key=lambda c: c.get("chapter_number", 0))[
+            -5:
+        ]  # last 5
         for ch in recent_chapters:
             compact = {
                 "chapter_number": ch.get("chapter_number"),
@@ -202,7 +214,7 @@ class MemoryContextService:
         _, prev_ch_used = self._truncate_to_budget(prev_ch_text, budgets["previous_chapters"])
 
         # 7. budget_stats
-        budget_stats: dict = {
+        budget_stats: BudgetStats = {
             "identity_core_budget": budgets["identity_core"],
             "identity_core_used": identity_used,
             "runtime_state_budget": budgets["runtime_state"],
@@ -216,10 +228,15 @@ class MemoryContextService:
             "previous_chapters_budget": budgets["previous_chapters"],
             "previous_chapters_used": prev_ch_used,
             "total_budget": total_budget,
-            "total_used": identity_used + rs_used + mem_used + prev_syn_used + threads_used + prev_ch_used,
+            "total_used": identity_used
+            + rs_used
+            + mem_used
+            + prev_syn_used
+            + threads_used
+            + prev_ch_used,
         }
 
-        pack = {
+        pack: ContextPack = {
             "identity_core": identity_core,
             "runtime_state": runtime_state,
             "memory_compact": memory_compact,
@@ -236,7 +253,12 @@ class MemoryContextService:
             chapter_number,
             pack["budget_stats"]["total_budget"],
             pack["budget_stats"]["total_used"],
-            len(identity_raw), len(rs_raw), len(memory_raw), len(prev_synopsis), len(threads_text), len(prev_ch_text),
+            len(identity_raw),
+            len(rs_raw),
+            len(memory_raw),
+            len(prev_synopsis),
+            len(threads_text),
+            len(prev_ch_text),
             max(0, len(identity_raw) // 2 - identity_used),
             max(0, len(rs_raw) // 2 - rs_used),
             max(0, len(memory_raw) // 2 - mem_used),
@@ -246,7 +268,6 @@ class MemoryContextService:
         )
 
         return pack
-
 
     @staticmethod
     def _normalize_plan(chapter_plan) -> dict | None:
@@ -307,15 +328,15 @@ class MemoryContextService:
         if plan_synopsis and text_synopsis:
             fused = plan_synopsis[:120] + "｜" + text_synopsis[:178]
             if len(fused) > MAX_LEN:
-                fused = fused[:MAX_LEN - 1] + "…"
+                fused = fused[: MAX_LEN - 1] + "…"
             return fused
         elif plan_synopsis:
             if len(plan_synopsis) > MAX_LEN:
-                plan_synopsis = plan_synopsis[:MAX_LEN - 1] + "…"
+                plan_synopsis = plan_synopsis[: MAX_LEN - 1] + "…"
             return plan_synopsis
         elif text_synopsis:
             if len(text_synopsis) > MAX_LEN:
-                text_synopsis = text_synopsis[:MAX_LEN - 1] + "…"
+                text_synopsis = text_synopsis[: MAX_LEN - 1] + "…"
             return text_synopsis
 
         # Ultimate fallback
@@ -337,7 +358,11 @@ class MemoryContextService:
             plan = ch.get("plan")
             if not plan:
                 continue
-            plan_dict = plan if isinstance(plan, dict) else (plan.model_dump() if hasattr(plan, "model_dump") else {})
+            plan_dict = (
+                plan
+                if isinstance(plan, dict)
+                else (plan.model_dump() if hasattr(plan, "model_dump") else {})
+            )
             foreshadowing_items = plan_dict.get("foreshadowing", [])
             chapter_number = ch.get("chapter_number", 0)
 
@@ -367,8 +392,12 @@ class MemoryContextService:
 
                     later_plan = later_ch.get("plan")
                     if later_plan:
-                        later_plan_dict = later_plan if isinstance(later_plan, dict) else (
-                            later_plan.model_dump() if hasattr(later_plan, "model_dump") else {}
+                        later_plan_dict = (
+                            later_plan
+                            if isinstance(later_plan, dict)
+                            else (
+                                later_plan.model_dump() if hasattr(later_plan, "model_dump") else {}
+                            )
                         )
                         callbacks = later_plan_dict.get("callback_targets", [])
                         for cb in callbacks:
@@ -382,7 +411,9 @@ class MemoryContextService:
                             cb_keywords = extract_keywords(str(cb))
                             if fs_keywords and cb_keywords:
                                 overlap = set(fs_keywords) & set(cb_keywords)
-                                if len(overlap) >= 2 or (len(overlap) == 1 and len(fs_keywords) <= 2):
+                                if len(overlap) >= 2 or (
+                                    len(overlap) == 1 and len(fs_keywords) <= 2
+                                ):
                                     thread["status"] = "resolved"
                                     thread["resolved_by_chapter"] = later_num
                                     thread["evidence"] = f"callback_target keyword match: {overlap}"
@@ -396,7 +427,9 @@ class MemoryContextService:
                         later_text = later_ch.get("final") or later_ch.get("draft") or ""
                         if later_text:
                             matched_kw = [kw for kw in fs_keywords if kw in later_text]
-                            if len(matched_kw) >= 2 or (len(matched_kw) == 1 and len(fs_keywords) <= 2):
+                            if len(matched_kw) >= 2 or (
+                                len(matched_kw) == 1 and len(fs_keywords) <= 2
+                            ):
                                 thread["status"] = "resolved"
                                 thread["resolved_by_chapter"] = later_num
                                 thread["evidence"] = f"keyword match in text: {matched_kw}"
@@ -418,7 +451,9 @@ class MemoryContextService:
         lines.append("## Open")
         if open_items:
             for t in open_items:
-                lines.append(f"- [Ch.{t['source_chapter']}] {t['text']} | evidence: {t['evidence'] or 'pending'}")
+                lines.append(
+                    f"- [Ch.{t['source_chapter']}] {t['text']} | evidence: {t['evidence'] or 'pending'}"
+                )
         else:
             lines.append("- (暂无)")
 
@@ -440,7 +475,7 @@ class MemoryContextService:
         else:
             lines.append("- (暂无)")
 
-        lines.append(f"\n---")
+        lines.append("\n---")
         lines.append(f"_Last recomputed: {datetime.now().isoformat()}_")
         lines.append(f"_Total: {len(open_items)} open, {len(resolved_items)} resolved_")
 
@@ -510,10 +545,7 @@ class MemoryContextService:
         """Select open threads by confidence score, filtering below threshold then taking top-k."""
         if not open_threads:
             return []
-        scored = [
-            (t, self._score_thread_confidence(t, current_chapter))
-            for t in open_threads
-        ]
+        scored = [(t, self._score_thread_confidence(t, current_chapter)) for t in open_threads]
         # Filter by minimum confidence
         filtered = [(t, s) for t, s in scored if s >= min_confidence]
         # Sort descending by score
@@ -545,9 +577,27 @@ class MemoryContextService:
                 line = line.strip()
                 if not line or len(line) < 5:
                     continue
-                if any(kw in line for kw in ["变成", "转变", "觉醒", "死亡", "离开", "背叛",
-                                              "受伤", "恢复", "获得", "失去", "决定", "发现了",
-                                              "揭露", "暴露", "改变了", "不再是"]):
+                if any(
+                    kw in line
+                    for kw in [
+                        "变成",
+                        "转变",
+                        "觉醒",
+                        "死亡",
+                        "离开",
+                        "背叛",
+                        "受伤",
+                        "恢复",
+                        "获得",
+                        "失去",
+                        "决定",
+                        "发现了",
+                        "揭露",
+                        "暴露",
+                        "改变了",
+                        "不再是",
+                    ]
+                ):
                     state_changes.append(line[:80])
                     if len(state_changes) >= 10:
                         break
@@ -576,7 +626,7 @@ class MemoryContextService:
         else:
             rs_lines.append("- (暂无)")
 
-        rs_lines.append(f"\n---")
+        rs_lines.append("\n---")
         rs_lines.append(f"_Last updated: {datetime.now().isoformat()}_")
         rs_lines.append(f"_Source chapters: 1-{chapter_number}_")
 
@@ -594,6 +644,7 @@ class MemoryContextService:
         Returns: {"memory_rewritten": bool, "runtime_rebuilt": bool, "duration_s": float}
         """
         import time
+
         start = time.time()
 
         memory_path = self.three_layer.l2_dir / "MEMORY.md"
@@ -603,6 +654,7 @@ class MemoryContextService:
         if memory_path.exists():
             try:
                 import shutil
+
                 shutil.copy2(memory_path, legacy_path)
             except Exception as e:
                 logger.warning(f"Failed to backup MEMORY.md: {e}")
@@ -634,7 +686,7 @@ class MemoryContextService:
         compressed_lines.append("\n## Recent Key Decisions")
         compressed_lines.append("- (从章节计划中提取)")
 
-        compressed_lines.append(f"\n---")
+        compressed_lines.append("\n---")
         compressed_lines.append(f"_Compressed at: {datetime.now().isoformat()}_")
         ch_nums = [c.get("chapter_number", 0) for c in project_chapters]
         if ch_nums:
@@ -645,7 +697,8 @@ class MemoryContextService:
         post_size = self._file_size_safe(memory_path)
         _logger.info(
             "threshold_rewrite_compression pre_size=%d post_size=%d ratio=%.2f",
-            pre_size, post_size,
+            pre_size,
+            post_size,
             post_size / pre_size if pre_size > 0 else 0,
         )
 
@@ -747,13 +800,12 @@ class MemoryContextService:
             chapter_number,
             mode,
             result.get("threshold_rewrite") is not None,
-            result.get("threshold_rewrite", {}).get("duration_s", 0.0) if isinstance(result.get("threshold_rewrite"), dict) else 0.0,
+            result.get("threshold_rewrite", {}).get("duration_s", 0.0)
+            if isinstance(result.get("threshold_rewrite"), dict)
+            else 0.0,
             self._file_size_safe(self.three_layer.l1_dir / "RUNTIME_STATE.md"),
             self._file_size_safe(self.three_layer.l2_dir / "MEMORY.md"),
             self._file_size_safe(self.three_layer.memory_dir / "OPEN_THREADS.md"),
         )
 
         return result
-
-
-

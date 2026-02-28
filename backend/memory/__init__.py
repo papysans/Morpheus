@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -11,6 +12,8 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import yaml
 
 from models import EntityState, EventEdge, Layer, MemoryItem
+
+logger = logging.getLogger(__name__)
 
 
 class ThreeLayerMemory:
@@ -247,8 +250,10 @@ class ThreeLayerMemory:
                 if changed and rewritten != original:
                     try:
                         memory_file.write_text(rewritten, encoding="utf-8")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(
+                            "failed to rewrite L2 heading file=%s err=%s", memory_file, exc
+                        )
 
         return {"l3_items_shifted": updated_l3, "l2_headings_shifted": updated_l2}
 
@@ -258,7 +263,7 @@ class ThreeLayerMemory:
             summary += "..."
 
         retains = [f"Chapter {chapter_id} 关键摘要已固化到 L3。"]
-        downgrades = []
+        downgrades: List[str] = []
         new_facts = [
             f"Chapter {chapter_id} 完稿时间 {datetime.now().isoformat()}",
             f"Chapter {chapter_id} 正文字数 {len(chapter_content)}",
@@ -475,14 +480,20 @@ class MemoryStore:
         if len(terms) <= 1:
             # Chinese prompts often have no whitespace; split by punctuation and
             # further chunk long fragments so FTS can match meaningful pieces.
-            fragments = [frag.strip() for frag in re.split(r"[^\w\u4e00-\u9fff]+", raw) if frag.strip()]
+            fragments = [
+                frag.strip() for frag in re.split(r"[^\w\u4e00-\u9fff]+", raw) if frag.strip()
+            ]
             expanded: List[str] = []
             for frag in fragments:
                 if len(frag) <= 8:
                     expanded.append(frag)
                     continue
 
-                pieces = [p for p in re.split(r"[的了和与在并及且将被把对从向为是有再又都而并且]", frag) if p]
+                pieces = [
+                    p
+                    for p in re.split(r"[的了和与在并及且将被把对从向为是有再又都而并且]", frag)
+                    if p
+                ]
                 if pieces:
                     expanded.extend(piece[:8] for piece in pieces if len(piece) >= 2)
                     continue
@@ -694,7 +705,9 @@ class MemoryStore:
             )
             conn.commit()
 
-    def get_events(self, subject: Optional[str] = None, chapter: Optional[int] = None) -> List[EventEdge]:
+    def get_events(
+        self, subject: Optional[str] = None, chapter: Optional[int] = None
+    ) -> List[EventEdge]:
         with self._connection() as conn:
             cursor = conn.cursor()
             query = "SELECT * FROM events WHERE 1=1"
@@ -719,7 +732,9 @@ class MemoryStore:
                         relation=row["relation"],
                         object=row["object"],
                         chapter=row["chapter"],
-                        timestamp=datetime.fromisoformat(row["timestamp"]) if row["timestamp"] else None,
+                        timestamp=datetime.fromisoformat(row["timestamp"])
+                        if row["timestamp"]
+                        else None,
                         confidence=row["confidence"],
                         description=row["description"] or "",
                         created_at=datetime.fromisoformat(row["created_at"]),
@@ -803,8 +818,12 @@ class MemoryStore:
             (Layer.L2, self.three_layer.memory_dir / "OPEN_THREADS.md"),
         ]
 
-        source_files.extend((Layer.L2, path) for path in sorted(self.three_layer.logs_dir.glob("*.md"))[-30:])
-        source_files.extend((Layer.L3, path) for path in sorted(self.three_layer.l3_dir.glob("*.md"))[-200:])
+        source_files.extend(
+            (Layer.L2, path) for path in sorted(self.three_layer.logs_dir.glob("*.md"))[-30:]
+        )
+        source_files.extend(
+            (Layer.L3, path) for path in sorted(self.three_layer.l3_dir.glob("*.md"))[-200:]
+        )
 
         for layer, file_path in source_files:
             if not file_path.exists():
@@ -820,9 +839,7 @@ class MemoryStore:
                     if len(parts) >= 3:
                         metadata = yaml.safe_load(parts[1]) or {}
                         summary_seed = str(
-                            metadata.get("summary")
-                            or metadata.get("type")
-                            or file_path.stem
+                            metadata.get("summary") or metadata.get("type") or file_path.stem
                         )
                 except Exception:
                     pass
@@ -895,9 +912,11 @@ class MemoryStore:
                 cursor.execute(f"DELETE FROM memory_items WHERE id IN ({placeholders})", stale_ids)
                 conn.commit()
         return len(stale_ids)
+
     def _purge_old_logs(self, max_age_days: int = 30) -> int:
         """Delete log files older than max_age_days."""
         import time as _time
+
         cutoff = _time.time() - (max_age_days * 86400)
         removed = 0
         logs_dir = self.three_layer.logs_dir
@@ -910,5 +929,6 @@ class MemoryStore:
                     removed += 1
             except Exception as e:
                 import logging
+
                 logging.getLogger(__name__).warning(f"Failed to purge old log {log_file.name}: {e}")
         return removed

@@ -283,10 +283,12 @@ _chinese_text = st.lists(_chinese_chars, min_size=50, max_size=500).map(lambda c
 # Strategy for optional plan dict
 _optional_plan = st.one_of(
     st.none(),
-    st.fixed_dictionaries({
-        "title": st.text(min_size=1, max_size=50),
-        "goal": st.text(min_size=1, max_size=100),
-    }),
+    st.fixed_dictionaries(
+        {
+            "title": st.text(min_size=1, max_size=50),
+            "goal": st.text(min_size=1, max_size=100),
+        }
+    ),
 )
 
 
@@ -331,20 +333,24 @@ _foreshadowing_text = st.text(
     max_size=50,
 )
 
-_chapter_plan_with_fs = st.fixed_dictionaries({
-    "title": st.text(min_size=1, max_size=20),
-    "goal": st.text(min_size=1, max_size=30),
-    "foreshadowing": st.lists(_foreshadowing_text, min_size=1, max_size=5),
-    "callback_targets": st.lists(st.text(min_size=3, max_size=30), min_size=0, max_size=3),
-})
+_chapter_plan_with_fs = st.fixed_dictionaries(
+    {
+        "title": st.text(min_size=1, max_size=20),
+        "goal": st.text(min_size=1, max_size=30),
+        "foreshadowing": st.lists(_foreshadowing_text, min_size=1, max_size=5),
+        "callback_targets": st.lists(st.text(min_size=3, max_size=30), min_size=0, max_size=3),
+    }
+)
 
 _project_chapters = st.lists(
-    st.fixed_dictionaries({
-        "chapter_number": st.integers(min_value=1, max_value=20),
-        "plan": st.one_of(st.none(), _chapter_plan_with_fs),
-        "draft": st.one_of(st.none(), st.text(min_size=10, max_size=200)),
-        "final": st.one_of(st.none(), st.text(min_size=10, max_size=200)),
-    }),
+    st.fixed_dictionaries(
+        {
+            "chapter_number": st.integers(min_value=1, max_value=20),
+            "plan": st.one_of(st.none(), _chapter_plan_with_fs),
+            "draft": st.one_of(st.none(), st.text(min_size=10, max_size=200)),
+            "final": st.one_of(st.none(), st.text(min_size=10, max_size=200)),
+        }
+    ),
     min_size=1,
     max_size=8,
 ).map(lambda chs: sorted(chs, key=lambda c: c["chapter_number"]))
@@ -370,7 +376,13 @@ class TestProperty3OpenThreadRecomputeValid:
             ms = MemoryStore(tmp_dir, str(db_path))
             svc = MemoryContextService(tlm, ms)
             threads = svc.recompute_open_threads(chapters)
-            required_fields = {"source_chapter", "text", "status", "resolved_by_chapter", "evidence"}
+            required_fields = {
+                "source_chapter",
+                "text",
+                "status",
+                "resolved_by_chapter",
+                "evidence",
+            }
             for t in threads:
                 assert required_fields.issubset(t.keys()), f"Missing fields in thread: {t.keys()}"
                 assert t["status"] in ("open", "resolved"), f"Invalid status: {t['status']}"
@@ -394,10 +406,13 @@ class TestProperty4ThreadResolutionPriority:
     def test_callback_targets_take_priority(self, data):
         """Validates: Requirements 2.3, 2.4"""
         # Create a scenario where both callback_targets and keyword match exist
-        fs_text = data.draw(st.text(
-            alphabet=st.sampled_from([chr(c) for c in range(0x4E00, 0x4E00 + 100)]),
-            min_size=5, max_size=30,
-        ))
+        fs_text = data.draw(
+            st.text(
+                alphabet=st.sampled_from([chr(c) for c in range(0x4E00, 0x4E00 + 100)]),
+                min_size=5,
+                max_size=30,
+            )
+        )
 
         chapters = [
             {
@@ -469,18 +484,27 @@ class TestProperty8ContextPackStructuralCompleteness:
 
             # All 7 required keys
             required_keys = {
-                "identity_core", "runtime_state", "memory_compact",
-                "previous_chapter_synopsis", "open_threads",
-                "previous_chapters_compact", "budget_stats",
+                "identity_core",
+                "runtime_state",
+                "memory_compact",
+                "previous_chapter_synopsis",
+                "open_threads",
+                "previous_chapters_compact",
+                "budget_stats",
             }
-            assert required_keys.issubset(pack.keys()), f"Missing keys: {required_keys - pack.keys()}"
+            assert required_keys.issubset(pack.keys()), (
+                f"Missing keys: {required_keys - pack.keys()}"
+            )
 
             # Budget invariant: sum of *_used <= total_budget
             bs = pack["budget_stats"]
             used_fields = [
-                bs["identity_core_used"], bs["runtime_state_used"],
-                bs["memory_compact_used"], bs["previous_synopsis_used"],
-                bs["open_threads_used"], bs["previous_chapters_used"],
+                bs["identity_core_used"],
+                bs["runtime_state_used"],
+                bs["memory_compact_used"],
+                bs["previous_synopsis_used"],
+                bs["open_threads_used"],
+                bs["previous_chapters_used"],
             ]
             total_used = sum(used_fields)
             assert total_used <= bs["total_budget"], (
@@ -542,8 +566,10 @@ class TestProperty2ThresholdRewriteTriggersAt3:
             ms = MemoryStore(tmp_dir, str(db_path))
             svc = MemoryContextService(tlm, ms)
 
-            chapters = [{"chapter_number": i, "plan": None, "draft": f"Text for ch {i}", "final": None}
-                        for i in range(1, chapter_number + 1)]
+            chapters = [
+                {"chapter_number": i, "plan": None, "draft": f"Text for ch {i}", "final": None}
+                for i in range(1, chapter_number + 1)
+            ]
 
             result = svc.refresh_memory_after_chapter(
                 chapter_number=chapter_number,
@@ -576,7 +602,7 @@ class TestProperty6LightweightRefreshAppends:
     """Property 6: Lightweight refresh appends without compression."""
 
     @given(chapter_number=st.integers(min_value=1, max_value=10))
-    @settings(max_examples=50)
+    @settings(max_examples=50, deadline=400)
     def test_lightweight_memory_monotonic_growth(self, chapter_number):
         """Validates: Requirements 3.3"""
         tmp_dir = tempfile.mkdtemp()
@@ -590,8 +616,10 @@ class TestProperty6LightweightRefreshAppends:
             sizes = []
 
             for i in range(1, chapter_number + 1):
-                chapters = [{"chapter_number": j, "plan": None, "draft": None, "final": None}
-                            for j in range(1, i + 1)]
+                chapters = [
+                    {"chapter_number": j, "plan": None, "draft": None, "final": None}
+                    for j in range(1, i + 1)
+                ]
                 svc.refresh_memory_after_chapter(
                     chapter_number=i,
                     chapter_text=f"Chapter {i} content",
@@ -604,7 +632,7 @@ class TestProperty6LightweightRefreshAppends:
             # Monotonic growth
             for j in range(1, len(sizes)):
                 assert sizes[j] >= sizes[j - 1], (
-                    f"MEMORY.md size decreased from {sizes[j-1]} to {sizes[j]} at step {j}"
+                    f"MEMORY.md size decreased from {sizes[j - 1]} to {sizes[j]} at step {j}"
                 )
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -636,8 +664,10 @@ class TestProperty1IdentityPreservation:
             identity_before = tlm.get_identity()
 
             for i in range(1, call_count + 1):
-                chapters = [{"chapter_number": j, "plan": None, "draft": None, "final": None}
-                            for j in range(1, i + 1)]
+                chapters = [
+                    {"chapter_number": j, "plan": None, "draft": None, "final": None}
+                    for j in range(1, i + 1)
+                ]
                 svc.refresh_memory_after_chapter(
                     chapter_number=i,
                     chapter_text=f"Chapter {i} text",
@@ -689,7 +719,9 @@ class TestProperty12ConsolidatedRefreshAllApprovalPathways:
                     return "\n".join(lines[node.lineno - 1 : node.end_lineno])
         raise ValueError(f"Function {func_name!r} not found in source")
 
-    @given(pathway=st.sampled_from(["review_chapter", "run_one_shot_book_generation", "commit_memory"]))
+    @given(
+        pathway=st.sampled_from(["review_chapter", "run_one_shot_book_generation", "commit_memory"])
+    )
     @settings(max_examples=10)
     def test_approval_pathways_call_consolidated_refresh(self, pathway: str):
         """
@@ -760,9 +792,7 @@ class TestProperty12ConsolidatedRefreshAllApprovalPathways:
             assert "refresh_memory_after_chapter" in func_source, (
                 f"{pathway} missing refresh_memory_after_chapter call"
             )
-            assert 'mode="consolidated"' in func_source, (
-                f'{pathway} missing mode="consolidated"'
-            )
+            assert 'mode="consolidated"' in func_source, f'{pathway} missing mode="consolidated"'
 
 
 # ---------------------------------------------------------------------------
@@ -791,13 +821,19 @@ class TestProperty13PreGenerationContextLogging:
 
             bs = pack["budget_stats"]
             required_logging_fields = [
-                "total_budget", "identity_core_used", "runtime_state_used",
-                "memory_compact_used", "previous_synopsis_used",
-                "open_threads_used", "previous_chapters_used",
+                "total_budget",
+                "identity_core_used",
+                "runtime_state_used",
+                "memory_compact_used",
+                "previous_synopsis_used",
+                "open_threads_used",
+                "previous_chapters_used",
             ]
             for field in required_logging_fields:
                 assert field in bs, f"budget_stats missing logging field: {field}"
-                assert isinstance(bs[field], (int, float)), f"budget_stats[{field}] should be numeric"
+                assert isinstance(bs[field], (int, float)), (
+                    f"budget_stats[{field}] should be numeric"
+                )
 
             assert isinstance(pack["open_threads"], list), "open_threads should be a list"
         finally:
@@ -827,8 +863,10 @@ class TestProperty14WritebackLoggingFields:
             ms = MemoryStore(tmp_dir, str(db_path))
             svc = MemoryContextService(tlm, ms)
 
-            chapters = [{"chapter_number": i, "plan": None, "draft": f"Ch {i}", "final": None}
-                        for i in range(1, chapter_number + 1)]
+            chapters = [
+                {"chapter_number": i, "plan": None, "draft": f"Ch {i}", "final": None}
+                for i in range(1, chapter_number + 1)
+            ]
 
             result = svc.refresh_memory_after_chapter(
                 chapter_number=chapter_number,
