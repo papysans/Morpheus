@@ -11,7 +11,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import yaml
 
-from models import EntityState, EventEdge, Layer, MemoryItem
+from models import CharacterProfile, EntityState, EventEdge, Layer, MemoryItem
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +412,24 @@ class MemoryStore:
                 """
             )
             conn.commit()
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS character_profiles (
+                    profile_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    character_name TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_profiles_project
+                ON character_profiles (project_id)
+                """
+            )
 
     def _file_item_id(self, source_path: Path) -> str:
         normalized = source_path.resolve().as_posix()
@@ -932,3 +950,68 @@ class MemoryStore:
 
                 logging.getLogger(__name__).warning(f"Failed to purge old log {log_file.name}: {e}")
         return removed
+
+    # ------------------------------------------------------------------
+    # L4 Character Profile CRUD
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def make_profile_id(project_id: str, character_name: str) -> str:
+        """Deterministic profile ID from project + character name."""
+        key = f"{project_id}::{character_name.strip()}"
+        return str(uuid5(NAMESPACE_URL, key))
+
+    def upsert_profile(self, profile: CharacterProfile) -> None:
+        """Insert or replace a character profile (full JSON blob)."""
+        profile.updated_at = datetime.now()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO character_profiles
+                (profile_id, project_id, character_name, data, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    profile.profile_id,
+                    profile.project_id,
+                    profile.character_name,
+                    profile.model_dump_json(),
+                    profile.created_at.isoformat(),
+                    profile.updated_at.isoformat(),
+                ),
+            )
+            conn.commit()
+
+    def get_profile(self, profile_id: str) -> Optional[CharacterProfile]:
+        """Fetch a single profile by ID, or None if not found."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT data FROM character_profiles WHERE profile_id = ?",
+                (profile_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return CharacterProfile.model_validate_json(row["data"])
+
+    def list_profiles(self, project_id: str) -> List[CharacterProfile]:
+        """List all profiles for a project."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT data FROM character_profiles WHERE project_id = ? ORDER BY character_name ASC",
+                (project_id,),
+            )
+            return [CharacterProfile.model_validate_json(row["data"]) for row in cursor.fetchall()]
+
+    def delete_profile(self, profile_id: str) -> None:
+        """Delete a profile by ID."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM character_profiles WHERE profile_id = ?",
+                (profile_id,),
+            )
+            conn.commit()

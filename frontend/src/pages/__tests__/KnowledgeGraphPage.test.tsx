@@ -127,8 +127,22 @@ beforeEach(() => {
     vi.clearAllMocks()
     useToastStore.setState({ toasts: [] })
     mockApiGet.mockImplementation((url: string) => {
-        if (url.includes('/entities/')) return Promise.resolve({ data: sampleEntities })
+        if (url.includes('/projects/') && url.includes('/graph'))
+            return Promise.resolve({
+                data: {
+                    nodes: [
+                        { id: 'e1', label: '李明', overview: '主角', personality: '冷静' },
+                        { id: 'e2', label: '冰霜城', overview: '地点', personality: '' },
+                        { id: 'e3', label: '火焰剑', overview: '物品', personality: '' },
+                    ],
+                    edges: [
+                        { id: 'edge-1', source: 'e1', target: 'e2', label: '前往' },
+                        { id: 'edge-2', source: 'e1', target: 'e3', label: '获得' },
+                    ],
+                },
+            })
         if (url.includes('/events/')) return Promise.resolve({ data: sampleEvents })
+        if (url.includes('/entities/')) return Promise.resolve({ data: sampleEntities })
         return Promise.resolve({ data: [] })
     })
 })
@@ -399,7 +413,7 @@ describe('KnowledgeGraphPage', () => {
         })
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText(/暂无实体数据/)).toBeInTheDocument()
+            expect(screen.getByText(/暂无角色档案/)).toBeInTheDocument()
         })
     })
 
@@ -438,8 +452,10 @@ describe('KnowledgeGraphPage', () => {
 
     it('shows empty timeline state', async () => {
         mockApiGet.mockImplementation((url: string) => {
-            if (url.includes('/entities/')) return Promise.resolve({ data: sampleEntities })
+            if (url.includes('/projects/') && url.includes('/graph'))
+                return Promise.resolve({ data: { nodes: [{ id: 'e1', label: '李明', overview: '主角', personality: '' }], edges: [] } })
             if (url.includes('/events/')) return Promise.resolve({ data: [] })
+            if (url.includes('/entities/')) return Promise.resolve({ data: sampleEntities })
             return Promise.resolve({ data: [] })
         })
         renderPage()
@@ -469,6 +485,41 @@ describe('KnowledgeGraphPage', () => {
         await waitFor(() => {
             expect(screen.getByText('主角出发前往冰霜城')).toBeInTheDocument()
             expect(screen.getByText('主角获得火焰剑')).toBeInTheDocument()
+        })
+    })
+})
+
+describe('KnowledgeGraphPage L4 data', () => {
+    it('fetches from /api/projects/{id}/graph endpoint', async () => {
+        renderPage()
+        await waitFor(() => {
+            expect(mockApiGet).toHaveBeenCalledWith('/projects/proj-1/graph')
+        })
+    })
+
+    it('renders L4 character node label in graph', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url.includes('/projects/') && url.includes('/graph'))
+                return Promise.resolve({ data: { nodes: [{ id: 'p1', label: '张三', overview: '主角', personality: '冷静' }], edges: [] } })
+            if (url.includes('/events/')) return Promise.resolve({ data: [] })
+            return Promise.resolve({ data: [] })
+        })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('张三')).toBeInTheDocument()
+        })
+    })
+
+    it('shows empty state when no L4 profiles exist', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url.includes('/projects/') && url.includes('/graph'))
+                return Promise.resolve({ data: { nodes: [], edges: [] } })
+            if (url.includes('/events/')) return Promise.resolve({ data: [] })
+            return Promise.resolve({ data: [] })
+        })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText(/暂无角色档案/)).toBeInTheDocument()
         })
     })
 })

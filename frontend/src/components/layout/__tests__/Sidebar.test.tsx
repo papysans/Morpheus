@@ -125,7 +125,6 @@ describe('Sidebar', () => {
         it('highlights 项目列表 on root path', () => {
             const { container } = renderSidebar('/')
             const links = container.querySelectorAll('.sidebar__link')
-            // First link is 项目列表
             expect(links[0].classList.contains('sidebar__link--active')).toBe(true)
         })
 
@@ -138,30 +137,26 @@ describe('Sidebar', () => {
         it('highlights 项目概览 on exact project path', () => {
             const { container } = renderSidebar('/project/p1')
             const subNavLinks = container.querySelectorAll('.sidebar__section:nth-child(2) .sidebar__link')
-            // First sub-nav link is 项目概览
             expect(subNavLinks[0].classList.contains('sidebar__link--active')).toBe(true)
         })
 
         it('highlights 创作控制台 on /project/:id/write', () => {
             const { container } = renderSidebar('/project/p1/write')
             const subNavLinks = container.querySelectorAll('.sidebar__section:nth-child(2) .sidebar__link')
-            // 创作控制台 is the second sub-nav link
             expect(subNavLinks[1].classList.contains('sidebar__link--active')).toBe(true)
-            // 项目概览 should NOT be active
             expect(subNavLinks[0].classList.contains('sidebar__link--active')).toBe(false)
         })
 
         it('highlights 章节工作台 on /project/:id/chapter/:chapterId (prefix match)', () => {
             const { container } = renderSidebar('/project/p1/chapter/ch1')
             const subNavLinks = container.querySelectorAll('.sidebar__section:nth-child(2) .sidebar__link')
-            // 章节工作台 is the third sub-nav link
             expect(subNavLinks[2].classList.contains('sidebar__link--active')).toBe(true)
         })
 
         it('highlights 决策回放 on /project/:id/trace/:chapterId (prefix match)', () => {
             const { container } = renderSidebar('/project/p1/trace/ch1')
             const subNavLinks = container.querySelectorAll('.sidebar__section:nth-child(2) .sidebar__link')
-            expect(subNavLinks[4].classList.contains('sidebar__link--active')).toBe(true)
+            expect(subNavLinks[5].classList.contains('sidebar__link--active')).toBe(true)
         })
 
         it('highlights 评测看板 on /dashboard', () => {
@@ -171,21 +166,41 @@ describe('Sidebar', () => {
         })
     })
 
+    describe('知识图谱 nav entry', () => {
+        it('shows 知识图谱 link when on project route (GRAPH_FEATURE_ENABLED=true)', () => {
+            renderSidebar('/project/p1')
+            expect(screen.getByText('知识图谱')).toBeInTheDocument()
+        })
+
+        it('highlights 知识图谱 on /project/:id/graph', () => {
+            const { container } = renderSidebar('/project/p1/graph')
+            const subNavLinks = container.querySelectorAll('.sidebar__section:nth-child(2) .sidebar__link')
+            // 知识图谱 is the 5th sub-nav link (index 4)
+            expect(subNavLinks[4].classList.contains('sidebar__link--active')).toBe(true)
+        })
+
+        it('includes 知识图谱 in project sub-nav items', () => {
+            renderSidebar('/project/p1')
+            const graphLink = screen.getByText('知识图谱')
+            expect(graphLink).toBeInTheDocument()
+            // Verify it's a link to /project/:id/graph
+            const linkElement = graphLink.closest('a')
+            expect(linkElement?.getAttribute('href')).toBe('/project/p1/graph')
+        })
+    })
+
     describe('浏览器前进/后退同步', () => {
         it('updates active state when location changes (simulated via re-render)', () => {
-            // MemoryRouter with multiple entries simulates navigation history
             const { container, unmount } = render(
                 <MemoryRouter initialEntries={['/', '/project/p1']} initialIndex={1}>
                     <Sidebar />
                 </MemoryRouter>
             )
-            // Should be on /project/p1 — project sub-nav visible
             expect(screen.getByText('项目概览')).toBeInTheDocument()
             const subNavLinks = container.querySelectorAll('.sidebar__section:nth-child(2) .sidebar__link')
             expect(subNavLinks[0].classList.contains('sidebar__link--active')).toBe(true)
             unmount()
 
-            // Now render at index 0 (root) — simulates going back
             const { container: container2 } = render(
                 <MemoryRouter initialEntries={['/', '/project/p1']} initialIndex={0}>
                     <Sidebar />
