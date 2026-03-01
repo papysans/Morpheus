@@ -430,6 +430,67 @@ class MemoryStore:
                 ON character_profiles (project_id)
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS graph_node_overrides (
+                    node_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    overridden_fields TEXT NOT NULL DEFAULT '{}',
+                    is_deleted INTEGER NOT NULL DEFAULT 0,
+                    is_manual INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_overrides_project
+                ON graph_node_overrides (project_id)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS graph_node_aliases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id TEXT NOT NULL,
+                    canonical_node_id TEXT NOT NULL,
+                    alias_name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(project_id, alias_name)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_aliases_project
+                ON graph_node_aliases (project_id)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_aliases_canonical
+                ON graph_node_aliases (canonical_node_id)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS graph_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    node_id TEXT,
+                    details TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_audit_project
+                ON graph_audit_log (project_id, created_at DESC)
+                """
+            )
 
     def _file_item_id(self, source_path: Path) -> str:
         normalized = source_path.resolve().as_posix()
@@ -1015,3 +1076,207 @@ class MemoryStore:
                 (profile_id,),
             )
             conn.commit()
+
+    # ------------------------------------------------------------------
+    # Graph Node Overrides
+    # ------------------------------------------------------------------
+
+    def upsert_node_override(
+        self,
+        node_id: str,
+        project_id: str,
+        overridden_fields: dict,
+        is_manual: bool = False,
+    ) -> None:
+        """Insert or update a graph node override."""
+        now = datetime.now().isoformat()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO graph_node_overrides
+                (node_id, project_id, overridden_fields, is_manual, is_deleted, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 0, ?, ?)
+                ON CONFLICT(node_id) DO UPDATE SET
+                    overridden_fields = excluded.overridden_fields,
+                    is_manual = excluded.is_manual,
+                    updated_at = excluded.updated_at
+                """,
+                (node_id, project_id, json.dumps(overridden_fields, ensure_ascii=False), int(is_manual), now, now),
+            )
+            conn.commit()
+
+    def get_node_override(self, node_id: str) -> Optional[dict]:
+        """Fetch a single node override, or None."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT node_id, project_id, overridden_fields, is_deleted, is_manual, created_at, updated_at "
+                "FROM graph_node_overrides WHERE node_id = ?",
+                (node_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "node_id": row["node_id"],
+                "project_id": row["project_id"],
+                "overridden_fields": json.loads(row["overridden_fields"]),
+                "is_deleted": bool(row["is_deleted"]),
+                "is_manual": bool(row["is_manual"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+
+    def list_node_overrides(self, project_id: str) -> list:
+        """List all overrides for a project."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT node_id, project_id, overridden_fields, is_deleted, is_manual, created_at, updated_at "
+                "FROM graph_node_overrides WHERE project_id = ?",
+                (project_id,),
+            )
+            return [
+                {
+                    "node_id": row["node_id"],
+                    "project_id": row["project_id"],
+                    "overridden_fields": json.loads(row["overridden_fields"]),
+                    "is_deleted": bool(row["is_deleted"]),
+                    "is_manual": bool(row["is_manual"]),
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def soft_delete_node(self, node_id: str) -> None:
+        """Mark a node as soft-deleted."""
+        now = datetime.now().isoformat()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE graph_node_overrides SET is_deleted = 1, updated_at = ? WHERE node_id = ?",
+                (now, node_id),
+            )
+            conn.commit()
+
+    def restore_node(self, node_id: str) -> None:
+        """Restore a soft-deleted node."""
+        now = datetime.now().isoformat()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE graph_node_overrides SET is_deleted = 0, updated_at = ? WHERE node_id = ?",
+                (now, node_id),
+            )
+            conn.commit()
+
+    # ------------------------------------------------------------------
+    # Graph Node Aliases
+    # ------------------------------------------------------------------
+
+    def add_node_alias(
+        self, project_id: str, canonical_node_id: str, alias_name: str
+    ) -> None:
+        """Register an alias name that resolves to a canonical node."""
+        now = datetime.now().isoformat()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO graph_node_aliases
+                (project_id, canonical_node_id, alias_name, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (project_id, canonical_node_id, alias_name, now),
+            )
+            conn.commit()
+
+    def get_node_aliases(self, canonical_node_id: str) -> list:
+        """Get all aliases for a canonical node."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT alias_name, created_at FROM graph_node_aliases WHERE canonical_node_id = ?",
+                (canonical_node_id,),
+            )
+            return [{"alias_name": row["alias_name"], "created_at": row["created_at"]} for row in cursor.fetchall()]
+
+    def resolve_alias(self, project_id: str, alias_name: str) -> Optional[str]:
+        """Resolve an alias name to its canonical node ID, or None."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT canonical_node_id FROM graph_node_aliases WHERE project_id = ? AND alias_name = ?",
+                (project_id, alias_name),
+            )
+            row = cursor.fetchone()
+            return row["canonical_node_id"] if row else None
+
+    def delete_node_alias(
+        self, project_id: str, canonical_node_id: str, alias_name: str
+    ) -> None:
+        """Remove a specific alias."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM graph_node_aliases WHERE project_id = ? AND canonical_node_id = ? AND alias_name = ?",
+                (project_id, canonical_node_id, alias_name),
+            )
+            conn.commit()
+
+    def list_project_aliases(self, project_id: str) -> list:
+        """List all aliases for a project."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT canonical_node_id, alias_name, created_at FROM graph_node_aliases WHERE project_id = ?",
+                (project_id,),
+            )
+            return [
+                {"canonical_node_id": row["canonical_node_id"], "alias_name": row["alias_name"], "created_at": row["created_at"]}
+                for row in cursor.fetchall()
+            ]
+
+    # ------------------------------------------------------------------
+    # Graph Audit Log
+    # ------------------------------------------------------------------
+
+    def log_graph_action(
+        self,
+        project_id: str,
+        action: str,
+        node_id: Optional[str] = None,
+        details: Optional[dict] = None,
+    ) -> None:
+        """Append an entry to the graph audit log."""
+        now = datetime.now().isoformat()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO graph_audit_log (project_id, action, node_id, details, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (project_id, action, node_id, json.dumps(details or {}, ensure_ascii=False), now),
+            )
+            conn.commit()
+
+    def get_graph_audit_log(self, project_id: str, limit: int = 50) -> list:
+        """Get recent audit log entries, most recent first."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, action, node_id, details, created_at FROM graph_audit_log "
+                "WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+                (project_id, limit),
+            )
+            return [
+                {
+                    "id": row["id"],
+                    "action": row["action"],
+                    "node_id": row["node_id"],
+                    "details": json.loads(row["details"]),
+                    "created_at": row["created_at"],
+                }
+                for row in cursor.fetchall()
+            ]

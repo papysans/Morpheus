@@ -5262,24 +5262,38 @@ async def get_events(project_id: str):
 
 @app.get("/api/projects/{project_id}/graph")
 async def get_graph_data(project_id: str):
-    """Return graph nodes and edges from L4 character profiles."""
+    """Return graph nodes and edges from L4 profiles + override layer."""
     store = get_or_create_store(project_id)
     try:
         profiles = store.list_profiles(project_id)
     except Exception:
-        return {"nodes": [], "edges": []}
+        profiles = []
+    # Load override layer
+    overrides_list = store.list_node_overrides(project_id)
+    overrides_map = {o["node_id"]: o for o in overrides_list}
+    deleted_ids = {o["node_id"] for o in overrides_list if o["is_deleted"]}
     nodes = []
     edges = []
     seen_edge_ids: set = set()
+    seen_node_ids: set = set()
+    # Build nodes from profiles (skip soft-deleted)
     for profile in profiles:
+        if profile.profile_id in deleted_ids:
+            continue
+        override = overrides_map.get(profile.profile_id, {})
+        fields = override.get("overridden_fields", {}) if override else {}
         nodes.append({
             "id": profile.profile_id,
-            "label": profile.character_name,
-            "overview": profile.overview or "",
-            "personality": profile.personality or "",
+            "label": fields.get("label", profile.character_name),
+            "overview": fields.get("overview", profile.overview or ""),
+            "personality": fields.get("personality", profile.personality or ""),
+            "is_manual": False,
         })
+        seen_node_ids.add(profile.profile_id)
         for rel in (profile.relationships or []):
             target_pid = MemoryStore.make_profile_id(project_id, rel.target_character)
+            if target_pid in deleted_ids:
+                continue
             edge_key = f"{profile.profile_id}:{target_pid}:{rel.relation_type}"
             edge_id = hashlib.md5(edge_key.encode()).hexdigest()[:12]
             if edge_id not in seen_edge_ids:
@@ -5290,7 +5304,122 @@ async def get_graph_data(project_id: str):
                     "target": target_pid,
                     "label": rel.relation_type or "",
                 })
+    # Add manual nodes (is_manual=True, not deleted)
+    for o in overrides_list:
+        if o["is_manual"] and not o["is_deleted"] and o["node_id"] not in seen_node_ids:
+            fields = o["overridden_fields"]
+            nodes.append({
+                "id": o["node_id"],
+                "label": fields.get("label", "未命名"),
+                "overview": fields.get("overview", ""),
+                "personality": fields.get("personality", ""),
+                "is_manual": True,
+            })
+            seen_node_ids.add(o["node_id"])
     return {"nodes": nodes, "edges": edges}
+class CreateNodeRequest(BaseModel):
+    label: str
+    overview: str = ""
+    personality: str = ""
+
+
+class UpdateNodeRequest(BaseModel):
+    label: Optional[str] = None
+    overview: Optional[str] = None
+    personality: Optional[str] = None
+
+
+class MergeNodesRequest(BaseModel):
+    keep_node_id: str
+    merge_node_ids: List[str]
+
+
+@app.post("/api/projects/{project_id}/graph/nodes")
+async def create_graph_node(project_id: str, req: CreateNodeRequest):
+    """Create a fully manual graph node."""
+    if not resolve_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    store = get_or_create_store(project_id)
+    node_id = f"manual-{uuid4().hex[:12]}"
+    fields = {"label": req.label, "overview": req.overview, "personality": req.personality}
+    store.upsert_node_override(node_id, project_id, fields, is_manual=True)
+    store.log_graph_action(project_id, "create_node", node_id, {"fields": fields})
+    return {"node_id": node_id, "is_manual": True, "fields": fields}
+
+
+@app.patch("/api/projects/{project_id}/graph/nodes/{node_id}")
+async def update_graph_node(project_id: str, node_id: str, req: UpdateNodeRequest):
+    """Override fields on an existing graph node."""
+    if not resolve_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    store = get_or_create_store(project_id)
+    existing = store.get_node_override(node_id)
+    old_fields = existing["overridden_fields"] if existing else {}
+    is_manual = existing["is_manual"] if existing else False
+    new_fields = dict(old_fields)
+    update_details = {}
+    for key in ["label", "overview", "personality"]:
+        val = getattr(req, key)
+        if val is not None:
+            update_details[key] = {"old": old_fields.get(key), "new": val}
+            new_fields[key] = val
+    store.upsert_node_override(node_id, project_id, new_fields, is_manual=is_manual)
+    store.log_graph_action(project_id, "update_node", node_id, update_details)
+    return {"node_id": node_id, "fields": new_fields}
+
+
+@app.delete("/api/projects/{project_id}/graph/nodes/{node_id}")
+async def delete_graph_node(project_id: str, node_id: str):
+    """Soft-delete a graph node."""
+    if not resolve_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    store = get_or_create_store(project_id)
+    existing = store.get_node_override(node_id)
+    if not existing:
+        store.upsert_node_override(node_id, project_id, {})
+    store.soft_delete_node(node_id)
+    store.log_graph_action(project_id, "delete_node", node_id, {})
+    return {"node_id": node_id, "deleted": True}
+
+
+@app.post("/api/projects/{project_id}/graph/nodes/{node_id}/restore")
+async def restore_graph_node(project_id: str, node_id: str):
+    """Restore a soft-deleted graph node."""
+    if not resolve_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    store = get_or_create_store(project_id)
+    store.restore_node(node_id)
+    store.log_graph_action(project_id, "restore_node", node_id, {})
+    return {"node_id": node_id, "restored": True}
+
+
+@app.post("/api/projects/{project_id}/graph/nodes/merge")
+async def merge_graph_nodes(project_id: str, req: MergeNodesRequest):
+    """Merge duplicate nodes into one. Soft-deletes merged nodes, creates aliases."""
+    if not resolve_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    store = get_or_create_store(project_id)
+    # Ensure keep node has an override record
+    keep_override = store.get_node_override(req.keep_node_id)
+    if not keep_override:
+        store.upsert_node_override(req.keep_node_id, project_id, {})
+    for merge_id in req.merge_node_ids:
+        # Get the merged node's name for alias
+        profile = store.get_profile(merge_id)
+        alias_name = profile.character_name if profile else None
+        # Soft-delete the merged node
+        merge_override = store.get_node_override(merge_id)
+        if not merge_override:
+            store.upsert_node_override(merge_id, project_id, {})
+        store.soft_delete_node(merge_id)
+        # Register alias on the kept node
+        if alias_name:
+            store.add_node_alias(project_id, req.keep_node_id, alias_name)
+        store.log_graph_action(
+            project_id, "merge_node", req.keep_node_id,
+            {"merged_from": merge_id, "alias": alias_name},
+        )
+    return {"kept_node_id": req.keep_node_id, "merged_node_ids": req.merge_node_ids}
 
 @app.get("/api/projects/{project_id}/profiles")
 async def list_profiles(project_id: str):

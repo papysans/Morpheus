@@ -119,6 +119,44 @@ class TestGraphDataAPIL4(unittest.TestCase):
             self.assertEqual(data["nodes"], [])
             self.assertEqual(data["edges"], [])
 
+    def test_graph_data_respects_soft_delete(self):
+        pid = self._create_project()
+        _seed_l4_data(pid)
+        store = get_or_create_store(pid)
+        profiles = store.list_profiles(pid)
+        deleted_id = profiles[0].profile_id
+        store.upsert_node_override(deleted_id, pid, {}, is_manual=False)
+        store.soft_delete_node(deleted_id)
+        res = self.client.get(f"/api/projects/{pid}/graph")
+        self.assertEqual(res.status_code, 200)
+        node_ids = {n["id"] for n in res.json()["nodes"]}
+        self.assertNotIn(deleted_id, node_ids)
+
+    def test_graph_data_applies_label_override(self):
+        pid = self._create_project()
+        _seed_l4_data(pid)
+        store = get_or_create_store(pid)
+        profiles = store.list_profiles(pid)
+        target_id = profiles[0].profile_id
+        store.upsert_node_override(target_id, pid, {"label": "自定义名"})
+        res = self.client.get(f"/api/projects/{pid}/graph")
+        node = next(n for n in res.json()["nodes"] if n["id"] == target_id)
+        self.assertEqual(node["label"], "自定义名")
+
+    def test_graph_data_includes_manual_nodes(self):
+        pid = self._create_project()
+        store = get_or_create_store(pid)
+        store.upsert_node_override(
+            "manual-001", pid,
+            {"label": "手动角色", "overview": "用户创建的"},
+            is_manual=True,
+        )
+        res = self.client.get(f"/api/projects/{pid}/graph")
+        node_ids = {n["id"] for n in res.json()["nodes"]}
+        self.assertIn("manual-001", node_ids)
+        manual = next(n for n in res.json()["nodes"] if n["id"] == "manual-001")
+        self.assertEqual(manual["label"], "手动角色")
+
 
 if __name__ == "__main__":
     unittest.main()
