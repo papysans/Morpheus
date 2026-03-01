@@ -19,6 +19,15 @@ import { useToastStore } from '../stores/useToastStore'
 import PageTransition from '../components/ui/PageTransition'
 import Skeleton from '../components/ui/Skeleton'
 import { GRAPH_FEATURE_ENABLED } from '../config/features'
+import {
+    forceSimulation,
+    forceLink,
+    forceManyBody,
+    forceRadial,
+    forceCollide,
+    type SimulationNodeDatum,
+    type SimulationLinkDatum,
+} from 'd3-force'
 
 /* ── Data types ── */
 
@@ -283,84 +292,9 @@ const nodeTypes: NodeTypes = { entity: EntityNodeComponent }
 
 /* ── Graph building helpers ── */
 
-let elkInstancePromise: Promise<{ layout: (graph: unknown) => Promise<any> }> | null = null
-
-async function getElkInstance() {
-    if (!elkInstancePromise) {
-        elkInstancePromise = import('elkjs/lib/elk.bundled.js').then((module) => {
-            const ELKConstructor = (module as { default?: new () => { layout: (graph: unknown) => Promise<any> } }).default
-            if (!ELKConstructor) {
-                throw new Error('ELK constructor is unavailable')
-            }
-            return new ELKConstructor()
-        })
-    }
-    return elkInstancePromise
-}
-
-function getNodeLayoutBox(node: Node<EntityNodeData>) {
-    const entityType = node.data?.entityType
-    if (entityType === 'character') return { width: 180, height: 120 }
-    if (entityType === 'location') return { width: 170, height: 100 }
-    if (entityType === 'item') return { width: 170, height: 100 }
-    return { width: 170, height: 100 }
-}
-
-export async function layoutGraphWithElk(
-    nodes: Node<EntityNodeData>[],
-    edges: Edge[],
-): Promise<{ nodes: Node<EntityNodeData>[]; edges: Edge[] }> {
-    if (nodes.length === 0) {
-        return { nodes, edges }
-    }
-    const elk = await getElkInstance()
-    const nodeIdSet = new Set(nodes.map((node) => node.id))
-    const safeEdges = edges.filter(
-        (edge) => nodeIdSet.has(edge.source) && nodeIdSet.has(edge.target) && edge.source !== edge.target,
-    )
-    const elkGraph = {
-        id: 'root',
-        layoutOptions: {
-            'elk.algorithm': 'force',
-            'elk.force.temperature': '0.08',
-            'elk.force.iterations': '500',
-            'elk.spacing.nodeNode': '220',
-            'elk.spacing.edgeNode': '100',
-            'elk.spacing.edgeEdge': '55',
-            'elk.edgeRouting': 'SPLINES',
-        },
-        children: nodes.map((node) => {
-            const box = getNodeLayoutBox(node)
-            return { id: node.id, width: box.width, height: box.height }
-        }),
-        edges: safeEdges.map((edge) => ({
-            id: edge.id,
-            sources: [edge.source],
-            targets: [edge.target],
-        })),
-    }
-    const layouted = await elk.layout(elkGraph)
-    const positioned = new Map<string, { x: number; y: number }>(
-        (layouted.children || []).map((child: { id: string; x?: number; y?: number }) => [
-            child.id,
-            { x: child.x ?? 0, y: child.y ?? 0 },
-        ]),
-    )
-    return {
-        nodes: nodes.map((node) => {
-            const nextPosition = positioned.get(node.id)
-            const fallbackPosition = node.position || { x: 0, y: 0 }
-            return {
-                ...node,
-                position: nextPosition
-                    ? { x: nextPosition.x, y: nextPosition.y }
-                    : { x: fallbackPosition.x, y: fallbackPosition.y },
-                sourcePosition: Position.Right,
-                targetPosition: Position.Left,
-            }
-        }),
-        edges: safeEdges,
-    }
+interface SimNode extends SimulationNodeDatum {
+    id: string
+    degree: number
 }
 
 export function buildGraphNodes(entities: EntityNode[]): Node<EntityNodeData>[] {
@@ -605,67 +539,81 @@ export function sanitizeGraphData(
 }
 
 export function buildL4GraphNodes(l4Nodes: L4GraphNode[], l4Edges: L4GraphEdge[]): Node<EntityNodeData>[] {
-    const nodeIds = new Set(l4Nodes.map((node) => node.id))
+    if (l4Nodes.length === 0) return []
+    if (l4Nodes.length === 1) {
+        return [makeRfNode(l4Nodes[0], { x: 0, y: 0 }, 0)]
+    }
+    const nodeIds = new Set(l4Nodes.map((n) => n.id))
     const degree = new Map<string, number>()
-    for (const node of l4Nodes) {
-        degree.set(node.id, 0)
-    }
-    for (const edge of l4Edges) {
-        if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target) || edge.source === edge.target) continue
-        degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1)
-        degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1)
-    }
-
-    const ordered = [...l4Nodes].sort(
-        (a, b) =>
-            (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) ||
-            b.label.length - a.label.length ||
-            a.label.localeCompare(b.label),
+    for (const n of l4Nodes) degree.set(n.id, 0)
+    const safeEdges = l4Edges.filter(
+        (e) => nodeIds.has(e.source) && nodeIds.has(e.target) && e.source !== e.target,
     )
-
-    const positions = new Map<string, { x: number; y: number }>()
-    if (ordered.length > 0) {
-        positions.set(ordered[0].id, { x: 0, y: 0 })
+    for (const e of safeEdges) {
+        degree.set(e.source, (degree.get(e.source) ?? 0) + 1)
+        degree.set(e.target, (degree.get(e.target) ?? 0) + 1)
     }
-    let cursor = 1
-    let ring = 1
-    while (cursor < ordered.length) {
-        const ringCapacity = 6 + (ring - 1) * 4
-        const remaining = ordered.length - cursor
-        const count = Math.min(ringCapacity, remaining)
-        const radius = 240 + (ring - 1) * 170
-        for (let i = 0; i < count; i += 1) {
-            const angle = (Math.PI * 2 * i) / count - Math.PI / 2
-            positions.set(ordered[cursor + i].id, {
-                x: Math.round(Math.cos(angle) * radius),
-                y: Math.round(Math.sin(angle) * radius),
-            })
-        }
-        cursor += count
-        ring += 1
-    }
-
+    const maxDegree = Math.max(...degree.values(), 1)
+    const radiusScale = 380
+    const simNodes: SimNode[] = l4Nodes.map((n) => ({
+        id: n.id,
+        degree: degree.get(n.id) ?? 0,
+        x: 0,
+        y: 0,
+    }))
+    const simLinks: SimulationLinkDatum<SimNode>[] = safeEdges.map((e) => ({
+        source: e.source,
+        target: e.target,
+    }))
+    const simulation = forceSimulation<SimNode>(simNodes)
+        .force(
+            'link',
+            forceLink<SimNode, SimulationLinkDatum<SimNode>>(simLinks)
+                .id((d) => d.id)
+                .distance(160)
+                .strength(0.3),
+        )
+        .force('charge', forceManyBody().strength(-300))
+        .force(
+            'radial',
+            forceRadial<SimNode>(
+                (d) => radiusScale * (1 - d.degree / maxDegree),
+                0,
+                0,
+            ).strength(0.8),
+        )
+        .force('collide', forceCollide<SimNode>(90))
+        .stop()
+    for (let i = 0; i < 300; i++) simulation.tick()
+    const posMap = new Map(simNodes.map((n) => [n.id, { x: n.x ?? 0, y: n.y ?? 0 }]))
     return l4Nodes.map((node) => {
-        const position = positions.get(node.id) ?? { x: 0, y: 0 }
-        return {
-            id: node.id,
-            type: 'entity',
-            position,
-            data: {
-                label: node.label,
-                entityType: 'character' as const,
-                attrs: {
-                    连接度: degree.get(node.id) ?? 0,
-                    ...(node.overview ? { 概述: node.overview } : {}),
-                    ...(node.personality ? { 性格: node.personality } : {}),
-                },
-                firstSeen: 0,
-                lastSeen: 0,
-                highlighted: false,
-                dimmed: false,
-            },
-        }
+        const pos = posMap.get(node.id) ?? { x: 0, y: 0 }
+        return makeRfNode(node, pos, degree.get(node.id) ?? 0)
     })
+}
+function makeRfNode(
+    node: L4GraphNode,
+    position: { x: number; y: number },
+    deg: number,
+): Node<EntityNodeData> {
+    return {
+        id: node.id,
+        type: 'entity',
+        position,
+        data: {
+            label: node.label,
+            entityType: 'character' as const,
+            attrs: {
+                连接度: deg,
+                ...(node.overview ? { 概述: node.overview } : {}),
+                ...(node.personality ? { 性格: node.personality } : {}),
+            },
+            firstSeen: 0,
+            lastSeen: 0,
+            highlighted: false,
+            dimmed: false,
+        },
+    }
 }
 
 export function buildL4GraphEdges(l4Edges: L4GraphEdge[], nodeIds: Set<string>): Edge[] {
@@ -678,7 +626,7 @@ export function buildL4GraphEdges(l4Edges: L4GraphEdge[], nodeIds: Set<string>):
         source: edge.source,
         target: edge.target,
         type: 'default',
-        label: '',
+        label: edge.label,
         data: { relationLabel: edge.label },
         animated: false,
         style: { stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
@@ -707,9 +655,13 @@ export default function KnowledgeGraphPage() {
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
     const [showProgressEdges, setShowProgressEdges] = useState(false)
     const [showAllPairEdges, setShowAllPairEdges] = useState(false)
-    const [layoutLoading, setLayoutLoading] = useState(false)
-    const layoutRunRef = useRef(0)
     const flowRef = useRef<ReactFlowInstance | null>(null)
+    const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null)
+    const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
+    const [editLabel, setEditLabel] = useState('')
+    const [showAddModal, setShowAddModal] = useState(false)
+    const [newNodeLabel, setNewNodeLabel] = useState('')
+    const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set())
 
     const [nodes, setNodes, onNodesChange] = useNodesState<EntityNodeData>([])
     const [edges, setEdges, onEdgesChange] = useEdgesState([])
@@ -726,7 +678,6 @@ export default function KnowledgeGraphPage() {
         if (!projectId) return
         if (!GRAPH_FEATURE_ENABLED) {
             setLoading(false)
-            setLayoutLoading(false)
             setEntities([])
             setEvents([])
             return
@@ -736,7 +687,6 @@ export default function KnowledgeGraphPage() {
 
     const loadData = async () => {
         setLoading(true)
-        setLayoutLoading(true)
         setNodes([])
         setEdges([])
         setSelectedNodeId(null)
@@ -755,7 +705,6 @@ export default function KnowledgeGraphPage() {
             console.error(error)
         } finally {
             setLoading(false)
-            setLayoutLoading(false)
         }
     }
 
@@ -766,40 +715,30 @@ export default function KnowledgeGraphPage() {
             setEdges([])
             return
         }
-        const currentRun = layoutRunRef.current + 1
-        layoutRunRef.current = currentRun
-        setLayoutLoading(true)
-
         const rfNodes = buildL4GraphNodes(l4Nodes, l4Edges)
         const nodeIdSet = new Set(rfNodes.map((node) => node.id))
         const rfEdges = buildL4GraphEdges(l4Edges, nodeIdSet)
-
-        void layoutGraphWithElk(rfNodes, rfEdges)
-            .then((layouted) => {
-                if (layoutRunRef.current !== currentRun) return
-                setNodes(layouted.nodes)
-                setEdges(layouted.edges)
-                setSelectedNodeId(null)
-                requestAnimationFrame(() => {
-                    flowRef.current?.fitView({ padding: 0.36, duration: 420 })
-                })
-            })
-            .catch((error) => {
-                if (layoutRunRef.current !== currentRun) return
-                console.error('ELK layout failed, fallback to static positions', error)
-                setNodes(rfNodes)
-                setEdges(rfEdges)
-                setSelectedNodeId(null)
-            })
-            .finally(() => {
-                if (layoutRunRef.current !== currentRun) return
-                setLayoutLoading(false)
-            })
+        setNodes(rfNodes)
+        setEdges(rfEdges)
+        setSelectedNodeId(null)
+        requestAnimationFrame(() => {
+            flowRef.current?.fitView({ padding: 0.36, duration: 420 })
+        })
     }, [l4Nodes, l4Edges, setEdges, setNodes])
 
     // Handle node click → highlight neighbors
     const onNodeClick = useCallback(
-        (_: React.MouseEvent, node: Node) => {
+        (event: React.MouseEvent, node: Node) => {
+            if (event.ctrlKey || event.metaKey) {
+                setSelectedNodeIds((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(node.id)) next.delete(node.id)
+                    else next.add(node.id)
+                    return next
+                })
+                return
+            }
+            setSelectedNodeIds(new Set())
             const clickedId = node.id
             if (selectedNodeId === clickedId) {
                 // Deselect
@@ -853,6 +792,9 @@ export default function KnowledgeGraphPage() {
     // Click on pane → deselect
     const onPaneClick = useCallback(() => {
         setSelectedNodeId(null)
+        setContextMenu(null)
+        setEditingNodeId(null)
+        setSelectedNodeIds(new Set())
         setNodes((nds) =>
             nds.map((n) => ({ ...n, data: { ...n.data, highlighted: false, dimmed: false } })),
         )
@@ -865,6 +807,81 @@ export default function KnowledgeGraphPage() {
             })),
         )
     }, [setNodes, setEdges])
+
+    const onNodeContextMenu = useCallback(
+        (event: React.MouseEvent, node: Node) => {
+            event.preventDefault()
+            setContextMenu({ nodeId: node.id, x: event.clientX, y: event.clientY })
+        },
+        [],
+    )
+
+    const handleDeleteNode = useCallback(async () => {
+        if (!contextMenu || !projectId) return
+        try {
+            await api.delete(`/projects/${projectId}/graph/nodes/${contextMenu.nodeId}`)
+            setContextMenu(null)
+            addToast('success', '节点已删除')
+            loadData()
+        } catch {
+            addToast('error', '删除失败')
+        }
+    }, [contextMenu, projectId, addToast])
+
+    const handleStartEdit = useCallback(() => {
+        if (!contextMenu) return
+        const node = nodes.find((n) => n.id === contextMenu.nodeId)
+        setEditLabel(node?.data.label ?? '')
+        setEditingNodeId(contextMenu.nodeId)
+        setContextMenu(null)
+    }, [contextMenu, nodes])
+
+    const handleSaveEdit = useCallback(async () => {
+        if (!editingNodeId || !projectId) return
+        try {
+            await api.patch(`/projects/${projectId}/graph/nodes/${editingNodeId}`, {
+                label: editLabel,
+            })
+            setEditingNodeId(null)
+            addToast('success', '节点已更新')
+            loadData()
+        } catch {
+            addToast('error', '更新失败')
+        }
+    }, [editingNodeId, editLabel, projectId, addToast])
+
+    const handleAddNode = useCallback(async () => {
+        if (!newNodeLabel.trim() || !projectId) return
+        try {
+            await api.post(`/projects/${projectId}/graph/nodes`, {
+                label: newNodeLabel.trim(),
+            })
+            setShowAddModal(false)
+            setNewNodeLabel('')
+            addToast('success', '节点已创建')
+            loadData()
+        } catch {
+            addToast('error', '创建失败')
+        }
+    }, [newNodeLabel, projectId, addToast])
+
+    const handleMergeNodes = useCallback(async () => {
+        if (selectedNodeIds.size < 2 || !projectId) return
+        const ids = [...selectedNodeIds]
+        const keepId = ids[0]
+        const mergeIds = ids.slice(1)
+        try {
+            await api.post(`/projects/${projectId}/graph/nodes/merge`, {
+                keep_node_id: keepId,
+                merge_node_ids: mergeIds,
+            })
+            setSelectedNodeIds(new Set())
+            addToast('success', `已合并 ${mergeIds.length} 个节点`)
+            loadData()
+        } catch {
+            addToast('error', '合并失败')
+        }
+    }, [selectedNodeIds, projectId, addToast])
 
     const sortedEvents = useMemo(() => sortEventsByChapter(events), [events])
 
@@ -968,6 +985,22 @@ export default function KnowledgeGraphPage() {
                             >
                                 {showAllPairEdges ? '显示全部历史边' : '仅显示最新关系'}
                             </button>
+                            <button
+                                className="chip-btn"
+                                onClick={() => setShowAddModal(true)}
+                                aria-label="添加节点"
+                            >
+                                + 添加节点
+                            </button>
+                            {selectedNodeIds.size >= 2 && (
+                                <button
+                                    className="chip-btn active"
+                                    onClick={handleMergeNodes}
+                                    aria-label="合并节点"
+                                >
+                                    ⇈ 合并选中的 {selectedNodeIds.size} 个节点
+                                </button>
+                            )}
                         </div>
                         <div
                             className="card"
@@ -988,6 +1021,7 @@ export default function KnowledgeGraphPage() {
                                     onEdgesChange={onEdgesChange}
                                     onNodeClick={onNodeClick}
                                     onPaneClick={onPaneClick}
+                                    onNodeContextMenu={onNodeContextMenu}
                                     nodeTypes={nodeTypes}
                                     onInit={(instance) => {
                                         flowRef.current = instance
@@ -998,27 +1032,102 @@ export default function KnowledgeGraphPage() {
                                     style={{ background: 'transparent' }}
                                 />
                             )}
-                            {layoutLoading && l4Nodes.length > 0 && (
-                                <div
+                        </div>
+                        {contextMenu && (
+                            <div
+                                data-testid="node-context-menu"
+                                style={{
+                                    position: 'fixed',
+                                    top: contextMenu.y,
+                                    left: contextMenu.x,
+                                    background: 'white',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 8,
+                                    boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                                    zIndex: 50,
+                                    padding: '4px 0',
+                                    minWidth: 140,
+                                }}
+                            >
+                                <button
+                                    onClick={handleStartEdit}
                                     style={{
-                                        position: 'absolute',
-                                        inset: 0,
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        background: 'rgba(255, 255, 255, 0.55)',
-                                        backdropFilter: 'blur(2px)',
-                                        zIndex: 3,
-                                        pointerEvents: 'none',
-                                        color: 'var(--text-secondary)',
-                                        fontSize: '0.9rem',
-                                        fontWeight: 600,
+                                        display: 'block', width: '100%', padding: '8px 16px',
+                                        border: 'none', background: 'none', textAlign: 'left',
+                                        cursor: 'pointer', fontSize: '0.88rem',
                                     }}
                                 >
-                                    正在自动布局关系图…
+                                    ✏ 编辑节点
+                                </button>
+                                <button
+                                    onClick={handleDeleteNode}
+                                    style={{
+                                        display: 'block', width: '100%', padding: '8px 16px',
+                                        border: 'none', background: 'none', textAlign: 'left',
+                                        cursor: 'pointer', fontSize: '0.88rem', color: '#d32f2f',
+                                    }}
+                                >
+                                    ✖ 删除节点
+                                </button>
+                            </div>
+                        )}
+                        {editingNodeId && (
+                            <div
+                                data-testid="edit-node-inline"
+                                style={{
+                                    position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+                                    background: 'white', border: '1px solid var(--border)', borderRadius: 8,
+                                    boxShadow: '0 4px 16px rgba(0,0,0,0.12)', zIndex: 50, padding: '12px 16px',
+                                    display: 'flex', gap: 8, alignItems: 'center',
+                                }}
+                            >
+                                <input
+                                    type="text"
+                                    value={editLabel}
+                                    onChange={(e) => setEditLabel(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleSaveEdit()}
+                                    style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: '0.88rem' }}
+                                    autoFocus
+                                />
+                                <button className="btn btn-primary" onClick={handleSaveEdit} style={{ padding: '6px 14px', fontSize: '0.85rem' }}>保存</button>
+                                <button className="btn btn-secondary" onClick={() => setEditingNodeId(null)} style={{ padding: '6px 14px', fontSize: '0.85rem' }}>取消</button>
+                            </div>
+                        )}
+                        {showAddModal && (
+                            <div
+                                style={{
+                                    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    zIndex: 100,
+                                }}
+                                onClick={() => setShowAddModal(false)}
+                            >
+                                <div
+                                    className="card"
+                                    style={{ padding: 24, minWidth: 320 }}
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    <h3 style={{ marginTop: 0, fontSize: '1rem' }}>添加新节点</h3>
+                                    <input
+                                        type="text"
+                                        value={newNodeLabel}
+                                        onChange={(e) => setNewNodeLabel(e.target.value)}
+                                        placeholder="节点名称"
+                                        style={{
+                                            width: '100%', padding: '8px 12px', border: '1px solid var(--border)',
+                                            borderRadius: 6, fontSize: '0.9rem', marginBottom: 12,
+                                            boxSizing: 'border-box',
+                                        }}
+                                        autoFocus
+                                        onKeyDown={(e) => e.key === 'Enter' && handleAddNode()}
+                                    />
+                                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                        <button className="btn btn-secondary" onClick={() => setShowAddModal(false)}>取消</button>
+                                        <button className="btn btn-primary" onClick={handleAddNode}>创建</button>
+                                    </div>
                                 </div>
-                            )}
-                        </div>
+                            </div>
+                        )}
                     </>
                 )}
 

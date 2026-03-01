@@ -5,12 +5,15 @@ import { useState as reactUseState } from 'react'
 import KnowledgeGraphPage, {
     buildGraphNodes,
     buildGraphEdges,
+    buildL4GraphNodes,
     getHighlightSets,
     sanitizeGraphData,
     sortEventsByChapter,
     ENTITY_STYLES,
     type EntityNode,
     type EventEdge,
+    type L4GraphNode,
+    type L4GraphEdge,
 } from '../KnowledgeGraphPage'
 import { useToastStore } from '../../stores/useToastStore'
 
@@ -39,7 +42,7 @@ vi.mock('reactflow', () => {
     const Position = { Top: 'top', Bottom: 'bottom', Left: 'left', Right: 'right' }
     const MarkerType = { ArrowClosed: 'arrowclosed' }
 
-    function ReactFlow({ nodes, edges, onNodeClick, onPaneClick, nodeTypes }: any) {
+    function ReactFlow({ nodes, edges, onNodeClick, onPaneClick, onNodeContextMenu, nodeTypes }: any) {
         const EntityComp = nodeTypes?.entity
         return (
             <div data-testid="reactflow-canvas" onClick={onPaneClick}>
@@ -51,6 +54,7 @@ vi.mock('reactflow', () => {
                             e.stopPropagation()
                             onNodeClick?.(e, node)
                         }}
+                        onContextMenu={(e: any) => onNodeContextMenu?.(e, node)}
                     >
                         {EntityComp && <EntityComp id={node.id} data={node.data} type="entity" />}
                     </div>
@@ -86,7 +90,7 @@ vi.mock('reactflow', () => {
 
 const mockApiGet = vi.fn()
 vi.mock('../../lib/api', () => ({
-    api: { get: (...args: any[]) => mockApiGet(...args) },
+    api: { get: (...args: any[]) => mockApiGet(...args), delete: vi.fn(), patch: vi.fn(), post: vi.fn() },
 }))
 
 const mockFetchProject = vi.fn()
@@ -520,6 +524,47 @@ describe('KnowledgeGraphPage L4 data', () => {
         renderPage()
         await waitFor(() => {
             expect(screen.getByText(/暂无角色档案/)).toBeInTheDocument()
+        })
+    })
+})
+
+describe('buildL4GraphNodes with D3 forceRadial', () => {
+    it('places highest-degree node near center (0,0)', () => {
+        const nodes: L4GraphNode[] = [
+            { id: 'hub', label: 'Hub', overview: '', personality: '' },
+            { id: 'a', label: 'A', overview: '', personality: '' },
+            { id: 'b', label: 'B', overview: '', personality: '' },
+            { id: 'c', label: 'C', overview: '', personality: '' },
+            { id: 'leaf', label: 'Leaf', overview: '', personality: '' },
+        ]
+        const edges: L4GraphEdge[] = [
+            { id: 'e1', source: 'hub', target: 'a', label: '' },
+            { id: 'e2', source: 'hub', target: 'b', label: '' },
+            { id: 'e3', source: 'hub', target: 'c', label: '' },
+            { id: 'e4', source: 'hub', target: 'leaf', label: '' },
+            { id: 'e5', source: 'a', target: 'b', label: '' },
+        ]
+        const result = buildL4GraphNodes(nodes, edges)
+        const hubNode = result.find((n) => n.id === 'hub')!
+        const leafNode = result.find((n) => n.id === 'leaf')!
+        const hubDist = Math.sqrt(hubNode.position.x ** 2 + hubNode.position.y ** 2)
+        const leafDist = Math.sqrt(leafNode.position.x ** 2 + leafNode.position.y ** 2)
+        expect(hubDist).toBeLessThan(leafDist)
+    })
+
+    it('handles single node without crashing', () => {
+        const nodes: L4GraphNode[] = [{ id: 'solo', label: 'Solo', overview: '', personality: '' }]
+        const result = buildL4GraphNodes(nodes, [])
+        expect(result).toHaveLength(1)
+        expect(result[0].position).toBeDefined()
+    })
+})
+
+describe('graph toolbar', () => {
+    it('renders add-node button', async () => {
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('+ 添加节点')).toBeInTheDocument()
         })
     })
 })
