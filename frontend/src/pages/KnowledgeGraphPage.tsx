@@ -319,10 +319,11 @@ export async function layoutGraphWithElk(
         layoutOptions: {
             'elk.algorithm': 'layered',
             'elk.direction': 'RIGHT',
-            'elk.layered.spacing.nodeNodeBetweenLayers': '180',
-            'elk.spacing.nodeNode': '120',
-            'elk.spacing.edgeNode': '70',
-            'elk.edgeRouting': 'SPLINES',
+            'elk.layered.spacing.nodeNodeBetweenLayers': '320',
+            'elk.spacing.nodeNode': '240',
+            'elk.spacing.edgeNode': '120',
+            'elk.spacing.edgeEdge': '70',
+            'elk.edgeRouting': 'POLYLINE',
             'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
         },
         children: nodes.map((node) => {
@@ -633,7 +634,8 @@ export function buildL4GraphEdges(l4Edges: L4GraphEdge[]): Edge[] {
         source: edge.source,
         target: edge.target,
         type: 'default',
-        label: edge.label,
+        label: '',
+        data: { relationLabel: edge.label },
         animated: false,
         style: { stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
         labelStyle: { fill: '#5a6e8d', fontSize: 11 },
@@ -734,7 +736,7 @@ export default function KnowledgeGraphPage() {
                 setEdges(layouted.edges)
                 setSelectedNodeId(null)
                 requestAnimationFrame(() => {
-                    flowRef.current?.fitView({ padding: 0.18, duration: 280 })
+                    flowRef.current?.fitView({ padding: 0.36, duration: 420 })
                 })
             })
             .catch((error) => {
@@ -765,6 +767,7 @@ export default function KnowledgeGraphPage() {
                         ...e,
                         animated: false,
                         style: { ...e.style, stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
+                        label: '',
                     })),
                 )
                 return
@@ -788,6 +791,9 @@ export default function KnowledgeGraphPage() {
                 eds.map((e) => ({
                     ...e,
                     animated: highlightedEdgeIds.has(e.id),
+                    label: highlightedEdgeIds.has(e.id)
+                        ? String((e.data as { relationLabel?: string } | undefined)?.relationLabel || '')
+                        : '',
                     style: {
                         ...e.style,
                         stroke: highlightedEdgeIds.has(e.id) ? '#0a8b83' : 'rgba(102, 124, 164, 0.1)',
@@ -810,6 +816,7 @@ export default function KnowledgeGraphPage() {
                 ...e,
                 animated: false,
                 style: { ...e.style, stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
+                label: '',
             })),
         )
     }, [setNodes, setEdges])
@@ -921,7 +928,7 @@ export default function KnowledgeGraphPage() {
                             className="card"
                             style={{
                                 padding: 0,
-                                height: 560,
+                                height: 680,
                                 overflow: 'hidden',
                                 position: 'relative',
                             }}
@@ -941,6 +948,8 @@ export default function KnowledgeGraphPage() {
                                         flowRef.current = instance
                                     }}
                                     proOptions={{ hideAttribution: true }}
+                                    minZoom={0.18}
+                                    maxZoom={1.3}
                                     style={{ background: 'transparent' }}
                                 />
                             )}
