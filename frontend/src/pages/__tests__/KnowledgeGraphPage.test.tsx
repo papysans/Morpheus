@@ -559,6 +559,19 @@ describe('buildL4GraphNodes with D3 forceRadial', () => {
         expect(result[0].position).toBeDefined()
     })
 })
+describe('node context menu', () => {
+    it('shows context menu on right-click', async () => {
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByTestId('rf-node-e1')).toBeInTheDocument()
+        })
+        fireEvent.contextMenu(screen.getByTestId('rf-node-e1'))
+        await waitFor(() => {
+            expect(screen.getByTestId('node-context-menu')).toBeInTheDocument()
+        })
+    })
+})
+
 
 describe('graph toolbar', () => {
     it('renders add-node button', async () => {
