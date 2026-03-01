@@ -314,23 +314,26 @@ export async function layoutGraphWithElk(
         return { nodes, edges }
     }
     const elk = await getElkInstance()
+    const nodeIdSet = new Set(nodes.map((node) => node.id))
+    const safeEdges = edges.filter(
+        (edge) => nodeIdSet.has(edge.source) && nodeIdSet.has(edge.target) && edge.source !== edge.target,
+    )
     const elkGraph = {
         id: 'root',
         layoutOptions: {
-            'elk.algorithm': 'layered',
-            'elk.direction': 'RIGHT',
-            'elk.layered.spacing.nodeNodeBetweenLayers': '320',
-            'elk.spacing.nodeNode': '240',
-            'elk.spacing.edgeNode': '120',
-            'elk.spacing.edgeEdge': '70',
-            'elk.edgeRouting': 'POLYLINE',
-            'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+            'elk.algorithm': 'force',
+            'elk.force.temperature': '0.08',
+            'elk.force.iterations': '500',
+            'elk.spacing.nodeNode': '220',
+            'elk.spacing.edgeNode': '100',
+            'elk.spacing.edgeEdge': '55',
+            'elk.edgeRouting': 'SPLINES',
         },
         children: nodes.map((node) => {
             const box = getNodeLayoutBox(node)
             return { id: node.id, width: box.width, height: box.height }
         }),
-        edges: edges.map((edge) => ({
+        edges: safeEdges.map((edge) => ({
             id: edge.id,
             sources: [edge.source],
             targets: [edge.target],
@@ -356,7 +359,7 @@ export async function layoutGraphWithElk(
                 targetPosition: Position.Left,
             }
         }),
-        edges,
+        edges: safeEdges,
     }
 }
 
@@ -601,21 +604,58 @@ export function sanitizeGraphData(
     return { entities: sanitizedEntities, events: sanitizedEvents }
 }
 
-export function buildL4GraphNodes(l4Nodes: L4GraphNode[]): Node<EntityNodeData>[] {
-    const cols = 4
-    const xGap = 200
-    const yGap = 160
-    return l4Nodes.map((node, i) => {
-        const col = i % cols
-        const row = Math.floor(i / cols)
+export function buildL4GraphNodes(l4Nodes: L4GraphNode[], l4Edges: L4GraphEdge[]): Node<EntityNodeData>[] {
+    const nodeIds = new Set(l4Nodes.map((node) => node.id))
+    const degree = new Map<string, number>()
+    for (const node of l4Nodes) {
+        degree.set(node.id, 0)
+    }
+    for (const edge of l4Edges) {
+        if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target) || edge.source === edge.target) continue
+        degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1)
+        degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1)
+    }
+
+    const ordered = [...l4Nodes].sort(
+        (a, b) =>
+            (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) ||
+            b.label.length - a.label.length ||
+            a.label.localeCompare(b.label),
+    )
+
+    const positions = new Map<string, { x: number; y: number }>()
+    if (ordered.length > 0) {
+        positions.set(ordered[0].id, { x: 0, y: 0 })
+    }
+    let cursor = 1
+    let ring = 1
+    while (cursor < ordered.length) {
+        const ringCapacity = 6 + (ring - 1) * 4
+        const remaining = ordered.length - cursor
+        const count = Math.min(ringCapacity, remaining)
+        const radius = 240 + (ring - 1) * 170
+        for (let i = 0; i < count; i += 1) {
+            const angle = (Math.PI * 2 * i) / count - Math.PI / 2
+            positions.set(ordered[cursor + i].id, {
+                x: Math.round(Math.cos(angle) * radius),
+                y: Math.round(Math.sin(angle) * radius),
+            })
+        }
+        cursor += count
+        ring += 1
+    }
+
+    return l4Nodes.map((node) => {
+        const position = positions.get(node.id) ?? { x: 0, y: 0 }
         return {
             id: node.id,
             type: 'entity',
-            position: { x: col * xGap + 50, y: row * yGap + 50 },
+            position,
             data: {
                 label: node.label,
                 entityType: 'character' as const,
                 attrs: {
+                    连接度: degree.get(node.id) ?? 0,
                     ...(node.overview ? { 概述: node.overview } : {}),
                     ...(node.personality ? { 性格: node.personality } : {}),
                 },
@@ -628,8 +668,12 @@ export function buildL4GraphNodes(l4Nodes: L4GraphNode[]): Node<EntityNodeData>[
     })
 }
 
-export function buildL4GraphEdges(l4Edges: L4GraphEdge[]): Edge[] {
-    return l4Edges.map((edge) => ({
+export function buildL4GraphEdges(l4Edges: L4GraphEdge[], nodeIds: Set<string>): Edge[] {
+    return l4Edges
+        .filter(
+            (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target) && edge.source !== edge.target,
+        )
+        .map((edge) => ({
         id: edge.id,
         source: edge.source,
         target: edge.target,
@@ -726,8 +770,9 @@ export default function KnowledgeGraphPage() {
         layoutRunRef.current = currentRun
         setLayoutLoading(true)
 
-        const rfNodes = buildL4GraphNodes(l4Nodes)
-        const rfEdges = buildL4GraphEdges(l4Edges)
+        const rfNodes = buildL4GraphNodes(l4Nodes, l4Edges)
+        const nodeIdSet = new Set(rfNodes.map((node) => node.id))
+        const rfEdges = buildL4GraphEdges(l4Edges, nodeIdSet)
 
         void layoutGraphWithElk(rfNodes, rfEdges)
             .then((layouted) => {
