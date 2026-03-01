@@ -1,0 +1,3 @@
+Implemented POST /api/projects/import in backend/api/main.py.
+Flow: stream upload to temp file with 500MB limit (413), zip validation (400), path traversal check (400), extract to temp dir, auto-detect project.json, rewrite project id + clear fanqie_book_id + update updated_at, update chapters/*.json project_id, copy to projects_root/new_id, register Project/Chapter/AgentTrace in memory, sync_file_memories(), cleanup temp dirs.
+Trace registration uses trace_file.stem as key to match bootstrap_state.

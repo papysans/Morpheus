@@ -1,0 +1,49 @@
+F2: Code Quality Review — 2026-03-01
+=====================================
+
+## 1. Backend Tests (python3 -m pytest tests/ -v)
+Result: 243 passed, 0 failed, 9 warnings
+Duration: 56.83s
+Status: PASS
+
+Warnings (non-blocking):
+- DeprecationWarning: table_names() deprecated, use list_tables() (lancedb)
+- DeprecationWarning: datetime.datetime.utcnow() deprecated
+
+## 2. Frontend Tests (npx vitest run)
+Result: 480 passed, 0 failed
+Test Files: 45 passed (45)
+Duration: 4.66s
+Status: PASS
+
+Warnings (non-blocking):
+- React Router v7 future flag warnings (v7_startTransition, v7_relativeSplatPath)
+- Multiple "not wrapped in act(...)" warnings in KnowledgeGraphPage, MemoryBrowserPage tests
+
+## 3. Frontend Lint (npm run lint)
+Result: 0 errors, 1 warning
+Status: PASS (0 errors)
+
+Warning:
+- src/pages/KnowledgeGraphPage.tsx:689:8 — react-hooks/exhaustive-deps: useEffect missing dependency 'loadData'
+
+## 4. Frontend Build (npm run build — tsc && vite build)
+Result: FAILED (3 TypeScript errors)
+Status: FAIL
+
+Errors:
+1. src/config/features.ts(10,61): error TS2339: Property 'VITE_L4_PROFILE_ENABLED' does not exist on type 'ImportMetaEnv'.
+2. src/config/features.ts(11,66): error TS2339: Property 'VITE_L4_AUTO_EXTRACT_ENABLED' does not exist on type 'ImportMetaEnv'.
+3. src/pages/KnowledgeGraphPage.tsx(655,12): error TS6133: 'entities' is declared but its value is never read.
+
+## Overall: FAIL (build broken)
+
+Root causes:
+- Missing VITE_L4_PROFILE_ENABLED and VITE_L4_AUTO_EXTRACT_ENABLED in ImportMetaEnv type declaration (likely needs vite-env.d.ts update)
+- Unused variable 'entities' in KnowledgeGraphPage.tsx line 655
+
+## Build Fix (follow-up)
+- vite-env.d.ts: added VITE_L4_PROFILE_ENABLED, VITE_L4_AUTO_EXTRACT_ENABLED to ImportMetaEnv
+- KnowledgeGraphPage.tsx:655: renamed 'entities' to '_entities' (unused variable)
+- Build result: PASS (tsc && vite build succeeded, built in 4.65s)
+- Tests after fix: 480/480 passed (45 test files)

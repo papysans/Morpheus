@@ -1,0 +1,43 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Volumes/Work/Projects/Morpheus-knowledge-graph-revival/frontend[39m
+
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mbuildGraphNodes[2m > [22mcreates a ReactFlow node for each entity[32m 1[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mbuildGraphNodes[2m > [22msets correct data fields from entity[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mbuildGraphNodes[2m > [22mreturns empty array for empty input[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage project fetch behavior[2m > [22mroute 项目与 currentProject 不一致时会重新拉取项目[32m 27[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mbuildGraphEdges[2m > [22mcreates edges for events with matching subject and object entities[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mbuildGraphEdges[2m > [22mskips events without matching object entity[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mbuildGraphEdges[2m > [22mreturns empty array when no entities[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mbuildGraphEdges[2m > [22mhides progress edges by default and can include them via option[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mgetHighlightSets[2m > [22mreturns clicked node and its direct neighbors[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mgetHighlightSets[2m > [22mreturns only clicked node when it has no edges[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mgetHighlightSets[2m > [22mincludes both source and target for bidirectional connections[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22msortEventsByChapter[2m > [22msorts events in ascending chapter order[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22msortEventsByChapter[2m > [22mdoes not mutate original array[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22msortEventsByChapter[2m > [22mreturns empty array for empty input[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22msanitizeGraphData[2m > [22mnormalizes placeholder role names and drops hidden roles[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22msanitizeGraphData[2m > [22mfilters noisy pseudo-role fragments from entities and events[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mENTITY_STYLES[2m > [22mhas distinct styles for character, location, and item[32m 0[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mrenders page title and subtitle[32m 7[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mrenders two tab buttons[32m 2[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mdefaults to graph tab[32m 3[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mshows skeleton while loading[32m 4[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mrenders ReactFlow canvas after data loads[32m 102[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mrenders entity nodes in the graph[32m 24[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mrenders entity names in nodes[32m 14[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mrenders edges with relation labels[32m 14[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mshows empty state when no entities[32m 4[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mshows error toast when API fails[32m 5[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mswitches to timeline tab and shows sorted events[32m 12[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mshows empty timeline state[32m 8[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mhas back link to project detail[32m 3[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage[2m > [22mshows event descriptions in timeline[32m 12[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage L4 data[2m > [22mfetches from /api/projects/{id}/graph endpoint[32m 2[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage L4 data[2m > [22mrenders L4 character node label in graph[32m 10[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgeGraphPage.test.tsx[2m > [22mKnowledgeGraphPage L4 data[2m > [22mshows empty state when no L4 profiles exist[32m 3[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m34 passed[39m[22m[90m (34)[39m
+[2m   Start at [22m 02:20:21
+[2m   Duration [22m 705ms[2m (transform 128ms, setup 32ms, import 149ms, tests 258ms, environment 197ms)[22m
+

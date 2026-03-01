@@ -1,0 +1,90 @@
+F3: QA Scenario Replay — knowledge-graph-revival
+Date: 2026-03-01
+Worktree: /Volumes/Work/Projects/Morpheus-knowledge-graph-revival/
+
+================================================================================
+SCENARIO 1 — Auto-extract trigger (test_l4_auto_trigger.py)
+================================================================================
+4/4 passed in 1.17s
+
+tests/test_l4_auto_trigger.py::TestL4AutoTrigger::test_chapter_approval_succeeds_even_if_l4_extraction_fails PASSED
+tests/test_l4_auto_trigger.py::TestL4AutoTrigger::test_l4_extraction_disabled_flag_skips_extraction PASSED
+tests/test_l4_auto_trigger.py::TestL4AutoTrigger::test_trigger_l4_extraction_async_does_not_raise PASSED
+tests/test_l4_auto_trigger.py::TestL4AutoTrigger::test_trigger_l4_extraction_async_exists PASSED
+
+================================================================================
+SCENARIO 2 — Manual rebuild API (test_l4_rebuild_api.py)
+================================================================================
+8/8 passed in 1.02s
+
+tests/test_l4_rebuild_api.py::TestManualRebuildAPI::test_rebuild_empty_project_returns_zero_processed PASSED
+tests/test_l4_rebuild_api.py::TestManualRebuildAPI::test_rebuild_invalid_range_returns_400 PASSED
+tests/test_l4_rebuild_api.py::TestManualRebuildAPI::test_rebuild_nonexistent_project_returns_404 PASSED
+tests/test_l4_rebuild_api.py::TestManualRebuildAPI::test_rebuild_response_has_stats_fields PASSED
+tests/test_l4_rebuild_api.py::TestManualRebuildAPI::test_rebuild_returns_200 PASSED
+tests/test_l4_rebuild_api.py::TestManualRebuildAPI::test_rebuild_stats_are_integers PASSED
+tests/test_l4_rebuild_api.py::TestManualRebuildAPI::test_rebuild_with_chapter_range PASSED
+tests/test_l4_rebuild_api.py::TestManualRebuildAPI::test_rebuild_with_character_filter PASSED
+
+================================================================================
+SCENARIO 3 — Graph API returns L4 data (test_l4_graph_api.py)
+================================================================================
+7/7 passed in 0.98s
+
+tests/test_l4_graph_api.py::TestGraphDataAPIL4::test_graph_data_empty_project_returns_empty_lists PASSED
+tests/test_l4_graph_api.py::TestGraphDataAPIL4::test_graph_data_endpoint_exists PASSED
+tests/test_l4_graph_api.py::TestGraphDataAPIL4::test_graph_data_nonexistent_project_returns_empty PASSED
+tests/test_l4_graph_api.py::TestGraphDataAPIL4::test_graph_data_returns_nodes_and_edges PASSED
+tests/test_l4_graph_api.py::TestGraphDataAPIL4::test_graph_data_with_l4_profiles_returns_edges PASSED
+tests/test_l4_graph_api.py::TestGraphDataAPIL4::test_graph_data_with_l4_profiles_returns_nodes PASSED
+tests/test_l4_graph_api.py::TestGraphDataAPIL4::test_graph_nodes_have_stable_ids PASSED
+
+================================================================================
+SCENARIO 4 — Export/import round-trip
+================================================================================
+12/12 passed in 1.28s (6 deprecation warnings)
+
+tests/test_l4_export.py::TestL4Export::test_export_contains_export_meta PASSED
+tests/test_l4_export.py::TestL4Export::test_export_contains_novelist_db PASSED
+tests/test_l4_export.py::TestL4Export::test_export_legacy_project_still_succeeds PASSED
+tests/test_l4_export.py::TestL4Export::test_export_meta_version_is_l4 PASSED
+tests/test_l4_import.py::TestL4Import::test_import_new_format_restores_l4_profiles PASSED
+tests/test_l4_import.py::TestL4Import::test_import_old_format_succeeds_with_empty_l4 PASSED
+tests/test_l4_import.py::TestL4Import::test_import_preserves_character_name PASSED
+tests/test_l4_roundtrip.py::TestL4RoundTrip::test_full_roundtrip_l4_data_consistent PASSED
+tests/test_l4_roundtrip.py::TestL4RoundTrip::test_graph_api_handles_large_profile_set PASSED
+tests/test_l4_roundtrip.py::TestL4RoundTrip::test_graph_node_ids_stable_across_calls PASSED
+tests/test_l4_roundtrip.py::TestL4RoundTrip::test_l1_l2_l3_memory_unaffected_by_l4_operations PASSED
+tests/test_l4_roundtrip.py::TestL4RoundTrip::test_l4_rebuild_preserves_user_override PASSED
+
+================================================================================
+SCENARIO 5 — Parser: valid + invalid JSON (test_l4_extraction_parser.py)
+================================================================================
+17/17 passed in 0.12s
+
+tests/test_l4_extraction_parser.py::TestExtractionPromptTemplate::test_template_format PASSED
+tests/test_l4_extraction_parser.py::TestExtractionPromptTemplate::test_template_has_placeholder PASSED
+tests/test_l4_extraction_parser.py::TestExtractionPromptTemplate::test_template_is_string PASSED
+tests/test_l4_extraction_parser.py::TestExtractionPromptTemplate::test_template_mentions_required_fields PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_character_missing_name_is_skipped PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_empty_characters PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_malformed_json_returns_fallback PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_missing_characters_key PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_no_crash_on_empty_string PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_no_crash_on_none PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_sets_chapter_on_events PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_sets_chapter_on_relationships PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_sets_chapter_on_state_changes PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_valid_output PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_parse_wrong_type_characters PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_partial_character_missing_optional_fields PASSED
+tests/test_l4_extraction_parser.py::TestExtractionParser::test_profile_id_is_deterministic PASSED
+
+================================================================================
+SCENARIO 6 — Full suite regression
+================================================================================
+243/243 passed in 60.94s (9 deprecation warnings, 0 failures)
+
+================================================================================
+OVERALL: PASS — All 243 tests green, 0 failures
+================================================================================

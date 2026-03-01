@@ -1,0 +1,41 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Volumes/Work/Projects/Morpheus-knowledge-graph-revival/frontend[39m
+
+(node:18137) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/components/layout/__tests__/Sidebar.test.tsx[2m > [22m[2mSidebar[2m > [22m[2m基本渲染[2m > [22m[2mrenders brand and navigation sections
+[22m[39m⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m基本渲染[2m > [22mrenders brand and navigation sections[32m 13[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m基本渲染[2m > [22mhides text labels when collapsed[32m 2[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m基本渲染[2m > [22mtoggles sidebar on button click[32m 4[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m项目子导航显示条件[2m > [22mdoes NOT show project sub-nav on root path[32m 2[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m项目子导航显示条件[2m > [22mdoes NOT show project sub-nav on /dashboard[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m项目子导航显示条件[2m > [22mshows project sub-nav when on a project route[32m 4[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m项目子导航显示条件[2m > [22mshows project sub-nav on nested project routes[32m 2[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m项目子导航显示条件[2m > [22mshows project name when currentProject is set[32m 2[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m项目子导航显示条件[2m > [22mshows fallback "当前项目" when no currentProject[32m 2[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m项目子导航显示条件[2m > [22mhides project sub-nav when project is not found[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m导航高亮状态[2m > [22mhighlights 项目列表 on root path[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m导航高亮状态[2m > [22mdoes NOT highlight 项目列表 when on a project route[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m导航高亮状态[2m > [22mhighlights 项目概览 on exact project path[32m 2[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m导航高亮状态[2m > [22mhighlights 创作控制台 on /project/:id/write[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m导航高亮状态[2m > [22mhighlights 章节工作台 on /project/:id/chapter/:chapterId (prefix match)[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m导航高亮状态[2m > [22mhighlights 决策回放 on /project/:id/trace/:chapterId (prefix match)[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m导航高亮状态[2m > [22mhighlights 评测看板 on /dashboard[32m 3[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m知识图谱 nav entry[2m > [22mshows 知识图谱 link when on project route (GRAPH_FEATURE_ENABLED=true)[32m 3[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m知识图谱 nav entry[2m > [22mhighlights 知识图谱 on /project/:id/graph[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m知识图谱 nav entry[2m > [22mincludes 知识图谱 in project sub-nav items[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m浏览器前进/后退同步[2m > [22mupdates active state when location changes (simulated via re-render)[32m 2[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22mActivityPanel 集成[2m > [22mrenders ActivityPanel when sidebar is expanded[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22mActivityPanel 集成[2m > [22mhides ActivityPanel when sidebar is collapsed[32m 0[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m最近访问[2m > [22mshows 最近访问 section when there are items[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m最近访问[2m > [22mdoes not show 最近访问 section when items is empty[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/layout/__tests__/Sidebar.test.tsx[2m > [22mSidebar[2m > [22m最近访问[2m > [22mdoes not show 最近访问 section when sidebar is collapsed[32m 0[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m26 passed[39m[22m[90m (26)[39m
+[2m   Start at [22m 02:12:07
+[2m   Duration [22m 405ms[2m (transform 46ms, setup 25ms, import 87ms, tests 54ms, environment 175ms)[22m
+

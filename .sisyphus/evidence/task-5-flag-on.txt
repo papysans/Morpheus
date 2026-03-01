@@ -1,0 +1,17 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.3, pytest-9.0.2, pluggy-1.6.0 -- /opt/homebrew/opt/python@3.14/bin/python3.14
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Volumes/Work/Projects/Morpheus-knowledge-graph-revival/backend
+configfile: pyproject.toml
+plugins: anyio-4.12.1, hypothesis-6.151.9, asyncio-1.3.0, cov-7.0.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 5 items
+
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_flags_are_independent PASSED [ 20%]
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_l4_auto_extract_disabled_via_env PASSED [ 40%]
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_l4_auto_extract_enabled_default_true PASSED [ 60%]
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_l4_profile_disabled_via_env PASSED [ 80%]
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_l4_profile_enabled_default_true PASSED [100%]
+
+============================== 5 passed in 1.08s ===============================

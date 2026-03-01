@@ -1,0 +1,5 @@
+Import rejects invalid uploads:
+- Non-zip file: returns HTTP 400 "Invalid zip file" after zipfile.is_zipfile check.
+- Path traversal: returns HTTP 400 "Invalid zip entry" when any entry has ".." or starts with "/".
+- Missing project.json: returns HTTP 400 "project.json not found".
+- Oversized (>500MB) upload: returns HTTP 413 "File too large" during stream-to-temp step.

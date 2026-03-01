@@ -1,0 +1,38 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.3, pytest-9.0.2, pluggy-1.6.0 -- /opt/homebrew/opt/python@3.14/bin/python3.14
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /Volumes/Work/Projects/Morpheus-knowledge-graph-revival/backend
+configfile: pyproject.toml
+plugins: anyio-4.12.1, hypothesis-6.151.9, asyncio-1.3.0, cov-7.0.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 26 items
+
+tests/test_l4_models.py::TestL4Enums::test_layer_all_values PASSED       [  3%]
+tests/test_l4_models.py::TestL4Enums::test_layer_l4_exists PASSED        [  7%]
+tests/test_l4_models.py::TestL4Enums::test_override_source_llm_extracted PASSED [ 11%]
+tests/test_l4_models.py::TestL4Enums::test_override_source_user_override PASSED [ 15%]
+tests/test_l4_models.py::TestCharacterRelationship::test_confidence_out_of_bounds PASSED [ 19%]
+tests/test_l4_models.py::TestCharacterRelationship::test_defaults PASSED [ 23%]
+tests/test_l4_models.py::TestCharacterRelationship::test_json_roundtrip PASSED [ 26%]
+tests/test_l4_models.py::TestCharacterRelationship::test_missing_required_fields PASSED [ 30%]
+tests/test_l4_models.py::TestCharacterRelationship::test_serialization_roundtrip PASSED [ 34%]
+tests/test_l4_models.py::TestCharacterStateChange::test_defaults PASSED  [ 38%]
+tests/test_l4_models.py::TestCharacterStateChange::test_missing_required PASSED [ 42%]
+tests/test_l4_models.py::TestCharacterStateChange::test_serialization_roundtrip PASSED [ 46%]
+tests/test_l4_models.py::TestChapterEvent::test_defaults PASSED          [ 50%]
+tests/test_l4_models.py::TestChapterEvent::test_missing_required PASSED  [ 53%]
+tests/test_l4_models.py::TestChapterEvent::test_serialization_roundtrip PASSED [ 57%]
+tests/test_l4_models.py::TestCharacterProfile::test_confidence_negative PASSED [ 61%]
+tests/test_l4_models.py::TestCharacterProfile::test_confidence_too_high PASSED [ 65%]
+tests/test_l4_models.py::TestCharacterProfile::test_defaults PASSED      [ 69%]
+tests/test_l4_models.py::TestCharacterProfile::test_missing_required_fields PASSED [ 73%]
+tests/test_l4_models.py::TestCharacterProfile::test_nested_collections PASSED [ 76%]
+tests/test_l4_models.py::TestCharacterProfile::test_serialization_roundtrip PASSED [ 80%]
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_flags_are_independent PASSED [ 84%]
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_l4_auto_extract_disabled_via_env PASSED [ 88%]
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_l4_auto_extract_enabled_default_true PASSED [ 92%]
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_l4_profile_disabled_via_env PASSED [ 96%]
+tests/test_l4_feature_flags.py::TestL4FeatureFlags::test_l4_profile_enabled_default_true PASSED [100%]
+
+============================== 26 passed in 1.09s ==============================

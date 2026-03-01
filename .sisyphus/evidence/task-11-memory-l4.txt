@@ -1,0 +1,42 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Volumes/Work/Projects/Morpheus-knowledge-graph-revival/frontend[39m
+
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mrenders page title and subtitle[32m 28[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mhas back link to project detail[32m 6[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mrenders view toggle buttons[32m 6[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mdefaults to browse view with search and file panels[32m 10[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mloads identity and memory files on mount[32m 6[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mroute 项目与 currentProject 不一致时会重新拉取项目[32m 4[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mshows layer stats bar after files load[32m 5[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mshows layer legend inline in browse view[32m 5[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mshows quick query chips when no search has been performed[32m 5[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mperforms search and displays results[32m 14[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mdisables search button when query is empty[32m 5[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mtriggers search on Enter key[32m 12[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mquick search fills query and triggers search[32m 8[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mshows layer badges on results[32m 8[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mexpands result on click to show source path and actions[32m 21[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mshows chapter jump button when source maps to chapter[32m 14[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mrenders bracketed evidence as highlight mark[32m 11[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mshows error toast when search fails[32m 7[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mfilters results by layer[32m 10[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mswitches to identity view and shows editor[32m 7[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mloads and displays identity content[32m 6[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22msaves identity and shows success toast[32m 9[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mshows error toast when identity save fails[32m 9[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mshows memory files in the file panel[32m 7[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mMemoryBrowserPage[2m > [22mfilters files by layer using file panel filter chips[32m 11[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mL4 Character Profiles[2m > [22mshows L4 layer option in filter[32m 4[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mL4 Character Profiles[2m > [22mrenders character profile cards when L4 selected[32m 10[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/MemoryBrowserPage.test.tsx[2m > [22mL4 Character Profiles[2m > [22mshows rebuild button and calls rebuild API on click[32m 8[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m28 passed[39m[22m[90m (28)[39m
+[2m   Start at [22m 02:17:59
+[2m   Duration [22m 660ms[2m (transform 72ms, setup 30ms, import 105ms, tests 257ms, environment 199ms)[22m
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m44 passed[39m[22m[90m (45)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m477 passed[39m[22m[90m (480)[39m
+[2m   Start at [22m 02:18:00
+[2m   Duration [22m 6.80s[2m (transform 2.44s, setup 2.26s, import 8.55s, tests 19.67s, environment 22.46s)[22m
+
