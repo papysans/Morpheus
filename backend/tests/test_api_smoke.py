@@ -499,6 +499,120 @@ class NovelistApiSmokeTest(unittest.TestCase):
             self.assertIn("event: meta", payload)
             self.assertIn("event: done", payload)
 
+    def test_trace_replay_exposes_channel_snapshot(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=11)
+
+        traces[chapter_id] = AgentTrace(
+            id=f"trace-snapshot-{uuid4().hex[:8]}",
+            chapter_id=11,
+            decisions=[
+                AgentDecision(
+                    id="decision-director-snapshot",
+                    agent_role=AgentRole.DIRECTOR,
+                    chapter_id=11,
+                    input_refs=[],
+                    decision_text="<think>hidden</think>导演草稿",
+                    reasoning="",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentDecision(
+                    id="decision-setter-snapshot",
+                    agent_role=AgentRole.SETTER,
+                    chapter_id=11,
+                    input_refs=[],
+                    decision_text="设定校对",
+                    reasoning="",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentDecision(
+                    id="decision-stylist-snapshot",
+                    agent_role=AgentRole.STYLIST,
+                    chapter_id=11,
+                    input_refs=[],
+                    decision_text="润色建议",
+                    reasoning="",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ],
+            memory_hits=[],
+            conflicts_detected=[],
+            final_draft="最终成稿",
+        )
+
+        trace_res = self.client.get(f"/api/trace/{chapter_id}")
+        self.assertEqual(trace_res.status_code, 200)
+        snapshot = trace_res.json().get("channel_snapshot") or {}
+        self.assertEqual(snapshot.get("director"), "导演草稿")
+        self.assertEqual(snapshot.get("setter"), "设定校对")
+        self.assertEqual(snapshot.get("stylist"), "润色建议")
+        self.assertEqual(snapshot.get("arbiter"), "最终成稿")
+
+    def test_stream_draft_cached_replays_trace_channels(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=12)
+
+        chapter = chapters[chapter_id]
+        chapter.draft = "最终成稿"
+        chapter.word_count = len(chapter.draft)
+        chapter.status = ChapterStatus.REVIEWING
+
+        traces[chapter_id] = AgentTrace(
+            id=f"trace-stream-{uuid4().hex[:8]}",
+            chapter_id=12,
+            decisions=[
+                AgentDecision(
+                    id="decision-director-stream",
+                    agent_role=AgentRole.DIRECTOR,
+                    chapter_id=12,
+                    input_refs=[],
+                    decision_text="导演分镜",
+                    reasoning="",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentDecision(
+                    id="decision-setter-stream",
+                    agent_role=AgentRole.SETTER,
+                    chapter_id=12,
+                    input_refs=[],
+                    decision_text="设定校验",
+                    reasoning="",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentDecision(
+                    id="decision-stylist-stream",
+                    agent_role=AgentRole.STYLIST,
+                    chapter_id=12,
+                    input_refs=[],
+                    decision_text="文风润色",
+                    reasoning="",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentDecision(
+                    id="decision-arbiter-stream",
+                    agent_role=AgentRole.ARBITER,
+                    chapter_id=12,
+                    input_refs=[],
+                    decision_text="裁决正文",
+                    reasoning="",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ],
+            memory_hits=[],
+            conflicts_detected=[],
+            final_draft="最终成稿",
+        )
+
+        with self.client.stream("GET", f"/api/chapters/{chapter_id}/draft/stream") as response:
+            self.assertEqual(response.status_code, 200)
+            payload = "".join(chunk.decode("utf-8") for chunk in response.iter_raw())
+
+        self.assertIn('"replay_source": "trace"', payload)
+        self.assertIn('"channel": "director"', payload)
+        self.assertIn('"channel": "setter"', payload)
+        self.assertIn('"channel": "stylist"', payload)
+        self.assertIn('"channel": "arbiter"', payload)
+
     def test_one_shot_generation_modes(self):
         project_id = self._create_project()
         chapter_id = self._create_chapter(project_id, chapter_number=7)

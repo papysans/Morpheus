@@ -194,7 +194,32 @@ def sanitize_trace_payload(trace: AgentTrace) -> Dict[str, Any]:
     for decision in decisions:
         decision["decision_text"] = sanitize_trace_text(decision.get("decision_text"))
         decision["reasoning"] = sanitize_trace_text(decision.get("reasoning"))
+    payload["channel_snapshot"] = build_trace_channel_snapshot(trace)
     return payload
+
+
+def build_trace_channel_snapshot(trace: Optional[AgentTrace]) -> Dict[str, str]:
+    snapshot = {
+        "director": "",
+        "setter": "",
+        "stylist": "",
+        "arbiter": "",
+    }
+    if not trace:
+        return snapshot
+
+    for decision in trace.decisions or []:
+        role = str(getattr(decision, "agent_role", "") or "").strip().lower()
+        if role not in snapshot:
+            continue
+        text = sanitize_trace_text(getattr(decision, "decision_text", ""))
+        if text:
+            snapshot[role] = text
+
+    final_draft = sanitize_trace_text(getattr(trace, "final_draft", ""))
+    if final_draft:
+        snapshot["arbiter"] = final_draft
+    return snapshot
 
 
 def _normalize_provider(provider: str) -> str:
@@ -4643,6 +4668,19 @@ async def stream_draft(chapter_id: str, force: bool = False, resume_from: int = 
                 result = await _generate_draft_internal(chapter_id, force=False)
                 draft_text = chapter.draft or ""
                 start = max(0, min(resume_from, len(draft_text)))
+                trace = resolve_trace_for_chapter(chapter)
+                channel_snapshot = build_trace_channel_snapshot(trace)
+                if not channel_snapshot["arbiter"]:
+                    channel_snapshot["arbiter"] = draft_text
+
+                available_channels = [
+                    channel
+                    for channel in ("director", "setter", "stylist", "arbiter")
+                    if channel_snapshot.get(channel)
+                ]
+                replayed_channels = ["arbiter"] if start > 0 else list(available_channels)
+                replay_source = "trace" if trace else "chapter"
+
                 await report(
                     "meta",
                     {
@@ -4652,33 +4690,40 @@ async def stream_draft(chapter_id: str, force: bool = False, resume_from: int = 
                         "word_count": chapter.word_count,
                         "start": start,
                         "cached": True,
+                        "replay_source": replay_source,
+                        "available_channels": available_channels,
                     },
                 )
-                cursor = start
-                while cursor < len(draft_text):
-                    next_cursor = min(cursor + 800, len(draft_text))
-                    chunk = draft_text[cursor:next_cursor]
-                    await report(
-                        "chunk",
-                        {
-                            "chapter_id": chapter_id,
-                            "chapter_number": chapter.chapter_number,
-                            "offset": next_cursor,
-                            "chunk": chunk,
-                            "channel": "arbiter",
-                            "done": False,
-                        },
-                    )
-                    cursor = next_cursor
-                    await asyncio.sleep(0)
+
+                for channel in replayed_channels:
+                    channel_text = channel_snapshot.get(channel, "")
+                    cursor = start if channel == "arbiter" else 0
+                    while cursor < len(channel_text):
+                        next_cursor = min(cursor + 800, len(channel_text))
+                        chunk = channel_text[cursor:next_cursor]
+                        await report(
+                            "chunk",
+                            {
+                                "chapter_id": chapter_id,
+                                "chapter_number": chapter.chapter_number,
+                                "offset": next_cursor,
+                                "chunk": chunk,
+                                "channel": channel,
+                                "done": False,
+                            },
+                        )
+                        cursor = next_cursor
+                        await asyncio.sleep(0)
+
                 await report(
                     "done",
                     {
-                        "offset": len(draft_text),
+                        "offset": len(channel_snapshot.get("arbiter", "")),
                         "done": True,
                         "consistency": result.get("consistency", {}),
                         "can_submit": result.get("can_submit", True),
                         "cached": True,
+                        "replayed_channels": replayed_channels,
                     },
                 )
                 return
