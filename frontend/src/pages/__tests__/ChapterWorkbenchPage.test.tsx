@@ -488,6 +488,40 @@ describe('ChapterWorkbenchPage', () => {
         })
     })
 
+    it('加载后会从 trace 回填流式侧通道', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/chapters/ch-1') {
+                return Promise.resolve({ data: sampleChapter })
+            }
+            if (url === '/trace/ch-1') {
+                return Promise.resolve({
+                    data: {
+                        channel_snapshot: {
+                            director: '导演阶段内容',
+                            setter: '设定阶段内容',
+                            stylist: '润色阶段内容',
+                        },
+                    },
+                })
+            }
+            return Promise.resolve({ data: sampleChapter })
+        })
+
+        renderPage()
+        await waitFor(() => {
+            expect(mockApiGet).toHaveBeenCalledWith('/trace/ch-1')
+        })
+
+        fireEvent.click(screen.getByText('导演'))
+        expect(await screen.findByText('导演阶段内容')).toBeTruthy()
+
+        fireEvent.click(screen.getByText('设定'))
+        expect(await screen.findByText('设定阶段内容')).toBeTruthy()
+
+        fireEvent.click(screen.getByText('润色'))
+        expect(await screen.findByText('润色阶段内容')).toBeTruthy()
+    })
+
     it('显示字数统计', async () => {
         renderPage()
         await waitFor(() => {
