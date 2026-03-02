@@ -609,7 +609,25 @@ describe('ChapterWorkbenchPage', () => {
         expect(screen.getByText('保存编辑并重检')).toBeTruthy()
     })
 
-    it('清空创作台仅清空本地编辑区，不触发保存接口', async () => {
+    it('清空创作台会清空终稿与侧通道，且不触发保存接口', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/chapters/ch-1') {
+                return Promise.resolve({ data: sampleChapter })
+            }
+            if (url === '/trace/ch-1') {
+                return Promise.resolve({
+                    data: {
+                        channel_snapshot: {
+                            director: '导演阶段待办',
+                            setter: '设定阶段校验',
+                            stylist: '润色阶段建议',
+                        },
+                    },
+                })
+            }
+            return Promise.resolve({ data: sampleChapter })
+        })
+
         renderPage()
         await waitFor(() => {
             expect(screen.getByText('清空创作台')).toBeTruthy()
@@ -620,12 +638,20 @@ describe('ChapterWorkbenchPage', () => {
         fireEvent.change(editor, { target: { value: '临时编辑内容' } })
         expect(editor.value).toBe('临时编辑内容')
 
+        fireEvent.click(screen.getByText('导演'))
+        expect(await screen.findByText('导演阶段待办')).toBeTruthy()
+
         fireEvent.click(screen.getByText('清空创作台'))
         expect(screen.getByText('清空当前创作台？')).toBeTruthy()
         fireEvent.click(screen.getByText('确认清空'))
 
         const clearedEditor = document.querySelector('textarea[rows="22"]') as HTMLTextAreaElement
         expect(clearedEditor.value).toBe('')
+
+        fireEvent.click(screen.getByText('导演'))
+        expect(await screen.findByText('等待该阶段输出...')).toBeTruthy()
+        expect(screen.queryByText('导演阶段待办')).toBeNull()
+
         expect(mockApiPut).not.toHaveBeenCalled()
     })
 

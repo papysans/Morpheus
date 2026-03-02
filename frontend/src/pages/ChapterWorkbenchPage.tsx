@@ -890,6 +890,12 @@ export default function ChapterWorkbenchPage() {
 
     const clearWorkspaceLocally = () => {
         setDraftContent('')
+        setStreamChannelText({
+            director: '',
+            setter: '',
+            stylist: '',
+        })
+        setStreamChannel('arbiter')
         setOneShotPrompt('')
         setEditing(true)
         autoSave.clearDraft()
