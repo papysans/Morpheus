@@ -655,6 +655,65 @@ describe('ChapterWorkbenchPage', () => {
         expect(mockApiPut).not.toHaveBeenCalled()
     })
 
+    it('流式生成完成后会清理本地草稿，避免弹出恢复对话框', async () => {
+        const originalEventSource = (globalThis as any).EventSource
+        const sources: any[] = []
+
+        class MockEventSource {
+            onerror: any = null
+            private listeners = new Map<string, Array<(event: MessageEvent) => void>>()
+
+            constructor(_url: string) {
+                sources.push(this)
+            }
+
+            addEventListener(type: string, listener: (event: MessageEvent) => void) {
+                const list = this.listeners.get(type) || []
+                list.push(listener)
+                this.listeners.set(type, list)
+            }
+
+            close() {
+                return undefined
+            }
+
+            emit(type: string, payload: unknown) {
+                const list = this.listeners.get(type) || []
+                const event = { data: JSON.stringify(payload) } as MessageEvent
+                for (const listener of list) {
+                    listener(event)
+                }
+            }
+        }
+
+        (globalThis as any).EventSource = MockEventSource as any
+
+        try {
+            renderPage()
+            await waitFor(() => {
+                expect(screen.getByText('流式生成草稿')).toBeTruthy()
+            })
+
+            localStorageMock.removeItem.mockClear()
+
+            fireEvent.click(screen.getByText('流式生成草稿'))
+            expect(sources.length).toBeGreaterThan(0)
+
+            const source = sources[0]
+            source.emit('chunk', { channel: 'arbiter', chunk: '流式正文片段' })
+            source.emit('done', { consistency: { can_submit: true, conflicts: [] } })
+
+            await waitFor(() => {
+                expect(mockAddToast).toHaveBeenCalledWith('success', '草稿生成完成')
+            })
+
+            expect(localStorageMock.removeItem).toHaveBeenCalledWith('draft-ch-1')
+            expect(screen.queryByText('发现本地草稿')).toBeNull()
+        } finally {
+            (globalThis as any).EventSource = originalEventSource
+        }
+    })
+
     it('保存草稿成功时触发 success Toast', async () => {
         renderPage()
         await waitFor(() => {

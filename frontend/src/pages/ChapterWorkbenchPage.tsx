@@ -427,7 +427,7 @@ export default function ChapterWorkbenchPage() {
 
     // 检测本地草稿：只有本地草稿与服务端内容不一致时才提示恢复
     useEffect(() => {
-        if (loading || !chapter || !hasLocalDraft) return
+        if (loading || streaming || !chapter || !hasLocalDraft) return
         const localDraft = localDraftContent ?? ''
         const remoteDraft = chapter.draft ?? chapter.final ?? ''
         if (!localDraft) return
@@ -438,7 +438,7 @@ export default function ChapterWorkbenchPage() {
             return
         }
         setShowDraftRestore(true)
-    }, [loading, chapter, hasLocalDraft, localDraftContent, clearLocalDraft])
+    }, [loading, streaming, chapter, hasLocalDraft, localDraftContent, clearLocalDraft])
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -620,6 +620,7 @@ export default function ChapterWorkbenchPage() {
         if (!chapterId) return
         setStreaming(true)
         setStreamChannel('arbiter')
+        setShowDraftRestore(false)
         const startOffset = resume ? draftContent.length : 0
         if (force && !resume) {
             setDraftContent('')
@@ -678,6 +679,8 @@ export default function ChapterWorkbenchPage() {
         source.addEventListener('done', async (event) => {
             const payload = JSON.parse((event as MessageEvent).data) as StreamDonePayload
             source.close()
+            clearLocalDraft()
+            setShowDraftRestore(false)
             setStreaming(false)
             if (payload.consistency && chapter) {
                 setChapter({
@@ -774,6 +777,8 @@ export default function ChapterWorkbenchPage() {
                 setDraftContent(response.data?.draft ?? '')
                 await loadChapter()
             }
+            clearLocalDraft()
+            setShowDraftRestore(false)
             addToast('success', '一句话整篇生成完成')
         } catch (err: any) {
             console.error(err)
