@@ -32,11 +32,16 @@ from api.main import (
     data_root,
     BACKEND_ROOT,
     resolve_target_word_upper_bound,
+    save_chapter,
     settings,
     upsert_graph_from_chapter,
 )
 from agents.studio import StudioWorkflow
-from core.chapter_craft import normalize_chapter_title, strip_leading_chapter_heading
+from core.chapter_craft import (
+    normalize_chapter_title,
+    normalize_outline_items,
+    strip_leading_chapter_heading,
+)
 from models import AgentDecision, AgentRole, AgentTrace, EntityState, EventEdge, ProjectStatus, ChapterStatus, ChapterPlan, MemoryItem, Layer
 
 
@@ -556,6 +561,7 @@ class NovelistApiSmokeTest(unittest.TestCase):
         chapter.draft = "最终成稿"
         chapter.word_count = len(chapter.draft)
         chapter.status = ChapterStatus.REVIEWING
+        save_chapter(chapter)
 
         traces[chapter_id] = AgentTrace(
             id=f"trace-stream-{uuid4().hex[:8]}",
@@ -1185,6 +1191,24 @@ class NovelistApiSmokeTest(unittest.TestCase):
         self.assertTrue(title)
         self.assertNotEqual(title, "阶段收束·10")
         self.assertNotIn("阶段收束", title)
+
+    def test_outline_title_normalization_avoids_existing_project_titles(self):
+        normalized = normalize_outline_items(
+            outline=[
+                {
+                    "title": "镜城残响",
+                    "goal": "主角根据备份神谕的线索深入废弃数据中心并触发警报",
+                }
+            ],
+            prompt="备份神谕续写",
+            chapter_count=1,
+            start_chapter_number=22,
+            continuation_mode=True,
+            existing_titles=["镜城残响", "无声警告"],
+        )
+        self.assertEqual(len(normalized), 1)
+        self.assertNotEqual(normalized[0]["title"], "镜城残响")
+        self.assertNotIn("·", normalized[0]["title"])
 
     def test_strip_leading_chapter_heading(self):
         raw = "# 第8章 深夜食堂\n\n正文第一段。\n\n正文第二段。"

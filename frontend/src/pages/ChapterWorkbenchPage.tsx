@@ -315,8 +315,10 @@ export default function ChapterWorkbenchPage() {
     const [oneShotWords, setOneShotWords] = useState(1600)
     const [oneShotWordsInput, setOneShotWordsInput] = useState('1600')
     const [oneShotLoading, setOneShotLoading] = useState(false)
+    const [oneShotStage, setOneShotStage] = useState<{ id: string; label: string } | null>(null)
     const [loadingPlan, setLoadingPlan] = useState(false)
     const [streaming, setStreaming] = useState(false)
+    const [streamingStage, setStreamingStage] = useState<string | null>(null)
     const [editing, setEditing] = useState(true)
     const [savingDraft, setSavingDraft] = useState(false)
     const [publishing, setPublishing] = useState(false)
@@ -646,6 +648,13 @@ export default function ChapterWorkbenchPage() {
             }
         })
 
+        source.addEventListener('stage', (event) => {
+            try {
+                const payload = JSON.parse((event as MessageEvent).data)
+                setStreamingStage(payload.label || payload.stage)
+            } catch { /* ignore */ }
+        })
+
         source.addEventListener('chunk', (event) => {
             const payload = JSON.parse((event as MessageEvent).data) as { chunk: string; channel?: StreamChannel }
             const channel = payload.channel || 'arbiter'
@@ -682,6 +691,7 @@ export default function ChapterWorkbenchPage() {
             clearLocalDraft()
             setShowDraftRestore(false)
             setStreaming(false)
+            setStreamingStage(null)
             if (payload.consistency && chapter) {
                 setChapter({
                     ...chapter,
@@ -694,9 +704,26 @@ export default function ChapterWorkbenchPage() {
             addRecord({ type: 'generate', description: '草稿生成完成', status: 'success' })
         })
 
+        source.addEventListener('error', (event) => {
+            try {
+                const payload = JSON.parse((event as MessageEvent).data)
+                source.close()
+                setStreaming(false)
+                setStreamingStage(null)
+                addToast('error', payload.detail || '草稿生成失败', {
+                    context: '流式生成',
+                    actions: [{ label: '重试', onClick: () => startDraftStream(true, false) }],
+                })
+                addRecord({ type: 'generate', description: '草稿生成失败', status: 'error', retryAction: () => startDraftStream(true, false) })
+            } catch {
+                // Not a business error event, let onerror handle it
+            }
+        })
+
         source.onerror = () => {
             source.close()
             setStreaming(false)
+            setStreamingStage(null)
             addToast('error', '流式生成中断', {
                 context: '流式生成',
                 actions: [
@@ -759,32 +786,110 @@ export default function ChapterWorkbenchPage() {
         }
     }
 
+    const oneShotAbortRef = useRef<AbortController | null>(null)
+
     const generateOneShot = async () => {
         if (!chapterId || !oneShotPrompt.trim()) return
         setOneShotLoading(true)
+        setDraftContent('')
+
+        const controller = new AbortController()
+        oneShotAbortRef.current = controller
+
         try {
-            const response = await api.post(`/chapters/${chapterId}/one-shot`, {
-                prompt: oneShotPrompt.trim(),
-                mode: oneShotMode,
-                target_words: oneShotWords,
-                override_goal: true,
-                rewrite_plan: true,
-            }, { timeout: LLM_TIMEOUT })
-            if (response.data?.chapter) {
-                setChapter(response.data.chapter)
-                setDraftContent(response.data.chapter.draft ?? response.data.draft ?? '')
-            } else {
-                setDraftContent(response.data?.draft ?? '')
-                await loadChapter()
+            const res = await fetch(`/api/chapters/${chapterId}/one-shot/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    prompt: oneShotPrompt.trim(),
+                    mode: oneShotMode,
+                    target_words: oneShotWords,
+                    override_goal: true,
+                    rewrite_plan: true,
+                }),
+                signal: controller.signal,
+            })
+
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text || `HTTP ${res.status}`)
+            }
+
+            if (!res.body) throw new Error('No response body')
+
+            const reader = res.body.getReader()
+            const decoder = new TextDecoder('utf-8')
+            let buffer = ''
+            let receivedChunk = false
+
+            while (true) {
+                if (controller.signal.aborted) {
+                    await reader.cancel()
+                    break
+                }
+                const { value, done: readerDone } = await reader.read()
+                if (readerDone) break
+                buffer += decoder.decode(value, { stream: true })
+                const frames = buffer.split('\n\n')
+                buffer = frames.pop() || ''
+
+                for (const frame of frames) {
+                    const lines = frame.split('\n').map((l: string) => l.trim()).filter(Boolean)
+                    if (lines.length === 0) continue
+                    let eventName = 'message'
+                    const dataLines: string[] = []
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) eventName = line.slice(6).trim()
+                        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+                    }
+                    const raw = dataLines.join('\n')
+                    if (!raw) continue
+
+                    if (eventName === 'heartbeat') continue
+
+                    let payload: any = {}
+                    try { payload = JSON.parse(raw) } catch { continue }
+
+                    if (eventName === 'stage') {
+                        setOneShotStage({ id: payload.stage, label: payload.label })
+                        continue
+                    }
+
+                    if (eventName === 'chunk') {
+                        receivedChunk = true
+                        setDraftContent((prev) => prev + (payload.chunk || ''))
+                    } else if (eventName === 'done') {
+                        setOneShotStage(null)
+                        if (payload.chapter) {
+                            setChapter(payload.chapter)
+                        }
+                        if (!receivedChunk && payload.draft) {
+                            setDraftContent(payload.draft)
+                        }
+                        await loadChapter()
+                        addToast('success', '一句话整篇生成完成')
+                    } else if (eventName === 'error') {
+                        throw new Error(payload.detail || '一句话整篇生成失败')
+                    }
+                }
             }
             clearLocalDraft()
             setShowDraftRestore(false)
             addToast('success', '一句话整篇生成完成')
         } catch (err: any) {
-            console.error(err)
-            addToast('error', err?.response?.data?.detail ?? '一句话整篇生成失败')
+            setOneShotStage(null)
+            if (controller.signal.aborted) {
+                addToast('info', '一句话整篇已取消')
+            } else {
+                console.error(err)
+                addToast('error', err?.message ?? '一句话整篇生成失败', {
+                    context: '一句话整篇',
+                    actions: [{ label: '重试', onClick: () => void generateOneShot() }],
+                })
+            }
         } finally {
             setOneShotLoading(false)
+            oneShotAbortRef.current = null
         }
     }
 
@@ -1534,9 +1639,54 @@ export default function ChapterWorkbenchPage() {
                                         onClick={generateOneShot}
                                         disabled={streaming || oneShotLoading || !oneShotPrompt.trim()}
                                     >
-                                        {oneShotLoading ? '整篇生成中...' : '一句话生成整篇'}
+                                        {oneShotLoading
+                                            ? (oneShotStage ? oneShotStage.label : '整篇生成中...')
+                                            : '一句话生成整篇'}
                                     </button>
                                 </div>
+                                {oneShotLoading && (() => {
+                                    const studioSteps = [
+                                        { id: 'plan', label: '蓝图' },
+                                        { id: 'director', label: '导演' },
+                                        { id: 'setter', label: '审校' },
+                                        { id: 'stylist', label: '润色' },
+                                        { id: 'arbiter', label: '终稿' },
+                                        { id: 'consistency', label: '检查' },
+                                    ]
+                                    const quickSteps = [
+                                        { id: 'plan', label: '蓝图' },
+                                        { id: 'draft_streaming', label: '生成' },
+                                        { id: 'consistency', label: '检查' },
+                                    ]
+                                    const steps = oneShotMode === 'studio' ? studioSteps : quickSteps
+                                    const currentIdx = oneShotStage
+                                        ? steps.findIndex((s) => s.id === oneShotStage.id)
+                                        : -1
+                                    return (
+                                        <div style={{ display: 'flex', gap: 0, marginTop: 8, width: '100%' }}>
+                                            {steps.map((step, i) => {
+                                                const status = i < currentIdx ? 'completed' : i === currentIdx ? 'active' : 'pending'
+                                                return (
+                                                    <div
+                                                        key={step.id}
+                                                        style={{
+                                                            flex: 1,
+                                                            textAlign: 'center',
+                                                            padding: '4px 0',
+                                                            fontSize: 11,
+                                                            fontWeight: status === 'active' ? 700 : 400,
+                                                            color: status === 'pending' ? 'var(--text-muted, #888)' : status === 'active' ? 'var(--accent, #4f8cff)' : 'var(--text-secondary, #aaa)',
+                                                            borderBottom: `2px solid ${status === 'active' ? 'var(--accent, #4f8cff)' : status === 'completed' ? 'var(--success, #52c41a)' : 'var(--border, #333)'}`,
+                                                            transition: 'all 0.3s',
+                                                        }}
+                                                    >
+                                                        {status === 'completed' ? `✓ ${step.label}` : step.label}
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                    )
+                                })()}
                             </div>
 
                             {!chapter.plan && (
@@ -1546,7 +1696,7 @@ export default function ChapterWorkbenchPage() {
                             )}
                             <DisabledTooltip reason="正在生成中，请等待完成或停止当前任务" disabled={streaming}>
                                 <button className="btn btn-primary" disabled={streaming} onClick={() => startDraftStream(true, false)}>
-                                    {streaming ? '流式生成中...' : '流式生成草稿'}
+                                    {streaming ? (streamingStage || '流式生成中...') : '流式生成草稿'}
                                 </button>
                             </DisabledTooltip>
                             {draftContent.length > 0 && (

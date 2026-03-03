@@ -141,6 +141,7 @@ AGENT_PROMPTS = {
 
 输出必须是 JSON 对象，不要解释，不要 Markdown：
 {
+  "title": "本章标题（简洁有力，4-12字，不得与前文章节标题重复）",
   "beats": ["..."],
   "conflicts": ["..."],
   "foreshadowing": ["..."],
@@ -495,6 +496,11 @@ class StudioWorkflow:
                 self._preview_text(selected_text, limit=260),
             )
 
+        # Use LLM-generated title if available, otherwise keep original
+        llm_title = parsed_plan.get("title")
+        if llm_title:
+            chapter.title = llm_title
+
         plan = ChapterPlan(
             id=str(uuid4()),
             chapter_id=chapter.chapter_number,
@@ -623,7 +629,14 @@ class StudioWorkflow:
         context: Dict[str, Any],
         on_chunk: Optional[Callable[[str], Any]] = None,
         on_stage_chunk: Optional[Callable[[str, str], Any]] = None,
+        on_stage: Optional[Callable[..., Any]] = None,
     ) -> str:
+        async def _emit_stage(stage_id: str, label: str):
+            if on_stage:
+                maybe = on_stage(stage_id, label)
+                if inspect.isawaitable(maybe):
+                    await maybe
+
         director = self.studio.get_agent(AgentRole.DIRECTOR)
         setter = self.studio.get_agent(AgentRole.SETTER)
         stylist = self.studio.get_agent(AgentRole.STYLIST)
@@ -674,8 +687,7 @@ class StudioWorkflow:
                 await emit_stage_chunk(channel, text)
             return _chunk
 
-        # Keep director output internal. Director prompt is structured-planning oriented
-        # and may emit JSON-like content that should not be shown to readers.
+        await _emit_stage("director", "导演构思初稿")
         director_text = await director.think_stream(
             {
                 **draft_context,
@@ -693,6 +705,7 @@ class StudioWorkflow:
         director_decision.decision_text = director_text
         self.studio.add_decision(director_decision)
 
+        await _emit_stage("setter", "设定官审校")
         setter_text = await setter.think_stream(
             {
                 **draft_context,
@@ -707,6 +720,7 @@ class StudioWorkflow:
         setter_decision.decision_text = setter_text
         self.studio.add_decision(setter_decision)
 
+        await _emit_stage("stylist", "文风润色")
         stylist_text = await stylist.think_stream(
             {
                 **draft_context,
@@ -726,7 +740,7 @@ class StudioWorkflow:
         stylist_decision.decision_text = stylist_text
         self.studio.add_decision(stylist_decision)
 
-        # Stream arbiter output as the final channel.
+        await _emit_stage("arbiter", "裁决器输出终稿")
         final_text = await arbiter.think_stream(
             {
                 **draft_context,
@@ -1145,6 +1159,7 @@ class StudioWorkflow:
         payload, parse_diag = self._load_json_object_payload_with_diag(text)
         if payload:
             normalized = {
+                "title": (payload.get("title") or "").strip() or None,
                 "beats": self._normalize_list(payload.get("beats")),
                 "conflicts": self._normalize_list(payload.get("conflicts")),
                 "foreshadowing": self._normalize_list(payload.get("foreshadowing")),
@@ -1172,6 +1187,7 @@ class StudioWorkflow:
                 role_goals = self._normalize_role_goals(section_values.get("role_goals"))
 
             normalized = {
+                "title": None,
                 "beats": beats,
                 "conflicts": conflicts,
                 "foreshadowing": foreshadowing,

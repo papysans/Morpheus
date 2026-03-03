@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -62,6 +63,12 @@ from services.memory_context import MemoryContextService
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _parse_csv(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
 class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -94,6 +101,9 @@ class Settings(BaseSettings):
     graph_feature_enabled: bool = False
     l4_profile_enabled: bool = True
     l4_auto_extract_enabled: bool = True
+    cors_allow_origins: str = "*"
+    cors_allow_credentials: bool = True
+    trusted_hosts: str = "*"
 
     model_config = SettingsConfigDict(
         extra="ignore",
@@ -104,13 +114,24 @@ class Settings(BaseSettings):
 
 settings = Settings()
 app = FastAPI(title="Morpheus API", version="1.1.0")
+
+cors_origins = _parse_csv(settings.cors_allow_origins)
+if not cors_origins:
+    cors_origins = ["*"]
+cors_has_wildcard = any(origin == "*" for origin in cors_origins)
+cors_allow_credentials = settings.cors_allow_credentials and not cors_has_wildcard
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+trusted_hosts = _parse_csv(settings.trusted_hosts)
+if trusted_hosts and "*" not in trusted_hosts:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts)
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -209,7 +230,8 @@ def build_trace_channel_snapshot(trace: Optional[AgentTrace]) -> Dict[str, str]:
         return snapshot
 
     for decision in trace.decisions or []:
-        role = str(getattr(decision, "agent_role", "") or "").strip().lower()
+        agent_role = getattr(decision, "agent_role", None)
+        role = getattr(agent_role, "value", str(agent_role or "")).strip().lower()
         if role not in snapshot:
             continue
         text = sanitize_trace_text(getattr(decision, "decision_text", ""))
@@ -1675,6 +1697,7 @@ def build_chapter_outline(
     studio: AgentStudio,
     continuation_mode: bool = False,
     start_chapter_number: int = 1,
+    existing_titles: Optional[List[str]] = None,
 ) -> List[Dict[str, str]]:
     identity = store.three_layer.get_identity()[:2500]
     messages = build_outline_messages(
@@ -1700,6 +1723,7 @@ def build_chapter_outline(
             chapter_count=chapter_count,
             start_chapter_number=start_chapter_number,
             continuation_mode=continuation_mode,
+            existing_titles=existing_titles,
         )
         logger.info(
             "outline generated via model scope=%s chapters=%d",
@@ -1715,6 +1739,7 @@ def build_chapter_outline(
             chapter_count=chapter_count,
             start_chapter_number=start_chapter_number,
             continuation_mode=continuation_mode,
+            existing_titles=existing_titles,
         )
         logger.warning(
             "outline parse failed using fallback scope=%s chapters=%d",
@@ -1738,6 +1763,7 @@ def build_chapter_outline(
         chapter_count=chapter_count,
         start_chapter_number=start_chapter_number,
         continuation_mode=continuation_mode,
+        existing_titles=existing_titles,
     )
 
 
@@ -2248,6 +2274,7 @@ async def generate_one_shot_draft_text(
     req: "OneShotDraftRequest",
     progress: ProgressReporter = None,
     stream_chunk: Optional[Callable[[str], Any]] = None,
+    on_stage: Optional[Callable[..., Any]] = None,
 ) -> tuple[str, AgentTrace]:
     premise = req.prompt.strip()
     if not premise:
@@ -2351,6 +2378,7 @@ async def generate_one_shot_draft_text(
                 chapter.plan,
                 draft_context,
                 on_chunk=stream_chunk,
+                on_stage=on_stage,
             )
         else:
             draft = await workflow.generate_draft(chapter, chapter.plan, draft_context)
@@ -2398,6 +2426,10 @@ async def generate_one_shot_draft_text(
         "chapter_stage",
         {"chapter_number": chapter.chapter_number, "stage": "draft", "mode": req.mode.value},
     )
+    if on_stage:
+        maybe = on_stage("draft_streaming", "正在生成正文")
+        if inspect.isawaitable(maybe):
+            await maybe
     if stream_chunk:
         streamed_parts: List[str] = []
         async for delta in stream_chat_text_async(
@@ -3502,6 +3534,7 @@ async def run_one_shot_book_generation(
     chapter_count = max(1, min(chapter_count, 60))
 
     existing = chapter_list(project_id)
+    existing_titles = [str(ch.title or "").strip() for ch in existing if str(ch.title or "").strip()]
     existing_numbers = {c.chapter_number for c in existing}
     next_number = req.start_chapter_number or (
         (max(existing_numbers) + 1) if existing_numbers else 1
@@ -3526,6 +3559,7 @@ async def run_one_shot_book_generation(
         studio=studio,
         continuation_mode=req.continuation_mode,
         start_chapter_number=next_number,
+        existing_titles=existing_titles,
     )
     await emit_progress(
         progress,
@@ -3679,6 +3713,18 @@ async def run_one_shot_book_generation(
             continuation_mode=req.continuation_mode,
         )
         chapter_started = datetime.now()
+        async def book_stage_callback(stage_id: str, label: str):
+            await emit_progress(
+                progress,
+                "chapter_stage",
+                {
+                    "chapter_number": chapter.chapter_number,
+                    "stage": stage_id,
+                    "label": label,
+                    "mode": req.mode.value,
+                },
+            )
+
         draft, trace = await generate_one_shot_draft_text(
             chapter=chapter,
             project=project,
@@ -3687,6 +3733,7 @@ async def run_one_shot_book_generation(
             req=one_shot_req,
             progress=progress,
             stream_chunk=push_draft_chunk if stream_markdown else None,
+            on_stage=book_stage_callback if stream_markdown else None,
         )
         result = finalize_generated_draft(
             chapter=chapter,
@@ -4324,6 +4371,126 @@ async def generate_one_shot_draft(chapter_id: str, req: OneShotDraftRequest):
     }
 
 
+@app.post("/api/chapters/{chapter_id}/one-shot/stream")
+async def generate_one_shot_draft_stream(chapter_id: str, req: OneShotDraftRequest):
+    """Real-time streaming one-shot draft generation via SSE."""
+    chapter = resolve_chapter(chapter_id)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    project = resolve_project(chapter.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    started = datetime.now()
+    store = get_or_create_store(chapter.project_id)
+    studio = get_or_create_studio(chapter.project_id)
+    store.sync_file_memories()
+    store.three_layer.add_log(
+        f"开始一句话整篇流式生成（mode={req.mode.value}）章节 {chapter.chapter_number}"
+    )
+    logger.info(
+        "one-shot stream start chapter_id=%s project_id=%s mode=%s target_words=%d",
+        chapter.id,
+        chapter.project_id,
+        req.mode.value,
+        req.target_words,
+    )
+
+    queue: asyncio.Queue[tuple[str, Dict[str, Any]]] = asyncio.Queue()
+
+    chunk_counter = [0]
+
+    async def stream_chunk_callback(chunk: str):
+        chunk_counter[0] += 1
+        if chunk_counter[0] <= 3 or chunk_counter[0] % 50 == 0:
+            logger.info(
+                "one-shot stream chunk #%d len=%d preview=%s",
+                chunk_counter[0],
+                len(chunk),
+                repr(chunk[:40]),
+            )
+        await queue.put(("chunk", {"chunk": chunk}))
+
+    async def stage_callback(stage_id: str, label: str):
+        logger.info("one-shot stream stage=%s label=%s chapter_id=%s", stage_id, label, chapter.id)
+        await queue.put(("stage", {"stage": stage_id, "label": label}))
+
+    async def worker():
+        try:
+            await stage_callback("plan", "蓝图生成")
+            draft, trace = await generate_one_shot_draft_text(
+                chapter=chapter,
+                project=project,
+                store=store,
+                studio=studio,
+                req=req,
+                stream_chunk=stream_chunk_callback,
+                on_stage=stage_callback,
+            )
+            await stage_callback("consistency", "一致性检查")
+            result = finalize_generated_draft(
+                chapter=chapter,
+                project=project,
+                store=store,
+                studio=studio,
+                trace=trace,
+                draft=draft,
+                started=started,
+                source_label=f"一句话整篇流式生成[{req.mode.value}]",
+            )
+            await queue.put(("done", {
+                "draft": draft,
+                "word_count": result.get("word_count", len(draft)),
+                "consistency": result.get("consistency", {}),
+                "can_submit": result.get("can_submit", True),
+                "mode": req.mode.value,
+                "chapter": chapter.model_dump(mode="json"),
+            }))
+        except Exception as exc:
+            logger.exception(
+                "one-shot stream failed chapter_id=%s project_id=%s",
+                chapter.id,
+                chapter.project_id,
+            )
+            await queue.put(("error", {"detail": str(exc)}))
+        finally:
+            await queue.put(("__end__", {}))
+
+    worker_task = asyncio.create_task(worker())
+
+    async def event_stream():
+        heartbeat = 0
+        try:
+            while True:
+                try:
+                    event, payload = await asyncio.wait_for(queue.get(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    heartbeat += 1
+                    heartbeat_payload = {
+                        "seq": heartbeat,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                    yield f"event: heartbeat\ndata: {json.dumps(heartbeat_payload, ensure_ascii=False)}\n\n"
+                    continue
+
+                if event == "__end__":
+                    break
+                yield f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            if not worker_task.done():
+                worker_task.cancel()
+                try:
+                    await worker_task
+                except asyncio.CancelledError:
+                    pass
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS,
+    )
+
+
 async def _generate_draft_internal(chapter_id: str, force: bool = False) -> Dict[str, Any]:
     chapter = resolve_chapter(chapter_id)
     if not chapter:
@@ -4479,6 +4646,7 @@ async def _generate_draft_internal_stream(
     *,
     stream_chunk: Callable[[str, str], Any],
     progress: ProgressReporter,
+    on_stage: Optional[Callable[..., Any]] = None,
     force: bool = False,
 ) -> Dict[str, Any]:
     chapter = resolve_chapter(chapter_id)
@@ -4603,6 +4771,7 @@ async def _generate_draft_internal_stream(
             ][-5:],
         },
         on_stage_chunk=stream_chunk,
+        on_stage=on_stage,
     )
     await emit_progress(
         progress,
@@ -4758,10 +4927,14 @@ async def stream_draft(chapter_id: str, force: bool = False, resume_from: int = 
                     },
                 )
 
+            async def on_stage(stage_id: str, label: str):
+                await report("stage", {"stage": stage_id, "label": label})
+
             result = await _generate_draft_internal_stream(
                 chapter_id,
                 stream_chunk=stream_chunk,
                 progress=report,
+                on_stage=on_stage,
                 force=force,
             )
             await report(

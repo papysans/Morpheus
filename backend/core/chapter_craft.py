@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 
 _CHAPTER_PREFIX_CN_RE = re.compile(
@@ -22,6 +22,9 @@ _OUTLINE_ACTION_TITLE_RE = re.compile(
 )
 _DISALLOWED_TITLE_FRAGMENT_RE = re.compile(
     r"(?:起势递进|代价扩张|阶段收束|里程碑|第二阶段钩子|阶段钩子|收束阶段)"
+)
+_INSTRUCTIONAL_TITLE_RE = re.compile(
+    r"^(?:主角|角色|主人公|男主|女主|围绕|根据|通过|为了|试图|决定|被迫|继续|开始).{2,}$"
 )
 
 _GENERIC_TITLES = {
@@ -212,6 +215,10 @@ def _is_bad_title(value: str) -> bool:
         return True
     if _DISALLOWED_TITLE_FRAGMENT_RE.search(text):
         return True
+    if _INSTRUCTIONAL_TITLE_RE.match(text):
+        return True
+    if "的线索" in text:
+        return True
     if len(text) < 3:
         return True
     if re.fullmatch(r"[0-9一二三四五六七八九十百千零〇两IVXLCMivxlcm]+", text):
@@ -281,6 +288,60 @@ def derive_title_from_goal(goal: str, chapter_number: int, phase: Optional[str] 
     return f"{word}{suffix}"
 
 
+def _derive_fallback_title_by_index(index: int) -> str:
+    fallback_bank = ["异响", "盲区", "裂缝", "回声", "错位", "重影", "阈值", "倒计时"]
+    suffix_bank = ["之夜", "逼近", "回响", "之后"]
+    idx = max(index, 1) - 1
+    word = fallback_bank[idx % len(fallback_bank)]
+    suffix = suffix_bank[idx % len(suffix_bank)]
+    return f"{word}{suffix}"
+
+
+def _score_title_candidate(candidate: str) -> int:
+    score = 0
+    length = len(candidate)
+    if 3 <= length <= 16:
+        score += 3
+        if 6 <= length <= 12:
+            score += 1
+    elif length <= 2:
+        score -= 4
+    else:
+        score -= 2
+    if not any(sw in candidate for sw in _TITLE_STOPWORDS):
+        score += 2
+    if candidate[:1] in _TITLE_BAD_PREFIXES:
+        score -= 2
+    if re.search(r"[A-Za-z0-9一-龥]", candidate):
+        score += 1
+    return score
+
+
+def _build_alternative_title_candidates(goal: str) -> List[str]:
+    raw = (goal or "").strip()
+    raw = strip_chapter_prefix(raw)
+    raw = re.sub(r"^围绕[“\"].*?[”\"]推进[：:]\s*", "", raw)
+    raw = re.sub(r"^围绕.+?推进[：:]\s*", "", raw)
+    raw = re.sub(r"\s+", "", raw)
+    if not raw:
+        return []
+
+    segments = [seg.strip() for seg in _TITLE_SPLIT_RE.split(raw) if seg and seg.strip()]
+    if not segments:
+        segments = [raw]
+
+    scored: List[tuple[int, str]] = []
+    seen: Set[str] = set()
+    for seg in segments:
+        candidate = seg[:18].strip("，。！？；：:、-—_·. ")
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        scored.append((_score_title_candidate(candidate), candidate))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in scored]
+
+
 def normalize_chapter_title(
     *,
     raw_title: str,
@@ -305,16 +366,30 @@ def normalize_chapter_title(
         used_titles.add(title)
         return title
 
-    base = title
-    for idx in range(2, 100):
-        candidate = f"{base}·{idx}"
-        if candidate not in used_titles:
-            used_titles.add(candidate)
-            return candidate
+    for candidate in _build_alternative_title_candidates(goal):
+        normalized_candidate = _normalize_title_base(candidate)
+        if len(normalized_candidate) > 16:
+            normalized_candidate = normalized_candidate[:16].rstrip("，。！？；：:、-—_·. ")
+        if not normalized_candidate or _is_bad_title(normalized_candidate):
+            continue
+        if normalized_candidate in used_titles:
+            continue
+        used_titles.add(normalized_candidate)
+        return normalized_candidate
 
-    candidate = f"{base}{chapter_number}"
-    used_titles.add(candidate)
-    return candidate
+    for offset in range(0, 120):
+        candidate = _derive_fallback_title_by_index(chapter_number + offset)
+        normalized_candidate = _normalize_title_base(candidate)
+        if not normalized_candidate or _is_bad_title(normalized_candidate):
+            continue
+        if normalized_candidate in used_titles:
+            continue
+        used_titles.add(normalized_candidate)
+        return normalized_candidate
+
+    emergency = f"章节{max(chapter_number, 1)}备选"
+    used_titles.add(emergency)
+    return emergency
 
 
 def normalize_outline_items(
@@ -324,9 +399,19 @@ def normalize_outline_items(
     chapter_count: int,
     start_chapter_number: int = 1,
     continuation_mode: bool = False,
+    existing_titles: Optional[Iterable[str]] = None,
 ) -> List[Dict[str, str]]:
     phase_hints = build_outline_phase_hints(chapter_count, continuation_mode)
     used_titles: Set[str] = set()
+    if existing_titles:
+        for item in existing_titles:
+            normalized = _normalize_title_base(str(item or ""))
+            if not normalized:
+                continue
+            used_titles.add(normalized)
+            shortened = normalized[:16].rstrip("，。！？；：:、-—_·. ")
+            if shortened:
+                used_titles.add(shortened)
     normalized: List[Dict[str, str]] = []
 
     for idx in range(chapter_count):
