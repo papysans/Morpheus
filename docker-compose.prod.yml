@@ -1,0 +1,28 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: morpheus-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      DATA_DIR: /app/data
+      API_PROXY_HEADERS: "true"
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: morpheus-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${MORPHEUS_HTTP_PORT:-80}:80"

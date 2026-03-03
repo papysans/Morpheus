@@ -194,6 +194,19 @@ npm install
 npm run dev
 ```
 
+### 5.4 生产部署（Docker）
+
+```bash
+# 1) 配置后端环境变量
+cp backend/.env.example backend/.env
+
+# 2) 部署前检查
+./scripts/predeploy_check.sh
+
+# 3) 启动生产容器
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
 **访问地址**
 - 前端：http://localhost:3000
 - 后端健康检查：http://127.0.0.1:8000/api/health
@@ -397,6 +410,7 @@ tail -f data/logs/app.log
 ## 10. 相关文档
 
 - [快速启动指南](docs/QUICKSTART.md) - 详细的环境配置和启动步骤
+- [服务器部署指南](docs/deployment-server.md) - 单机服务器 + 域名部署步骤
 - [需求文档](docs/novelist-agent-requirements.md) - 完整的产品需求说明
 - [深度除虫报告](docs/问题文档/深度除虫报告-2026-02-15.md) - 系统性问题排查
 - [UI/UX 审计](docs/问题文档/UIUX全面翻新审计-2026-02-15.md) - 前端体验优化
