@@ -403,7 +403,7 @@ tail -f data/logs/app.log
 - [快速启动指南](docs/QUICKSTART.md) - 详细的环境配置和启动步骤
 - [服务器部署指南](docs/deployment-server.md) - 单机服务器 + 域名部署步骤
 - [需求文档](docs/novelist-agent-requirements.md) - 完整的产品需求说明
-- [深度除虫报告](docs/问题文档/深度除虫报告-2026-02-15.md) - 系统性问题排查
+- [文档先行开发策略](docs/document-first-development-policy.md) - 先读文档再开发，开发后强制回写文档
 - [UI/UX 审计](docs/问题文档/UIUX全面翻新审计-2026-02-15.md) - 前端体验优化
 
 ## 11. 技术特性
