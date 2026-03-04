@@ -35,6 +35,7 @@ from api.main import (
     save_chapter,
     settings,
     upsert_graph_from_chapter,
+    generate_unique_title_from_chapter_content,
 )
 from agents.studio import StudioWorkflow
 from core.chapter_craft import (
@@ -1191,6 +1192,70 @@ class NovelistApiSmokeTest(unittest.TestCase):
         self.assertTrue(title)
         self.assertNotEqual(title, "阶段收束·10")
         self.assertNotIn("阶段收束", title)
+
+    def test_generate_unique_title_from_chapter_content_retries_on_duplicate(self):
+        project_id = self._create_project()
+        existing_id = self._create_chapter(project_id, chapter_number=1)
+        self.assertTrue(existing_id)
+
+        target_id = self._create_chapter(project_id, chapter_number=2)
+        chapter = chapters[target_id]
+        project = projects[project_id]
+
+        class _DummyLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return '{"title":"雪夜开端"}'
+                return '{"title":"镜湖回声"}'
+
+        class _DummyStudio:
+            def __init__(self):
+                self.llm_client = _DummyLLM()
+
+        studio = _DummyStudio()
+        title = generate_unique_title_from_chapter_content(
+            chapter=chapter,
+            project=project,
+            studio=studio,  # type: ignore[arg-type]
+            chapter_text="他在镜面数据湖中听见不属于自己的回声。",
+        )
+        self.assertEqual(title, "镜湖回声")
+        self.assertEqual(studio.llm_client.calls, 2)
+
+    def test_generate_unique_title_from_chapter_content_rejects_goal_copy(self):
+        project_id = self._create_project()
+        chapter_id = self._create_chapter(project_id, chapter_number=7)
+        chapter = chapters[chapter_id]
+        chapter.goal = "主角在数据废墟中被迫同步旧意识，导致自身记忆碎片被污染并触发追杀。"
+        project = projects[project_id]
+
+        class _DummyLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return '{"title":"导致自身记忆碎片被污染"}'
+                return '{"title":"噪声里的名字"}'
+
+        class _DummyStudio:
+            def __init__(self):
+                self.llm_client = _DummyLLM()
+
+        studio = _DummyStudio()
+        title = generate_unique_title_from_chapter_content(
+            chapter=chapter,
+            project=project,
+            studio=studio,  # type: ignore[arg-type]
+            chapter_text="同步中断后，他在镜面里叫出了一个陌生名字。",
+        )
+        self.assertEqual(title, "噪声里的名字")
+        self.assertEqual(studio.llm_client.calls, 2)
 
     def test_outline_title_normalization_avoids_existing_project_titles(self):
         normalized = normalize_outline_items(

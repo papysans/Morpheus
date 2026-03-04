@@ -14,7 +14,7 @@ import zipfile
 from enum import Enum
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from uuid import uuid4, uuid5, NAMESPACE_URL
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
@@ -33,6 +33,7 @@ from core.chapter_craft import (
     compute_length_bounds,
     derive_title_from_goal,
     normalize_outline_items,
+    strip_chapter_prefix,
     strip_leading_chapter_heading,
 )
 from core.story_templates import get_story_template, list_story_templates
@@ -2167,6 +2168,182 @@ def compact_previous_chapters(previous: List[str], max_total_chars: int) -> List
     return kept
 
 
+def _normalize_title_for_compare(value: str) -> str:
+    text = strip_chapter_prefix(str(value or ""))
+    text = text.strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", "", text)
+    text = text.strip("，。！？；：:、-—_·. ")
+    return text
+
+
+def _extract_title_from_llm_output(raw: Any) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+
+    payload = _extract_first_json_object(text)
+    candidate = ""
+    if payload:
+        candidate = str(payload.get("title") or "").strip()
+    if not candidate:
+        candidate = text.splitlines()[0].strip()
+
+    candidate = re.sub(r"^#+\s*", "", candidate).strip()
+    candidate = re.sub(r"^(?:标题|title)\s*[：:]\s*", "", candidate, flags=re.IGNORECASE).strip()
+    candidate = strip_chapter_prefix(candidate)
+    candidate = candidate.strip("“”\"'‘’《》【】[]()（） ")
+    candidate = re.sub(r"\s+", " ", candidate).strip()
+    candidate = candidate.strip("，。！？；：:、-—_·. ")
+    if len(candidate) > 16:
+        candidate = candidate[:16].rstrip("，。！？；：:、-—_·. ")
+    return candidate
+
+
+def _collect_existing_titles_for_project(
+    project_id: str,
+    *,
+    exclude_chapter_id: Optional[str] = None,
+) -> Tuple[List[str], Set[str]]:
+    raw_titles: List[str] = []
+    normalized_set: Set[str] = set()
+    for chapter in chapter_list(project_id):
+        if exclude_chapter_id and chapter.id == exclude_chapter_id:
+            continue
+        title = str(chapter.title or "").strip()
+        if not title:
+            continue
+        raw_titles.append(title)
+        normalized = _normalize_title_for_compare(title)
+        if normalized:
+            normalized_set.add(normalized)
+    return raw_titles, normalized_set
+
+
+def _contains_offline_placeholder(text: str) -> bool:
+    payload = str(text or "")
+    return "离线占位输出" in payload or "未配置可用模型" in payload
+
+
+def _is_title_too_similar_to_goal(title: str, goal: str) -> bool:
+    normalized_title = _normalize_title_for_compare(title)
+    if len(normalized_title) < 8:
+        return False
+    normalized_goal = _normalize_title_for_compare(goal)
+    if not normalized_goal:
+        return False
+    return normalized_title in normalized_goal
+
+
+def generate_unique_title_from_chapter_content(
+    *,
+    chapter: Chapter,
+    project: Project,
+    studio: AgentStudio,
+    chapter_text: str,
+) -> str:
+    draft = collapse_blank_lines(strip_leading_chapter_heading(chapter_text or ""))
+    if not draft:
+        return chapter.title
+
+    existing_titles, used_titles = _collect_existing_titles_for_project(
+        chapter.project_id,
+        exclude_chapter_id=chapter.id,
+    )
+
+    rejected_titles: List[str] = []
+    max_attempts = 12
+    last_raw = ""
+
+    for attempt in range(1, max_attempts + 1):
+        head_excerpt = draft[:1600]
+        tail_excerpt = draft[-1200:] if len(draft) > 2200 else ""
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是长篇小说编辑。请根据章节正文生成一个章节标题。"
+                    "必须输出 JSON 对象：{\"title\":\"...\"}，不要输出其他字段。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "task": "生成章节标题",
+                        "project_name": project.name,
+                        "chapter_number": chapter.chapter_number,
+                        "chapter_goal": chapter.goal,
+                        "constraints": [
+                            "标题 4-16 字，禁止“第X章”前缀",
+                            "必须像小说章名，不要写成叙事句子",
+                            "不得直接截取目标句中的连续长短语",
+                            "不得与 existing_titles/rejected_titles 重复",
+                        ],
+                        "existing_titles": existing_titles[-120:],
+                        "rejected_titles": rejected_titles[-20:],
+                        "chapter_excerpt_head": head_excerpt,
+                        "chapter_excerpt_tail": tail_excerpt,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        raw = studio.llm_client.chat(
+            messages,
+            temperature=resolve_llm_temperature(studio.llm_client),
+            max_tokens=220,
+        )
+        if not isinstance(raw, str):
+            raw = str(raw)
+        last_raw = raw
+
+        if _contains_offline_placeholder(raw):
+            logger.warning(
+                "chapter title generation offline fallback project_id=%s chapter_no=%d attempt=%d keep_current_title=%s",
+                chapter.project_id,
+                chapter.chapter_number,
+                attempt,
+                chapter.title,
+            )
+            break
+
+        candidate = _extract_title_from_llm_output(raw)
+        normalized = _normalize_title_for_compare(candidate)
+        if len(normalized) < 4:
+            rejected_titles.append(candidate or f"<empty:{attempt}>")
+            continue
+        if normalized in used_titles:
+            rejected_titles.append(candidate)
+            continue
+        if _is_title_too_similar_to_goal(candidate, chapter.goal):
+            rejected_titles.append(candidate)
+            continue
+
+        logger.info(
+            "chapter title generated project_id=%s chapter_id=%s chapter_no=%d attempt=%d old=%s new=%s",
+            chapter.project_id,
+            chapter.id,
+            chapter.chapter_number,
+            attempt,
+            chapter.title,
+            candidate,
+        )
+        return candidate
+
+    logger.warning(
+        "chapter title generation exhausted project_id=%s chapter_id=%s chapter_no=%d keep_current_title=%s rejected_count=%d last_raw_preview=%s",
+        chapter.project_id,
+        chapter.id,
+        chapter.chapter_number,
+        chapter.title,
+        len(rejected_titles),
+        str(last_raw or "")[:200].replace("\n", " "),
+    )
+    return chapter.title
+
+
 def finalize_generated_draft(
     *,
     chapter: Chapter,
@@ -2179,6 +2356,12 @@ def finalize_generated_draft(
     source_label: str,
 ) -> Dict[str, Any]:
     chapter.draft = draft
+    chapter.title = generate_unique_title_from_chapter_content(
+        chapter=chapter,
+        project=project,
+        studio=studio,
+        chapter_text=draft,
+    )
     chapter.word_count = len(draft)
     chapter.status = ChapterStatus.REVIEWING
 
