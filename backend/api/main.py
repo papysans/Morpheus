@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator as _mv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agents.studio import AGENT_PROMPTS, AgentStudio, StudioWorkflow
@@ -75,12 +75,8 @@ class Settings(BaseSettings):
     api_port: int = 8000
     data_dir: str = "../data"
 
-    llm_provider: str = "minimax"
+    llm_provider: str = "deepseek"
     remote_llm_enabled: bool = False
-    openai_api_key: Optional[str] = None
-    openai_model: str = "gpt-4-turbo-preview"
-    minimax_api_key: Optional[str] = None
-    minimax_model: str = "MiniMax-M2.5"
     deepseek_api_key: Optional[str] = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
@@ -90,8 +86,8 @@ class Settings(BaseSettings):
     llm_context_window_tokens: int = 32768
     deepseek_context_window_tokens: int = 131072
 
-    embedding_model: str = "embo-01"
-    embedding_dimension: int = 1024
+    embedding_model: str = "deepseek-embedding"
+    embedding_dimension: int = 1536
     remote_embedding_enabled: bool = False
     fts_top_k: int = 30
     vector_top_k: int = 20
@@ -246,44 +242,31 @@ def build_trace_channel_snapshot(trace: Optional[AgentTrace]) -> Dict[str, str]:
 
 
 def _normalize_provider(provider: str) -> str:
-    candidate = (provider or "openai").strip().lower()
-    if candidate not in {"openai", "minimax", "deepseek"}:
-        logger.warning("invalid llm provider configured=%s fallback=openai", provider)
-        return "openai"
-    return candidate
+    candidate = (provider or "deepseek").strip().lower()
+    if candidate != "deepseek":
+        logger.warning("invalid llm provider configured=%s fallback=deepseek", provider)
+    return "deepseek"
 
 
 def resolve_llm_runtime() -> Dict[str, Any]:
     requested_provider = _normalize_provider(settings.llm_provider)
-    openai_key = (settings.openai_api_key or "").strip()
-    minimax_key = (settings.minimax_api_key or "").strip()
     deepseek_key = (settings.deepseek_api_key or "").strip()
-    has_openai_key = bool(openai_key)
-    has_minimax_key = bool(minimax_key)
     has_deepseek_key = bool(deepseek_key)
 
     remote_requested = settings.remote_llm_enabled
     remote_env_raw = os.getenv("REMOTE_LLM_ENABLED")
     auto_enabled = False
     remote_effective = remote_requested
-    if (
-        remote_env_raw is None
-        and not remote_requested
-        and (has_openai_key or has_minimax_key or has_deepseek_key)
-    ):
+    if remote_env_raw is None and not remote_requested and has_deepseek_key:
         # Auto-enable remote mode if keys are present and REMOTE_LLM_ENABLED was not explicitly set.
         remote_effective = True
         auto_enabled = True
 
     provider_has_key = {
-        "openai": has_openai_key,
-        "minimax": has_minimax_key,
         "deepseek": has_deepseek_key,
     }
     provider_fallback_order = {
-        "openai": ["deepseek", "minimax"],
-        "minimax": ["deepseek", "openai"],
-        "deepseek": ["openai", "minimax"],
+        "deepseek": [],
     }
 
     effective_provider = requested_provider
@@ -295,18 +278,9 @@ def resolve_llm_runtime() -> Dict[str, Any]:
                 provider_switch_reason = f"switched_to_{candidate}_missing_{requested_provider}_key"
                 break
 
-    if effective_provider == "minimax":
-        provider_key = minimax_key
-        effective_model = settings.minimax_model
-        effective_base_url = "https://api.minimaxi.com/v1"
-    elif effective_provider == "deepseek":
-        provider_key = deepseek_key
-        effective_model = settings.deepseek_model
-        effective_base_url = settings.deepseek_base_url
-    else:
-        provider_key = openai_key
-        effective_model = settings.openai_model
-        effective_base_url = "https://api.openai.com/v1"
+    provider_key = deepseek_key
+    effective_model = settings.deepseek_model
+    effective_base_url = settings.deepseek_base_url
 
     remote_ready = remote_effective and bool(provider_key)
     return {
@@ -320,8 +294,6 @@ def resolve_llm_runtime() -> Dict[str, Any]:
         "remote_effective": remote_effective,
         "remote_ready": remote_ready,
         "remote_auto_enabled": auto_enabled,
-        "has_openai_key": has_openai_key,
-        "has_minimax_key": has_minimax_key,
         "has_deepseek_key": has_deepseek_key,
     }
 
@@ -330,22 +302,6 @@ def resolve_embedding_runtime(runtime: Dict[str, Any]) -> Dict[str, str]:
     provider_name = runtime["effective_provider"]
     provider_key = runtime["provider_key"]
     provider_base_url = runtime["effective_base_url"]
-
-    if provider_name == "deepseek":
-        minimax_key = (settings.minimax_api_key or "").strip()
-        openai_key = (settings.openai_api_key or "").strip()
-        if minimax_key:
-            return {
-                "provider_name": "minimax",
-                "provider_key": minimax_key,
-                "provider_base_url": "https://api.minimaxi.com/v1",
-            }
-        if openai_key:
-            return {
-                "provider_name": "openai",
-                "provider_key": openai_key,
-                "provider_base_url": "https://api.openai.com/v1",
-            }
 
     return {
         "provider_name": provider_name,
@@ -356,6 +312,7 @@ def resolve_embedding_runtime(runtime: Dict[str, Any]) -> Dict[str, str]:
 
 class _ChapterStore(dict):
     """Dict supporting both flat chapters[cid] and nested chapters[pid][cid] access."""
+
     def __getitem__(self, key):
         try:
             return super().__getitem__(key)
@@ -364,12 +321,14 @@ class _ChapterStore(dict):
             if view:
                 return view
             raise
+
     def get(self, key, default=None):
         val = super().get(key)
         if val is not None:
             return val
         view = {cid: ch for cid, ch in super().items() if ch.project_id == key}
         return view if view else default
+
 
 projects: Dict[str, Project] = {}
 chapters: _ChapterStore = _ChapterStore()
@@ -381,7 +340,7 @@ vector_index_signatures: Dict[str, str] = {}
 
 llm_runtime = resolve_llm_runtime()
 logger.info(
-    "llm runtime requested_provider=%s effective_provider=%s model=%s remote_requested=%s remote_effective=%s remote_ready=%s auto_enabled=%s keys(openai=%s,minimax=%s,deepseek=%s)",
+    "llm runtime requested_provider=%s effective_provider=%s model=%s remote_requested=%s remote_effective=%s remote_ready=%s auto_enabled=%s keys(deepseek=%s)",
     llm_runtime["requested_provider"],
     llm_runtime["effective_provider"],
     llm_runtime["effective_model"],
@@ -389,8 +348,6 @@ logger.info(
     llm_runtime["remote_effective"],
     llm_runtime["remote_ready"],
     llm_runtime["remote_auto_enabled"],
-    llm_runtime["has_openai_key"],
-    llm_runtime["has_minimax_key"],
     llm_runtime["has_deepseek_key"],
 )
 if llm_runtime["provider_switch_reason"] != "configured":
@@ -1185,6 +1142,7 @@ def get_or_create_studio(project_id: str) -> AgentStudio:
             )
     return studios[project_id]
 
+
 def get_llm_client():
     """Get LLM client from a temporary studio instance."""
     tmp_id = "__llm_client_helper__"
@@ -1192,16 +1150,21 @@ def get_llm_client():
     return studio.llm_client
 
 
-def trigger_l4_extraction_async(store, chapter_text: str, chapter_number: int, project_id: str) -> None:
+def trigger_l4_extraction_async(
+    store, chapter_text: str, chapter_number: int, project_id: str
+) -> None:
     """Trigger L4 character profile extraction for a chapter. Errors are swallowed."""
     if not settings.l4_profile_enabled or not settings.l4_auto_extract_enabled:
         return
     try:
         from services.character_profile_extraction import CharacterProfileExtractionService
         from services.character_profile_merge import ProfileMergeEngine
+
         llm = get_llm_client()
         svc = CharacterProfileExtractionService(llm_client=llm)
-        result = svc.extract(chapter_text=chapter_text, chapter=chapter_number, project_id=project_id)
+        result = svc.extract(
+            chapter_text=chapter_text, chapter=chapter_number, project_id=project_id
+        )
         if not result.success:
             return
         engine = ProfileMergeEngine()
@@ -1210,7 +1173,12 @@ def trigger_l4_extraction_async(store, chapter_text: str, chapter_number: int, p
             merged = engine.merge(existing=existing, incoming=incoming)
             store.upsert_profile(merged)
     except Exception:
-        logger.warning("L4 extraction failed chapter_no=%d project_id=%s", chapter_number, project_id, exc_info=True)
+        logger.warning(
+            "L4 extraction failed chapter_no=%d project_id=%s",
+            chapter_number,
+            project_id,
+            exc_info=True,
+        )
 
 
 def chapter_list(project_id: str) -> List[Chapter]:
@@ -2264,7 +2232,7 @@ def generate_unique_title_from_chapter_content(
                 "role": "system",
                 "content": (
                     "你是长篇小说编辑。请根据章节正文生成一个章节标题。"
-                    "必须输出 JSON 对象：{\"title\":\"...\"}，不要输出其他字段。"
+                    '必须输出 JSON 对象：{"title":"..."}，不要输出其他字段。'
                 ),
             },
             {
@@ -3180,8 +3148,6 @@ async def llm_runtime_status():
         "remote_effective": runtime["remote_effective"],
         "remote_ready": runtime["remote_ready"],
         "remote_auto_enabled": runtime["remote_auto_enabled"],
-        "has_openai_key": runtime["has_openai_key"],
-        "has_minimax_key": runtime["has_minimax_key"],
         "has_deepseek_key": runtime["has_deepseek_key"],
         "llm_temperature": settings.llm_temperature,
         "llm_max_tokens": settings.llm_max_tokens,
@@ -3485,6 +3451,7 @@ async def import_project(file: UploadFile = File(...)):
             old_db_path = destination / "novelist.db"
             if old_db_path.exists():
                 import sqlite3 as _sqlite3
+
                 _conn = _sqlite3.connect(str(old_db_path))
                 _conn.row_factory = _sqlite3.Row
                 try:
@@ -3502,11 +3469,15 @@ async def import_project(file: UploadFile = File(...)):
                             _profile_data = json.loads(_data_json)
                             _profile_data["project_id"] = new_project_id
                             _char_name = _profile_data.get("character_name", "")
-                            _profile_data["profile_id"] = MemoryStore.make_profile_id(new_project_id, _char_name)
+                            _profile_data["profile_id"] = MemoryStore.make_profile_id(
+                                new_project_id, _char_name
+                            )
                             _profile = CharacterProfile(**_profile_data)
                             store.upsert_profile(_profile)
                         except Exception:
-                            logger.warning("L4 profile re-map failed for old_pid=%s", _old_pid, exc_info=True)
+                            logger.warning(
+                                "L4 profile re-map failed for old_pid=%s", _old_pid, exc_info=True
+                            )
         except Exception:
             logger.warning("L4 import re-map failed project_id=%s", new_project_id, exc_info=True)
 
@@ -3717,7 +3688,9 @@ async def run_one_shot_book_generation(
     chapter_count = max(1, min(chapter_count, 60))
 
     existing = chapter_list(project_id)
-    existing_titles = [str(ch.title or "").strip() for ch in existing if str(ch.title or "").strip()]
+    existing_titles = [
+        str(ch.title or "").strip() for ch in existing if str(ch.title or "").strip()
+    ]
     existing_numbers = {c.chapter_number for c in existing}
     next_number = req.start_chapter_number or (
         (max(existing_numbers) + 1) if existing_numbers else 1
@@ -3897,8 +3870,10 @@ async def run_one_shot_book_generation(
         )
         chapter_started = datetime.now()
         _agent_names = {
-            "director": "导演", "setter": "设定官",
-            "stylist": "文风润色", "arbiter": "裁决器",
+            "director": "导演",
+            "setter": "设定官",
+            "stylist": "文风润色",
+            "arbiter": "裁决器",
         }
 
         async def book_stage_callback(
@@ -4612,14 +4587,31 @@ async def generate_one_shot_draft_stream(chapter_id: str, req: OneShotDraftReque
         await queue.put(("chunk", {"chunk": chunk}))
 
     async def stage_callback(
-        stage_id: str, label: str,
-        status: str = "started", elapsed_ms: int = 0, progress_pct: int = 0,
+        stage_id: str,
+        label: str,
+        status: str = "started",
+        elapsed_ms: int = 0,
+        progress_pct: int = 0,
     ):
-        logger.info("one-shot stream stage=%s label=%s status=%s chapter_id=%s", stage_id, label, status, chapter.id)
-        await queue.put(("stage", {
-            "stage": stage_id, "label": label,
-            "status": status, "elapsed_ms": elapsed_ms, "progress_pct": progress_pct,
-        }))
+        logger.info(
+            "one-shot stream stage=%s label=%s status=%s chapter_id=%s",
+            stage_id,
+            label,
+            status,
+            chapter.id,
+        )
+        await queue.put(
+            (
+                "stage",
+                {
+                    "stage": stage_id,
+                    "label": label,
+                    "status": status,
+                    "elapsed_ms": elapsed_ms,
+                    "progress_pct": progress_pct,
+                },
+            )
+        )
 
     async def worker():
         try:
@@ -4644,14 +4636,19 @@ async def generate_one_shot_draft_stream(chapter_id: str, req: OneShotDraftReque
                 started=started,
                 source_label=f"一句话整篇流式生成[{req.mode.value}]",
             )
-            await queue.put(("done", {
-                "draft": draft,
-                "word_count": result.get("word_count", len(draft)),
-                "consistency": result.get("consistency", {}),
-                "can_submit": result.get("can_submit", True),
-                "mode": req.mode.value,
-                "chapter": chapter.model_dump(mode="json"),
-            }))
+            await queue.put(
+                (
+                    "done",
+                    {
+                        "draft": draft,
+                        "word_count": result.get("word_count", len(draft)),
+                        "consistency": result.get("consistency", {}),
+                        "can_submit": result.get("can_submit", True),
+                        "mode": req.mode.value,
+                        "chapter": chapter.model_dump(mode="json"),
+                    },
+                )
+            )
         except Exception as exc:
             logger.exception(
                 "one-shot stream failed chapter_id=%s project_id=%s",
@@ -4880,7 +4877,11 @@ async def _generate_draft_internal_stream(
         await emit_progress(
             progress,
             "stage",
-            {"stage": "plan_start", "chapter_id": chapter.id, "chapter_number": chapter.chapter_number},
+            {
+                "stage": "plan_start",
+                "chapter_id": chapter.id,
+                "chapter_number": chapter.chapter_number,
+            },
         )
         workflow_for_plan = StudioWorkflow(
             studio, lambda query, **kwargs: store.search_fts(query, kwargs.get("fts_top_k", 20))
@@ -4956,7 +4957,11 @@ async def _generate_draft_internal_stream(
     await emit_progress(
         progress,
         "stage",
-        {"stage": "draft_start", "chapter_id": chapter.id, "chapter_number": chapter.chapter_number},
+        {
+            "stage": "draft_start",
+            "chapter_id": chapter.id,
+            "chapter_number": chapter.chapter_number,
+        },
     )
     draft = await workflow.generate_draft_stream(
         chapter,
@@ -5134,13 +5139,22 @@ async def stream_draft(chapter_id: str, force: bool = False, resume_from: int = 
                 )
 
             async def on_stage(
-                stage_id: str, label: str,
-                status: str = "started", elapsed_ms: int = 0, progress_pct: int = 0,
+                stage_id: str,
+                label: str,
+                status: str = "started",
+                elapsed_ms: int = 0,
+                progress_pct: int = 0,
             ):
-                await report("stage", {
-                    "stage": stage_id, "label": label,
-                    "status": status, "elapsed_ms": elapsed_ms, "progress_pct": progress_pct,
-                })
+                await report(
+                    "stage",
+                    {
+                        "stage": stage_id,
+                        "label": label,
+                        "status": status,
+                        "elapsed_ms": elapsed_ms,
+                        "progress_pct": progress_pct,
+                    },
+                )
 
             result = await _generate_draft_internal_stream(
                 chapter_id,
@@ -5989,15 +6003,17 @@ async def get_graph_data(project_id: str):
             continue
         override = overrides_map.get(profile.profile_id, {})
         fields = override.get("overridden_fields", {}) if override else {}
-        nodes.append({
-            "id": profile.profile_id,
-            "label": fields.get("label", profile.character_name),
-            "overview": fields.get("overview", profile.overview or ""),
-            "personality": fields.get("personality", profile.personality or ""),
-            "is_manual": False,
-        })
+        nodes.append(
+            {
+                "id": profile.profile_id,
+                "label": fields.get("label", profile.character_name),
+                "overview": fields.get("overview", profile.overview or ""),
+                "personality": fields.get("personality", profile.personality or ""),
+                "is_manual": False,
+            }
+        )
         seen_node_ids.add(profile.profile_id)
-        for rel in (profile.relationships or []):
+        for rel in profile.relationships or []:
             target_pid = MemoryStore.make_profile_id(project_id, rel.target_character)
             if target_pid in deleted_ids:
                 continue
@@ -6005,25 +6021,31 @@ async def get_graph_data(project_id: str):
             edge_id = hashlib.md5(edge_key.encode()).hexdigest()[:12]
             if edge_id not in seen_edge_ids:
                 seen_edge_ids.add(edge_id)
-                edges.append({
-                    "id": edge_id,
-                    "source": profile.profile_id,
-                    "target": target_pid,
-                    "label": rel.relation_type or "",
-                })
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "source": profile.profile_id,
+                        "target": target_pid,
+                        "label": rel.relation_type or "",
+                    }
+                )
     # Add manual nodes (is_manual=True, not deleted)
     for o in overrides_list:
         if o["is_manual"] and not o["is_deleted"] and o["node_id"] not in seen_node_ids:
             fields = o["overridden_fields"]
-            nodes.append({
-                "id": o["node_id"],
-                "label": fields.get("label", "未命名"),
-                "overview": fields.get("overview", ""),
-                "personality": fields.get("personality", ""),
-                "is_manual": True,
-            })
+            nodes.append(
+                {
+                    "id": o["node_id"],
+                    "label": fields.get("label", "未命名"),
+                    "overview": fields.get("overview", ""),
+                    "personality": fields.get("personality", ""),
+                    "is_manual": True,
+                }
+            )
             seen_node_ids.add(o["node_id"])
     return {"nodes": nodes, "edges": edges}
+
+
 class CreateNodeRequest(BaseModel):
     label: str
     overview: str = ""
@@ -6123,10 +6145,13 @@ async def merge_graph_nodes(project_id: str, req: MergeNodesRequest):
         if alias_name:
             store.add_node_alias(project_id, req.keep_node_id, alias_name)
         store.log_graph_action(
-            project_id, "merge_node", req.keep_node_id,
+            project_id,
+            "merge_node",
+            req.keep_node_id,
             {"merged_from": merge_id, "alias": alias_name},
         )
     return {"kept_node_id": req.keep_node_id, "merged_node_ids": req.merge_node_ids}
+
 
 @app.get("/api/projects/{project_id}/profiles")
 async def list_profiles(project_id: str):
@@ -6144,17 +6169,18 @@ async def get_profile(project_id: str, profile_id: str):
     return profile.model_dump(mode="json")
 
 
-from pydantic import model_validator as _mv
 class RebuildRequest(BaseModel):
     start_chapter: Optional[int] = Field(default=None, ge=1)
     end_chapter: Optional[int] = Field(default=None, ge=1)
     character_names: Optional[List[str]] = None
-    @_mv(mode='after')
+
+    @_mv(mode="after")
     def check_range(self):
         if self.start_chapter is not None and self.end_chapter is not None:
             if self.start_chapter > self.end_chapter:
-                raise ValueError('start_chapter must be <= end_chapter')
+                raise ValueError("start_chapter must be <= end_chapter")
         return self
+
 
 @app.post("/api/projects/{project_id}/profiles/rebuild")
 async def rebuild_profiles(project_id: str, req: RebuildRequest = None):
@@ -6168,7 +6194,7 @@ async def rebuild_profiles(project_id: str, req: RebuildRequest = None):
     updated = 0
     skipped = 0
     errors = 0
-    for ch_id, chapter in (chapters_data.items() if isinstance(chapters_data, dict) else []):
+    for ch_id, chapter in chapters_data.items() if isinstance(chapters_data, dict) else []:
         ch_num = chapter.chapter_number
         if req.start_chapter is not None and ch_num < req.start_chapter:
             skipped += 1
@@ -6185,6 +6211,7 @@ async def rebuild_profiles(project_id: str, req: RebuildRequest = None):
             llm = get_llm_client()
             from services.character_profile_extraction import CharacterProfileExtractionService
             from services.character_profile_merge import ProfileMergeEngine
+
             svc = CharacterProfileExtractionService(llm_client=llm)
             result = svc.extract(chapter_text=text, chapter=ch_num, project_id=project_id)
             if not result.success:
@@ -6199,9 +6226,12 @@ async def rebuild_profiles(project_id: str, req: RebuildRequest = None):
                 store.upsert_profile(merged)
                 updated += 1
         except Exception:
-            logger.warning("rebuild extraction failed ch=%d project=%s", ch_num, project_id, exc_info=True)
+            logger.warning(
+                "rebuild extraction failed ch=%d project=%s", ch_num, project_id, exc_info=True
+            )
             errors += 1
     return {"processed": processed, "updated": updated, "skipped": skipped, "errors": errors}
+
 
 @app.get("/api/projects/{project_id}/memory/files")
 async def list_memory_files(project_id: str):

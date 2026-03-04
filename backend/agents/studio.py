@@ -52,7 +52,10 @@ class Agent:
 
         messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": json.dumps(context, ensure_ascii=False, indent=2, default=str)},
+            {
+                "role": "user",
+                "content": json.dumps(context, ensure_ascii=False, indent=2, default=str),
+            },
         ]
 
         result = await asyncio.to_thread(self.llm_client.chat, messages)
@@ -70,7 +73,10 @@ class Agent:
         self.state = AgentState.THINKING
         messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": json.dumps(context, ensure_ascii=False, indent=2, default=str)},
+            {
+                "role": "user",
+                "content": json.dumps(context, ensure_ascii=False, indent=2, default=str),
+            },
         ]
         chunks: List[str] = []
         loop = asyncio.get_running_loop()
@@ -214,7 +220,7 @@ AGENT_PROMPTS = {
 class AgentStudio:
     def __init__(
         self,
-        provider: str = "minimax",
+        provider: str = "deepseek",
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
@@ -452,7 +458,9 @@ class StudioWorkflow:
             "selected_quality": quality,
         }
 
-        if self._contains_offline_placeholder(selected_text) and bool(getattr(self.studio, "enforce_remote_mode", False)):
+        if self._contains_offline_placeholder(selected_text) and bool(
+            getattr(self.studio, "enforce_remote_mode", False)
+        ):
             hints: List[str] = []
             for tag, meta in (("初次", initial_llm_meta), ("重试", retry_llm_meta)):
                 if not meta:
@@ -521,7 +529,9 @@ class StudioWorkflow:
 
         return plan
 
-    async def generate_draft(self, chapter: Chapter, plan: ChapterPlan, context: Dict[str, Any]) -> str:
+    async def generate_draft(
+        self, chapter: Chapter, plan: ChapterPlan, context: Dict[str, Any]
+    ) -> str:
         director = self.studio.get_agent(AgentRole.DIRECTOR)
         setter = self.studio.get_agent(AgentRole.SETTER)
         stylist = self.studio.get_agent(AgentRole.STYLIST)
@@ -692,6 +702,7 @@ class StudioWorkflow:
         def build_chunker(channel: str):
             async def _chunk(text: str):
                 await emit_stage_chunk(channel, text)
+
             return _chunk
 
         await _emit_stage("director", "导演构思初稿", "started", 0, 0)
@@ -707,7 +718,9 @@ class StudioWorkflow:
             },
             on_chunk=build_chunker("director"),
         )
-        await _emit_stage("director", "导演构思初稿", "completed", int((time.monotonic() - t0) * 1000), 25)
+        await _emit_stage(
+            "director", "导演构思初稿", "completed", int((time.monotonic() - t0) * 1000), 25
+        )
         director_decision = director.decide(
             draft_context, [item["item_id"] for item in memory_hits[:5]]
         )
@@ -724,7 +737,9 @@ class StudioWorkflow:
             },
             on_chunk=build_chunker("setter"),
         )
-        await _emit_stage("setter", "设定官审校", "completed", int((time.monotonic() - t0) * 1000), 50)
+        await _emit_stage(
+            "setter", "设定官审校", "completed", int((time.monotonic() - t0) * 1000), 50
+        )
         setter_decision = setter.decide(
             draft_context, [item["item_id"] for item in memory_hits[:5]]
         )
@@ -746,7 +761,9 @@ class StudioWorkflow:
             },
             on_chunk=build_chunker("stylist"),
         )
-        await _emit_stage("stylist", "文风润色", "completed", int((time.monotonic() - t0) * 1000), 75)
+        await _emit_stage(
+            "stylist", "文风润色", "completed", int((time.monotonic() - t0) * 1000), 75
+        )
         stylist_decision = stylist.decide(
             draft_context, [item["item_id"] for item in memory_hits[:5]]
         )
@@ -769,7 +786,9 @@ class StudioWorkflow:
             },
             on_chunk=build_chunker("arbiter"),
         )
-        await _emit_stage("arbiter", "裁决器输出终稿", "completed", int((time.monotonic() - t0) * 1000), 100)
+        await _emit_stage(
+            "arbiter", "裁决器输出终稿", "completed", int((time.monotonic() - t0) * 1000), 100
+        )
         arbiter_decision = arbiter.decide(
             draft_context, [item["item_id"] for item in memory_hits[:5]]
         )
@@ -991,7 +1010,10 @@ class StudioWorkflow:
                     current_key = key
                     switched = True
                     break
-                if any(lowered.startswith(f"{alias}:") or lowered.startswith(f"{alias}：") for alias in aliases):
+                if any(
+                    lowered.startswith(f"{alias}:") or lowered.startswith(f"{alias}：")
+                    for alias in aliases
+                ):
                     current_key = key
                     line = line.split("：", 1)[1] if "：" in line else line.split(":", 1)[1]
                     line = self._normalize_plan_line(line)
@@ -1076,7 +1098,7 @@ class StudioWorkflow:
             "内部价值观冲突抬升",
             "回收上一章未决事项至少一项",
             "围绕“",
-            "围绕\"",
+            '围绕"',
         )
         values: List[str] = []
         for key in ("beats", "conflicts", "foreshadowing", "callback_targets"):
@@ -1169,7 +1191,9 @@ class StudioWorkflow:
             "warnings": warnings,
         }
 
-    def _extract_plan_payload_with_quality(self, text: str, chapter: Chapter) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def _extract_plan_payload_with_quality(
+        self, text: str, chapter: Chapter
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         source = "goal_fallback"
         payload, parse_diag = self._load_json_object_payload_with_diag(text)
         if payload:
@@ -1211,7 +1235,8 @@ class StudioWorkflow:
             }
 
             has_section_values = any(
-                normalized.get(key) for key in ("beats", "conflicts", "foreshadowing", "callback_targets")
+                normalized.get(key)
+                for key in ("beats", "conflicts", "foreshadowing", "callback_targets")
             ) or bool(normalized.get("role_goals"))
             if has_section_values:
                 source = "markdown_sections"

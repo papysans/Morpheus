@@ -231,9 +231,9 @@ class HybridSearchEngine:
 class EmbeddingProvider:
     def __init__(
         self,
-        model_name: str = "embo-01",
+        model_name: str = "deepseek-embedding",
         api_key: Optional[str] = None,
-        provider: str = "minimax",
+        provider: str = "deepseek",
         base_url: Optional[str] = None,
     ):
         self.model_name = model_name

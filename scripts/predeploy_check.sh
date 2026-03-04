@@ -39,17 +39,11 @@ if [ -f "backend/.env" ]; then
 
   provider="${LLM_PROVIDER:-}"
   case "$provider" in
-    minimax)
-      [ -n "${MINIMAX_API_KEY:-}" ] || err "LLM_PROVIDER=minimax 但 MINIMAX_API_KEY 为空"
-      ;;
-    openai)
-      [ -n "${OPENAI_API_KEY:-}" ] || err "LLM_PROVIDER=openai 但 OPENAI_API_KEY 为空"
-      ;;
     deepseek)
       [ -n "${DEEPSEEK_API_KEY:-}" ] || err "LLM_PROVIDER=deepseek 但 DEEPSEEK_API_KEY 为空"
       ;;
     *)
-      err "LLM_PROVIDER 未设置为 minimax/openai/deepseek"
+      err "LLM_PROVIDER 未设置为 deepseek"
       ;;
   esac
 

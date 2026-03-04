@@ -43,7 +43,18 @@ from core.chapter_craft import (
     normalize_outline_items,
     strip_leading_chapter_heading,
 )
-from models import AgentDecision, AgentRole, AgentTrace, EntityState, EventEdge, ProjectStatus, ChapterStatus, ChapterPlan, MemoryItem, Layer
+from models import (
+    AgentDecision,
+    AgentRole,
+    AgentTrace,
+    EntityState,
+    EventEdge,
+    ProjectStatus,
+    ChapterStatus,
+    ChapterPlan,
+    MemoryItem,
+    Layer,
+)
 
 
 class NovelistApiSmokeTest(unittest.TestCase):
@@ -234,7 +245,12 @@ class NovelistApiSmokeTest(unittest.TestCase):
         events_res = self.client.get(f"/api/events/{project_id}")
         self.assertEqual(events_res.status_code, 200)
         events_payload = events_res.json()
-        self.assertTrue(any(item["subject"] == "主角" and item.get("object") == "关键配角" for item in events_payload))
+        self.assertTrue(
+            any(
+                item["subject"] == "主角" and item.get("object") == "关键配角"
+                for item in events_payload
+            )
+        )
         self.assertFalse(any(item["subject"] == "hidden" for item in events_payload))
 
     def test_extract_plan_payload_handles_object_entries_and_role_goal_noise(self):
@@ -331,8 +347,7 @@ class NovelistApiSmokeTest(unittest.TestCase):
             },
         )
         chapter.draft = (
-            "这只是都市传说，不是证词。陆仁甲低声说：先查监控。"
-            "苏小柒看向后巷，示意有人跟踪。"
+            "这只是都市传说，不是证词。陆仁甲低声说：先查监控。苏小柒看向后巷，示意有人跟踪。"
         )
         store = get_or_create_store(project_id)
         upsert_graph_from_chapter(store, chapter)
@@ -499,7 +514,9 @@ class NovelistApiSmokeTest(unittest.TestCase):
         chapter_id = self._create_chapter(project_id, chapter_number=5)
         self.client.post(f"/api/chapters/{chapter_id}/plan")
 
-        with self.client.stream("GET", f"/api/chapters/{chapter_id}/draft/stream?force=true") as response:
+        with self.client.stream(
+            "GET", f"/api/chapters/{chapter_id}/draft/stream?force=true"
+        ) as response:
             self.assertEqual(response.status_code, 200)
             payload = "".join(chunk.decode("utf-8") for chunk in response.iter_raw())
             self.assertIn("event: meta", payload)
@@ -736,8 +753,6 @@ class NovelistApiSmokeTest(unittest.TestCase):
             "remote_requested",
             "remote_effective",
             "remote_ready",
-            "has_openai_key",
-            "has_minimax_key",
             "has_deepseek_key",
         ):
             self.assertIn(field, payload)
