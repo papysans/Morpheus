@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, Field, model_validator as _mv
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agents.studio import AGENT_PROMPTS, AgentStudio, StudioWorkflow
@@ -75,8 +75,12 @@ class Settings(BaseSettings):
     api_port: int = 8000
     data_dir: str = "../data"
 
-    llm_provider: str = "deepseek"
+    llm_provider: str = "minimax"
     remote_llm_enabled: bool = False
+    openai_api_key: Optional[str] = None
+    openai_model: str = "gpt-4-turbo-preview"
+    minimax_api_key: Optional[str] = None
+    minimax_model: str = "MiniMax-M2.5"
     deepseek_api_key: Optional[str] = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
@@ -86,8 +90,8 @@ class Settings(BaseSettings):
     llm_context_window_tokens: int = 32768
     deepseek_context_window_tokens: int = 131072
 
-    embedding_model: str = "deepseek-embedding"
-    embedding_dimension: int = 1536
+    embedding_model: str = "embo-01"
+    embedding_dimension: int = 1024
     remote_embedding_enabled: bool = False
     fts_top_k: int = 30
     vector_top_k: int = 20
@@ -242,31 +246,44 @@ def build_trace_channel_snapshot(trace: Optional[AgentTrace]) -> Dict[str, str]:
 
 
 def _normalize_provider(provider: str) -> str:
-    candidate = (provider or "deepseek").strip().lower()
-    if candidate != "deepseek":
-        logger.warning("invalid llm provider configured=%s fallback=deepseek", provider)
-    return "deepseek"
+    candidate = (provider or "openai").strip().lower()
+    if candidate not in {"openai", "minimax", "deepseek"}:
+        logger.warning("invalid llm provider configured=%s fallback=openai", provider)
+        return "openai"
+    return candidate
 
 
 def resolve_llm_runtime() -> Dict[str, Any]:
     requested_provider = _normalize_provider(settings.llm_provider)
+    openai_key = (settings.openai_api_key or "").strip()
+    minimax_key = (settings.minimax_api_key or "").strip()
     deepseek_key = (settings.deepseek_api_key or "").strip()
+    has_openai_key = bool(openai_key)
+    has_minimax_key = bool(minimax_key)
     has_deepseek_key = bool(deepseek_key)
 
     remote_requested = settings.remote_llm_enabled
     remote_env_raw = os.getenv("REMOTE_LLM_ENABLED")
     auto_enabled = False
     remote_effective = remote_requested
-    if remote_env_raw is None and not remote_requested and has_deepseek_key:
+    if (
+        remote_env_raw is None
+        and not remote_requested
+        and (has_openai_key or has_minimax_key or has_deepseek_key)
+    ):
         # Auto-enable remote mode if keys are present and REMOTE_LLM_ENABLED was not explicitly set.
         remote_effective = True
         auto_enabled = True
 
     provider_has_key = {
+        "openai": has_openai_key,
+        "minimax": has_minimax_key,
         "deepseek": has_deepseek_key,
     }
     provider_fallback_order = {
-        "deepseek": [],
+        "openai": ["deepseek", "minimax"],
+        "minimax": ["deepseek", "openai"],
+        "deepseek": ["openai", "minimax"],
     }
 
     effective_provider = requested_provider
@@ -278,9 +295,18 @@ def resolve_llm_runtime() -> Dict[str, Any]:
                 provider_switch_reason = f"switched_to_{candidate}_missing_{requested_provider}_key"
                 break
 
-    provider_key = deepseek_key
-    effective_model = settings.deepseek_model
-    effective_base_url = settings.deepseek_base_url
+    if effective_provider == "minimax":
+        provider_key = minimax_key
+        effective_model = settings.minimax_model
+        effective_base_url = "https://api.minimaxi.com/v1"
+    elif effective_provider == "deepseek":
+        provider_key = deepseek_key
+        effective_model = settings.deepseek_model
+        effective_base_url = settings.deepseek_base_url
+    else:
+        provider_key = openai_key
+        effective_model = settings.openai_model
+        effective_base_url = "https://api.openai.com/v1"
 
     remote_ready = remote_effective and bool(provider_key)
     return {
@@ -294,6 +320,8 @@ def resolve_llm_runtime() -> Dict[str, Any]:
         "remote_effective": remote_effective,
         "remote_ready": remote_ready,
         "remote_auto_enabled": auto_enabled,
+        "has_openai_key": has_openai_key,
+        "has_minimax_key": has_minimax_key,
         "has_deepseek_key": has_deepseek_key,
     }
 
@@ -302,6 +330,22 @@ def resolve_embedding_runtime(runtime: Dict[str, Any]) -> Dict[str, str]:
     provider_name = runtime["effective_provider"]
     provider_key = runtime["provider_key"]
     provider_base_url = runtime["effective_base_url"]
+
+    if provider_name == "deepseek":
+        minimax_key = (settings.minimax_api_key or "").strip()
+        openai_key = (settings.openai_api_key or "").strip()
+        if minimax_key:
+            return {
+                "provider_name": "minimax",
+                "provider_key": minimax_key,
+                "provider_base_url": "https://api.minimaxi.com/v1",
+            }
+        if openai_key:
+            return {
+                "provider_name": "openai",
+                "provider_key": openai_key,
+                "provider_base_url": "https://api.openai.com/v1",
+            }
 
     return {
         "provider_name": provider_name,
@@ -340,7 +384,7 @@ vector_index_signatures: Dict[str, str] = {}
 
 llm_runtime = resolve_llm_runtime()
 logger.info(
-    "llm runtime requested_provider=%s effective_provider=%s model=%s remote_requested=%s remote_effective=%s remote_ready=%s auto_enabled=%s keys(deepseek=%s)",
+    "llm runtime requested_provider=%s effective_provider=%s model=%s remote_requested=%s remote_effective=%s remote_ready=%s auto_enabled=%s keys(openai=%s,minimax=%s,deepseek=%s)",
     llm_runtime["requested_provider"],
     llm_runtime["effective_provider"],
     llm_runtime["effective_model"],
@@ -348,6 +392,8 @@ logger.info(
     llm_runtime["remote_effective"],
     llm_runtime["remote_ready"],
     llm_runtime["remote_auto_enabled"],
+    llm_runtime["has_openai_key"],
+    llm_runtime["has_minimax_key"],
     llm_runtime["has_deepseek_key"],
 )
 if llm_runtime["provider_switch_reason"] != "configured":
@@ -1179,6 +1225,73 @@ def trigger_l4_extraction_async(
             project_id,
             exc_info=True,
         )
+
+
+_detached_review_tasks: Set[asyncio.Task[Any]] = set()
+
+
+def _spawn_review_side_effects_task(func: Callable[..., None], *args: Any) -> None:
+    task = asyncio.create_task(asyncio.to_thread(func, *args))
+    _detached_review_tasks.add(task)
+
+    def _cleanup(done_task: asyncio.Task[Any]) -> None:
+        _detached_review_tasks.discard(done_task)
+        try:
+            exc = done_task.exception()
+            if exc:
+                logger.warning("detached review side-effect task failed", exc_info=exc)
+        except asyncio.CancelledError:
+            logger.warning("detached review side-effect task cancelled")
+
+    task.add_done_callback(_cleanup)
+
+
+def run_review_approval_side_effects(
+    project_id: str,
+    chapter_id: str,
+    chapter_number: int,
+    chapter_final: str,
+    chapter_plan: Any,
+) -> None:
+    store = get_or_create_store(project_id)
+    plan_payload = (
+        chapter_plan.model_dump() if hasattr(chapter_plan, "model_dump") else chapter_plan
+    )
+
+    try:
+        mem_ctx = MemoryContextService(store.three_layer, store)
+        project_chapters = [
+            {
+                "chapter_number": c.chapter_number,
+                "plan": c.plan,
+                "draft": c.draft,
+                "final": c.final,
+            }
+            for c in chapter_list(project_id)
+        ]
+        mem_ctx.refresh_memory_after_chapter(
+            chapter_number=chapter_number,
+            chapter_text=chapter_final,
+            chapter_plan=plan_payload,
+            project_chapters=project_chapters,
+            mode="consolidated",
+        )
+    except Exception:
+        logger.warning(
+            "consolidated memory refresh failed chapter_no=%d",
+            chapter_number,
+            exc_info=True,
+        )
+
+    try:
+        trigger_l4_extraction_async(
+            store=store,
+            chapter_text=chapter_final,
+            chapter_number=chapter_number,
+            project_id=project_id,
+        )
+    except Exception:
+        logger.warning("L4 trigger failed chapter_id=%s", chapter_id, exc_info=True)
 
 
 def chapter_list(project_id: str) -> List[Chapter]:
@@ -2679,6 +2792,10 @@ class ReviewRequest(BaseModel):
     comment: str = ""
 
 
+P0_EXEMPTION_ALLOWED = False
+APPROVAL_GATING_MODE = "unresolved_p0"
+
+
 class IdentityUpdateRequest(BaseModel):
     content: str
 
@@ -3148,6 +3265,8 @@ async def llm_runtime_status():
         "remote_effective": runtime["remote_effective"],
         "remote_ready": runtime["remote_ready"],
         "remote_auto_enabled": runtime["remote_auto_enabled"],
+        "has_openai_key": runtime["has_openai_key"],
+        "has_minimax_key": runtime["has_minimax_key"],
         "has_deepseek_key": runtime["has_deepseek_key"],
         "llm_temperature": settings.llm_temperature,
         "llm_max_tokens": settings.llm_max_tokens,
@@ -5443,12 +5562,18 @@ async def review_chapter(req: ReviewRequest):
     chapter = resolve_chapter(req.chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
+    project = resolve_project(chapter.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    consistency: Optional[Dict[str, Any]] = None
+    pending_side_effect_args: Optional[Tuple[str, str, int, str, Any]] = None
 
     if req.action == ReviewAction.APPROVE:
         p0_conflicts = [
             conflict
             for conflict in chapter.conflicts
-            if conflict.severity.value == "P0" and not conflict.exempted
+            if conflict.severity.value == "P0" and not conflict.exempted and not conflict.resolved
         ]
         if p0_conflicts:
             logger.warning(
@@ -5457,49 +5582,18 @@ async def review_chapter(req: ReviewRequest):
                 len(p0_conflicts),
             )
             raise HTTPException(
-                status_code=400, detail="P0 conflicts must be resolved or exempted before approval"
+                status_code=400, detail="P0 conflicts must be resolved before approval"
             )
         chapter.final = chapter.draft
         chapter.status = ChapterStatus.APPROVED
         if chapter.final:
-            store = get_or_create_store(chapter.project_id)
-
-            # Memory context: consolidated refresh after approval (includes reflect)
-            try:
-                mem_ctx = MemoryContextService(store.three_layer, store)
-                project_chapters = [
-                    {
-                        "chapter_number": c.chapter_number,
-                        "plan": c.plan,
-                        "draft": c.draft,
-                        "final": c.final,
-                    }
-                    for c in chapter_list(chapter.project_id)
-                ]
-                mem_ctx.refresh_memory_after_chapter(
-                    chapter_number=chapter.chapter_number,
-                    chapter_text=chapter.final,
-                    chapter_plan=chapter.plan,
-                    project_chapters=project_chapters,
-                    mode="consolidated",
-                )
-            except Exception:
-                logger.warning(
-                    "consolidated memory refresh failed chapter_no=%d",
-                    chapter.chapter_number,
-                    exc_info=True,
-                )
-
-            # L4: auto-extract character profiles after chapter approval
-            try:
-                trigger_l4_extraction_async(
-                    store=store,
-                    chapter_text=chapter.final,
-                    chapter_number=chapter.chapter_number,
-                    project_id=chapter.project_id,
-                )
-            except Exception:
-                logger.warning("L4 trigger failed chapter_id=%s", chapter.id, exc_info=True)
+            pending_side_effect_args = (
+                chapter.project_id,
+                chapter.id,
+                chapter.chapter_number,
+                chapter.final,
+                chapter.plan,
+            )
     elif req.action == ReviewAction.REJECT:
         chapter.status = ChapterStatus.DRAFT
     elif req.action == ReviewAction.REWRITE:
@@ -5507,7 +5601,44 @@ async def review_chapter(req: ReviewRequest):
         chapter.draft = None
     elif req.action == ReviewAction.RESCAN:
         chapter.status = ChapterStatus.REVIEWING
+        draft_text = chapter.draft or ""
+        if draft_text.strip():
+            store = get_or_create_store(chapter.project_id)
+            consistency = ConsistencyEngine().check(
+                draft_text,
+                {
+                    "chapter_id": chapter.chapter_number,
+                    "entities": store.get_all_entities(),
+                    "events": store.get_all_events(),
+                    "identity": store.three_layer.get_identity(),
+                    "taboo_constraints": project.taboo_constraints,
+                },
+            )
+            chapter.conflicts = [Conflict.model_validate(item) for item in consistency["conflicts"]]
+            chapter.p0_conflict_count = int(consistency["p0_count"])
+            chapter.first_pass_ok = bool(consistency["can_submit"])
+        else:
+            chapter.conflicts = []
+            chapter.p0_conflict_count = 0
+            consistency = {
+                "can_submit": True,
+                "total_conflicts": 0,
+                "p0_count": 0,
+                "p1_count": 0,
+                "p2_count": 0,
+                "conflicts": [],
+                "p0_conflicts": [],
+                "p1_conflicts": [],
+                "p2_conflicts": [],
+            }
     elif req.action == ReviewAction.EXEMPT:
+        if not P0_EXEMPTION_ALLOWED and any(
+            conflict.severity.value == "P0" for conflict in chapter.conflicts
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="P0 conflicts cannot be exempted; resolve conflicts before approval",
+            )
         for conflict in chapter.conflicts:
             if conflict.severity.value == "P1":
                 conflict.exempted = True
@@ -5521,7 +5652,38 @@ async def review_chapter(req: ReviewRequest):
         chapter.status.value,
         len(req.comment or ""),
     )
-    return {"status": chapter.status.value, "action": req.action.value, "comment": req.comment}
+    logger.info(
+        "review diagnostics chapter_id=%s action=%s unresolved_p0_count=%d p0=%d p1=%d p2=%d",
+        chapter.id,
+        req.action.value,
+        len(
+            [
+                c
+                for c in chapter.conflicts
+                if c.severity.value == "P0" and not c.exempted and not c.resolved
+            ]
+        ),
+        len([c for c in chapter.conflicts if c.severity.value == "P0"]),
+        len([c for c in chapter.conflicts if c.severity.value == "P1"]),
+        len([c for c in chapter.conflicts if c.severity.value == "P2"]),
+    )
+    if pending_side_effect_args is not None:
+        _spawn_review_side_effects_task(
+            run_review_approval_side_effects,
+            pending_side_effect_args[0],
+            pending_side_effect_args[1],
+            pending_side_effect_args[2],
+            pending_side_effect_args[3],
+            pending_side_effect_args[4],
+        )
+
+    response_payload = {
+        "status": chapter.status.value,
+        "action": req.action.value,
+        "comment": req.comment,
+        "consistency": consistency,
+    }
+    return response_payload
 
 
 @app.post("/api/projects/{project_id}/fanqie/create-book")
@@ -6167,6 +6329,9 @@ async def get_profile(project_id: str, profile_id: str):
     if not profile or profile.project_id != project_id:
         raise HTTPException(status_code=404, detail="Profile not found")
     return profile.model_dump(mode="json")
+
+
+from pydantic import model_validator as _mv
 
 
 class RebuildRequest(BaseModel):
