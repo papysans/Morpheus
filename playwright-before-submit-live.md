@@ -1,0 +1,72 @@
+- generic [ref=e3]:
+  - navigation "主导航" [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: Morpheus
+      - button "收起侧边栏" [ref=e7] [cursor=pointer]: ‹
+    - navigation [ref=e8]:
+      - generic [ref=e9]:
+        - generic [ref=e10]: 导航
+        - link "项目列表" [ref=e11] [cursor=pointer]:
+          - /url: /
+          - img [ref=e13]
+          - generic [ref=e15]: 项目列表
+      - generic [ref=e16]:
+        - generic [ref=e17]: 当前项目
+        - link "项目概览" [ref=e18] [cursor=pointer]:
+          - /url: /project/bcb59cc5-3c46-4114-9ca3-feaa21f920c1
+          - img [ref=e20]
+          - generic [ref=e25]: 项目概览
+        - link "创作控制台" [ref=e26] [cursor=pointer]:
+          - /url: /project/bcb59cc5-3c46-4114-9ca3-feaa21f920c1/write
+          - img [ref=e28]
+          - generic [ref=e30]: 创作控制台
+        - link "章节工作台" [ref=e31] [cursor=pointer]:
+          - /url: /project/bcb59cc5-3c46-4114-9ca3-feaa21f920c1/chapter
+          - img [ref=e33]
+          - generic [ref=e36]: 章节工作台
+        - link "记忆浏览器" [ref=e37] [cursor=pointer]:
+          - /url: /project/bcb59cc5-3c46-4114-9ca3-feaa21f920c1/memory
+          - img [ref=e39]
+          - generic [ref=e42]: 记忆浏览器
+        - link "知识图谱" [ref=e43] [cursor=pointer]:
+          - /url: /project/bcb59cc5-3c46-4114-9ca3-feaa21f920c1/graph
+          - img [ref=e45]
+          - generic [ref=e51]: 知识图谱
+        - link "决策回放" [ref=e52] [cursor=pointer]:
+          - /url: /project/bcb59cc5-3c46-4114-9ca3-feaa21f920c1/trace
+          - img [ref=e54]
+          - generic [ref=e57]: 决策回放
+      - generic [ref=e58]:
+        - generic [ref=e59]: 最近访问
+        - link "第 1 章 · 车祸后的合法复活" [ref=e60] [cursor=pointer]:
+          - /url: /project/bcb59cc5-3c46-4114-9ca3-feaa21f920c1/chapter/7ffda37d-db43-4b53-970c-a2ae86b17c49
+          - img [ref=e62]
+          - generic [ref=e65]: 第 1 章 · 车祸后的合法复活
+        - link "备份神谕" [ref=e66] [cursor=pointer]:
+          - /url: /project/bcb59cc5-3c46-4114-9ca3-feaa21f920c1
+          - img [ref=e68]
+          - generic [ref=e70]: 备份神谕
+      - generic [ref=e71]:
+        - generic [ref=e72]: 全局
+        - link "评测看板" [ref=e73] [cursor=pointer]:
+          - /url: /dashboard
+          - img [ref=e75]
+          - generic [ref=e76]: 评测看板
+    - complementary "操作历史" [ref=e77]:
+      - button "操作历史 1" [ref=e78] [cursor=pointer]:
+        - generic [ref=e79]: 操作历史
+        - generic [ref=e80]: "1"
+  - main [ref=e81]:
+    - generic [ref=e83]:
+      - paragraph [ref=e91]: 章节数据不可用
+      - link "返回项目详情" [ref=e92] [cursor=pointer]:
+        - /url: /project/bcb59cc5-3c46-4114-9ca3-feaa21f920c1
+  - status:
+    - alert [ref=e93]:
+      - generic [ref=e94]: ✕
+      - generic [ref=e95]: 加载章节失败，请稍后重试
+      - button "关闭通知" [ref=e96] [cursor=pointer]: ×
+    - alert [ref=e97]:
+      - generic [ref=e98]: ✕
+      - generic [ref=e99]: 加载章节失败，请稍后重试
+      - button "关闭通知" [ref=e100] [cursor=pointer]: ×
