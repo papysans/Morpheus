@@ -57,6 +57,55 @@ const sampleChapter = {
     ],
 }
 
+const unresolvedP0Chapter = {
+    ...sampleChapter,
+    conflicts: [{ id: 'cf-u1', severity: 'P0' as const, rule_id: 'R001', reason: '时间线矛盾' }],
+}
+
+const resolvedP0Chapter = {
+    ...sampleChapter,
+    conflicts: [
+        {
+            id: 'cf-r1',
+            severity: 'P0' as const,
+            rule_id: 'R001',
+            reason: '已解决冲突',
+            resolved: true,
+        },
+    ],
+}
+
+const exemptedP0Chapter = {
+    ...sampleChapter,
+    conflicts: [
+        {
+            id: 'cf-e1',
+            severity: 'P0' as const,
+            rule_id: 'R001',
+            reason: '已豁免冲突',
+            exempted: true,
+        },
+    ],
+}
+
+const approvedChapter = {
+    ...sampleChapter,
+    status: 'approved',
+    conflicts: [],
+}
+
+const reviewingChapter = {
+    ...sampleChapter,
+    status: 'reviewing',
+    conflicts: [],
+}
+
+const revisedChapter = {
+    ...sampleChapter,
+    status: 'revised',
+    conflicts: [],
+}
+
 const mockApiGet = vi.fn()
 const mockApiPost = vi.fn()
 const mockApiPut = vi.fn()
@@ -529,12 +578,119 @@ describe('ChapterWorkbenchPage', () => {
         })
     })
 
-    it('有 P0 冲突时禁用审批通过按钮', async () => {
+    it('有未解决 P0 冲突时禁用提交审批按钮', async () => {
+        mockApiGet.mockResolvedValue({ data: unresolvedP0Chapter })
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText('审批通过')).toBeTruthy()
+            expect(screen.getByText('提交审批')).toBeTruthy()
         })
-        expect(screen.getByText('审批通过')).toHaveProperty('disabled', true)
+        expect(screen.getByText('提交审批')).toHaveProperty('disabled', true)
+    })
+
+    it('P0 冲突已 resolved 时允许提交审批', async () => {
+        mockApiGet.mockResolvedValue({ data: resolvedP0Chapter })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('提交审批')).toBeTruthy()
+        })
+        expect(screen.getByText('提交审批')).toHaveProperty('disabled', false)
+    })
+
+    it('P0 冲突已 exempted 时允许提交审批', async () => {
+        mockApiGet.mockResolvedValue({ data: exemptedP0Chapter })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('提交审批')).toBeTruthy()
+        })
+        expect(screen.getByText('提交审批')).toHaveProperty('disabled', false)
+    })
+
+    it('审批返回 P0 策略错误时展示精确提示', async () => {
+        mockApiGet.mockResolvedValue({ data: resolvedP0Chapter })
+        mockApiPost.mockRejectedValueOnce({
+            response: { data: { detail: 'P0 conflicts must be resolved before approval' } },
+            message: 'bad request',
+        })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('提交审批')).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByText('提交审批'))
+
+        await waitFor(() => {
+            expect(mockAddToast).toHaveBeenCalledWith('error', '提交审批失败', expect.objectContaining({
+                detail: '存在未解决的 P0 冲突，请先解决后再审批通过。',
+            }))
+        })
+    })
+
+    it('审批非 P0 错误时保留后端原始错误提示', async () => {
+        mockApiGet.mockResolvedValue({ data: resolvedP0Chapter })
+        mockApiPost.mockRejectedValueOnce({
+            response: { data: { detail: 'gateway timeout' } },
+            message: 'network failed',
+        })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('提交审批')).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByText('提交审批'))
+
+        await waitFor(() => {
+            expect(mockAddToast).toHaveBeenCalledWith('error', '提交审批失败', expect.objectContaining({
+                detail: 'gateway timeout',
+            }))
+        })
+    })
+
+    it('已审批状态展示状态与流程提示，按钮显示为重新打开审核并可点击', async () => {
+        mockApiGet.mockResolvedValue({ data: approvedChapter })
+        renderPage()
+
+        await waitFor(() => {
+            expect(screen.getByText('当前状态：已审批')).toBeTruthy()
+            expect(screen.getByText('当前已审批：如需继续修改，请先重新打开审核。')).toBeTruthy()
+            expect(screen.getByText('重新打开审核')).toBeTruthy()
+        })
+
+        expect(screen.getByText('重新打开审核')).toHaveProperty('disabled', false)
+    })
+
+    it('已审批状态点击重新打开审核会调用 rescan 并提示成功', async () => {
+        mockApiGet.mockResolvedValue({ data: approvedChapter })
+        mockApiPost.mockResolvedValueOnce({ data: { status: 'reviewing', action: 'rescan' } })
+        renderPage()
+
+        await waitFor(() => {
+            expect(screen.getByText('重新打开审核')).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByText('重新打开审核'))
+
+        await waitFor(() => {
+            expect(mockApiPost).toHaveBeenCalledWith('/review', { chapter_id: 'ch-1', action: 'rescan' }, expect.any(Object))
+            expect(mockAddToast).toHaveBeenCalledWith('success', '已重新打开审核，可继续修改后再提交审批')
+        })
+    })
+
+    it('待审核与已退回状态展示对应流程提示与统一主按钮', async () => {
+        mockApiGet.mockResolvedValueOnce({ data: reviewingChapter })
+        renderPage()
+
+        await waitFor(() => {
+            expect(screen.getByText('当前状态：待审核')).toBeTruthy()
+            expect(screen.getByText('下一步：先处理冲突项，再提交审批。')).toBeTruthy()
+            expect(screen.getByText('提交审批')).toBeTruthy()
+        })
+
+        mockApiGet.mockResolvedValueOnce({ data: revisedChapter })
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('当前状态：已退回')).toBeTruthy()
+            expect(screen.getByText('下一步：根据退回意见修改，完成后重新提交审批。')).toBeTruthy()
+        })
     })
 
     /* ── Toast 通知 ── */

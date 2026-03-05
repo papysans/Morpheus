@@ -33,6 +33,8 @@ interface Conflict {
     reason: string
     suggested_fix?: string
     evidence_paths?: string[]
+    exempted?: boolean
+    resolved?: boolean
 }
 
 interface Plan {
@@ -75,6 +77,13 @@ interface Chapter {
     status: string
     word_count: number
     conflicts: Conflict[]
+}
+
+const chapterStatusMeta: Record<string, { label: string; hint: string }> = {
+    draft: { label: '草稿中', hint: '下一步：完善正文并保存，保存后可进入审核。' },
+    reviewing: { label: '待审核', hint: '下一步：先处理冲突项，再提交审批。' },
+    revised: { label: '已退回', hint: '下一步：根据退回意见修改，完成后重新提交审批。' },
+    approved: { label: '已审批', hint: '当前已审批：如需继续修改，请先重新打开审核。' },
 }
 
 interface StreamDonePayload {
@@ -343,7 +352,6 @@ export default function ChapterWorkbenchPage() {
     const localDraftContent = autoSave.draftContent
     const clearLocalDraft = autoSave.clearDraft
     const [showDraftRestore, setShowDraftRestore] = useState(false)
-    const [showRejectConfirm, setShowRejectConfirm] = useState(false)
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
     const [showClearWorkspaceConfirm, setShowClearWorkspaceConfirm] = useState(false)
     const [deletingChapter, setDeletingChapter] = useState(false)
@@ -470,7 +478,10 @@ export default function ChapterWorkbenchPage() {
 
     /* ── 冲突分类 ── */
     const p0Conflicts = useMemo(
-        () => (chapter?.conflicts || []).filter((c) => c.severity === 'P0'),
+        () =>
+            (chapter?.conflicts || []).filter(
+                (c) => c.severity === 'P0' && !c.exempted && !c.resolved,
+            ),
         [chapter],
     )
     const p1Conflicts = useMemo(
@@ -481,6 +492,19 @@ export default function ChapterWorkbenchPage() {
         () => (chapter?.conflicts || []).filter((c) => c.severity === 'P2'),
         [chapter],
     )
+
+    const statusKey = String(chapter?.status || 'draft').toLowerCase()
+    const statusMeta = chapterStatusMeta[statusKey] || chapterStatusMeta.draft
+    const isApproved = statusKey === 'approved'
+    const canSubmitApproval = !streaming && p0Conflicts.length === 0 && !!draftContent.trim()
+    const primaryActionLabel = isApproved ? '重新打开审核' : '提交审批'
+    const primaryActionReason = isApproved
+        ? '当前章节已审批，如需修改请先重新打开审核'
+        : p0Conflicts.length > 0
+            ? '存在 P0 冲突，请先解决后再审批'
+            : !draftContent.trim()
+                ? '无草稿内容'
+                : '正在生成中，请等待完成或停止当前任务'
 
     const blueprintBeats = useMemo(
         () => (chapter?.plan?.beats || []).map(cleanBlueprintText).filter(Boolean),
@@ -745,12 +769,42 @@ export default function ChapterWorkbenchPage() {
             addRecord({ type: 'approve', description: action === 'approve' ? '审批通过' : '退回重写', status: 'success' })
         } catch (err: any) {
             console.error(err)
+            const detail = err?.response?.data?.detail || err?.message
+            const isP0PolicyError =
+                typeof detail === 'string' &&
+                detail.toLowerCase().includes('p0') &&
+                detail.toLowerCase().includes('resolved before approval')
             addToast('error', '提交审批失败', {
                 context: '审批操作',
                 actions: [{ label: '重试', onClick: () => void reviewDraft(action) }],
-                detail: err?.response?.data?.detail || err?.message,
+                detail: isP0PolicyError
+                    ? '存在未解决的 P0 冲突，请先解决后再审批通过。'
+                    : detail,
             })
             addRecord({ type: 'approve', description: '审批操作失败', status: 'error', retryAction: () => void reviewDraft(action) })
+        }
+    }
+
+    const reopenReview = async () => {
+        if (!chapterId) return
+        try {
+            await api.post('/review', { chapter_id: chapterId, action: 'rescan' }, { timeout: LLM_TIMEOUT })
+            await loadChapter()
+            addToast('success', '已重新打开审核，可继续修改后再提交审批')
+            addRecord({ type: 'approve', description: '重新打开审核', status: 'success' })
+        } catch (err: any) {
+            console.error(err)
+            addToast('error', '重新打开审核失败', {
+                context: '审批操作',
+                actions: [{ label: '重试', onClick: () => void reopenReview() }],
+                detail: err?.response?.data?.detail || err?.message,
+            })
+            addRecord({
+                type: 'approve',
+                description: '重新打开审核失败',
+                status: 'error',
+                retryAction: () => void reopenReview(),
+            })
         }
     }
 
@@ -1777,52 +1831,31 @@ export default function ChapterWorkbenchPage() {
                             )}
                         </div>
 
-                        <div className="grid-actions" style={{ marginTop: 12 }}>
+                        <div className="grid-actions" style={{ marginTop: 12, alignItems: 'center', gap: 10 }}>
+                            <div className="card-strong" style={{ padding: '8px 10px', minWidth: 260 }}>
+                                <div className="metric-label">当前状态：{statusMeta.label}</div>
+                                <div className="muted" style={{ fontSize: '0.85rem', marginTop: 4 }}>{statusMeta.hint}</div>
+                                {p0Conflicts.length > 0 && (
+                                    <div style={{ fontSize: '0.82rem', marginTop: 4, color: 'var(--warning, #faad14)' }}>
+                                        当前阻断：存在未解决 P0 冲突，请先处理后再审批。
+                                    </div>
+                                )}
+                            </div>
                             <DisabledTooltip
-                                reason={
-                                    p0Conflicts.length > 0
-                                        ? '存在 P0 冲突，请先解决后再审批'
-                                        : !draftContent.trim()
-                                            ? '无草稿内容'
-                                            : '正在生成中，请等待完成或停止当前任务'
-                                }
-                                disabled={streaming || p0Conflicts.length > 0 || !draftContent.trim()}
+                                reason={primaryActionReason}
+                                disabled={!canSubmitApproval}
                             >
                                 <button
                                     className="btn btn-primary"
-                                    onClick={() => reviewDraft('approve')}
-                                    disabled={streaming || p0Conflicts.length > 0 || !draftContent.trim()}
+                                    onClick={() => (isApproved ? reopenReview() : reviewDraft('approve'))}
+                                    disabled={!canSubmitApproval}
                                 >
-                                    审批通过
+                                    {primaryActionLabel}
                                 </button>
                             </DisabledTooltip>
-                            <button className="btn btn-secondary" onClick={() => setShowRejectConfirm(true)} disabled={streaming}>
-                                退回重写
-                            </button>
-                            {p0Conflicts.length > 0 && (
-                                <span className="muted" style={{ fontSize: '0.85rem' }}>
-                                    存在 {p0Conflicts.length} 个 P0 冲突需解决
-                                </span>
-                            )}
                         </div>
                     </section>
                 </div>
-
-                {/* 退回重写确认对话框 */}
-                {showRejectConfirm && (
-                    <div className="modal-backdrop">
-                        <div className="card" style={{ padding: 20, textAlign: 'center', maxWidth: 360 }}>
-                            <p style={{ margin: '0 0 8px', fontWeight: 500 }}>确认退回重写？</p>
-                            <p className="muted" style={{ margin: '0 0 16px' }}>
-                                退回后当前草稿将标记为需要重写，此操作不可撤销。
-                            </p>
-                            <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
-                                <button className="btn btn-secondary" onClick={() => setShowRejectConfirm(false)}>取消</button>
-                                <button className="btn btn-primary" onClick={() => { setShowRejectConfirm(false); reviewDraft('reject') }}>确认退回</button>
-                            </div>
-                        </div>
-                    </div>
-                )}
 
                 {/* 清空创作台确认对话框 */}
                 {showClearWorkspaceConfirm && (
