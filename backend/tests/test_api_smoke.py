@@ -867,7 +867,6 @@ class NovelistApiSmokeTest(unittest.TestCase):
             f"/api/projects/{project_id}/one-shot-book",
             json={
                 "prompt": "主角在雪夜被背叛后潜伏反击，最终揪出幕后主使。",
-                "scope": "volume",
                 "mode": "quick",
                 "chapter_count": 3,
                 "words_per_chapter": 700,
@@ -890,7 +889,6 @@ class NovelistApiSmokeTest(unittest.TestCase):
             f"/api/projects/{project_id}/one-shot-book",
             json={
                 "prompt": "续写主线并留钩子。",
-                "scope": "book",
                 "mode": "quick",
                 "chapter_count": 1,
                 "words_per_chapter": 700,
@@ -900,7 +898,6 @@ class NovelistApiSmokeTest(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         payload = res.json()
         self.assertTrue(payload["continuation_mode"])
-        self.assertEqual(payload["start_chapter_number"], 3)
         self.assertEqual(payload["chapters"][0]["chapter_number"], 3)
 
     def test_one_shot_book_stream_generation(self):
@@ -910,7 +907,6 @@ class NovelistApiSmokeTest(unittest.TestCase):
             f"/api/projects/{project_id}/one-shot-book/stream",
             json={
                 "prompt": "主角在雪夜被背叛后潜伏反击，最终揪出幕后主使。",
-                "scope": "volume",
                 "mode": "quick",
                 "chapter_count": 1,
                 "words_per_chapter": 700,
@@ -921,6 +917,23 @@ class NovelistApiSmokeTest(unittest.TestCase):
             self.assertIn("event: outline_ready", payload)
             self.assertIn("event: chapter_chunk", payload)
             self.assertIn("event: done", payload)
+
+    def test_one_shot_book_accepts_batch_direction_alias(self):
+        project_id = self._create_project()
+        batch_res = self.client.post(
+            f"/api/projects/{project_id}/one-shot-book",
+            json={
+                "batch_direction": "主角在雪夜被背叛后潜伏反击，最终揪出幕后主使。",
+                "mode": "quick",
+                "chapter_count": 1,
+                "words_per_chapter": 700,
+            },
+        )
+        self.assertEqual(batch_res.status_code, 200)
+        self.assertEqual(batch_res.json()["generated_chapters"], 1)
+        self.assertEqual(
+            batch_res.json()["prompt"], "主角在雪夜被背叛后潜伏反击，最终揪出幕后主使。"
+        )
 
     def test_consistency_p0_check_endpoint(self):
         project_id = self._create_project(taboo_constraints=["禁止词"])
@@ -1263,7 +1276,6 @@ class NovelistApiSmokeTest(unittest.TestCase):
         messages = build_outline_messages(
             prompt="继续写",
             chapter_count=3,
-            scope="book",
             project=project,
             identity="IDENTITY",
             continuation_mode=True,
