@@ -220,21 +220,29 @@ function EntityNodeComponent({ data }: NodeProps<EntityNodeData>) {
     const attrEntries = Object.entries(data.attrs || {})
 
     return (
-        <div
-            style={{ position: 'relative' }}
-            onMouseEnter={() => setHovered(true)}
-            onMouseLeave={() => setHovered(false)}
-        >
+        <div className="graph-node-shell" style={{ position: 'relative' }}>
             <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
-            <div style={shapeStyle}>
+            <button
+                type="button"
+                style={{
+                    ...shapeStyle,
+                    appearance: 'none',
+                    width: '100%',
+                }}
+                onMouseEnter={() => setHovered(true)}
+                onMouseLeave={() => setHovered(false)}
+                onFocus={() => setHovered(true)}
+                onBlur={() => setHovered(false)}
+            >
                 <span style={labelStyle}>{data.label}</span>
-            </div>
+            </button>
             <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
 
             {/* Hover tooltip */}
             {hovered && (
                 <div
                     role="tooltip"
+                    className="graph-node-tooltip"
                     style={{
                         position: 'absolute',
                         top: '100%',
@@ -662,6 +670,8 @@ export default function KnowledgeGraphPage() {
     const [showAddModal, setShowAddModal] = useState(false)
     const [newNodeLabel, setNewNodeLabel] = useState('')
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set())
+    const editInputRef = useRef<HTMLInputElement | null>(null)
+    const addNodeInputRef = useRef<HTMLInputElement | null>(null)
 
     const [nodes, setNodes, onNodesChange] = useNodesState<EntityNodeData>([])
     const [edges, setEdges, onEdgesChange] = useEdgesState([])
@@ -674,18 +684,8 @@ export default function KnowledgeGraphPage() {
     }, [projectId, currentProject, fetchProject])
 
     // Load graph data
-    useEffect(() => {
+    const loadData = useCallback(async () => {
         if (!projectId) return
-        if (!GRAPH_FEATURE_ENABLED) {
-            setLoading(false)
-            setEntities([])
-            setEvents([])
-            return
-        }
-        loadData()
-    }, [projectId])
-
-    const loadData = async () => {
         setLoading(true)
         setNodes([])
         setEdges([])
@@ -706,7 +706,18 @@ export default function KnowledgeGraphPage() {
         } finally {
             setLoading(false)
         }
-    }
+    }, [projectId, addToast, setNodes, setEdges])
+
+    useEffect(() => {
+        if (!projectId) return
+        if (!GRAPH_FEATURE_ENABLED) {
+            setLoading(false)
+            setEntities([])
+            setEvents([])
+            return
+        }
+        loadData()
+    }, [projectId, loadData])
 
     useEffect(() => {
         if (!GRAPH_FEATURE_ENABLED) return
@@ -826,7 +837,7 @@ export default function KnowledgeGraphPage() {
         } catch {
             addToast('error', '删除失败')
         }
-    }, [contextMenu, projectId, addToast])
+    }, [contextMenu, projectId, addToast, loadData])
 
     const handleStartEdit = useCallback(() => {
         if (!contextMenu) return
@@ -848,7 +859,7 @@ export default function KnowledgeGraphPage() {
         } catch {
             addToast('error', '更新失败')
         }
-    }, [editingNodeId, editLabel, projectId, addToast])
+    }, [editingNodeId, editLabel, projectId, addToast, loadData])
 
     const handleAddNode = useCallback(async () => {
         if (!newNodeLabel.trim() || !projectId) return
@@ -863,7 +874,7 @@ export default function KnowledgeGraphPage() {
         } catch {
             addToast('error', '创建失败')
         }
-    }, [newNodeLabel, projectId, addToast])
+    }, [newNodeLabel, projectId, addToast, loadData])
 
     const handleMergeNodes = useCallback(async () => {
         if (selectedNodeIds.size < 2 || !projectId) return
@@ -881,7 +892,7 @@ export default function KnowledgeGraphPage() {
         } catch {
             addToast('error', '合并失败')
         }
-    }, [selectedNodeIds, projectId, addToast])
+    }, [selectedNodeIds, projectId, addToast, loadData])
 
     const sortedEvents = useMemo(() => sortEventsByChapter(events), [events])
 
@@ -948,6 +959,7 @@ export default function KnowledgeGraphPage() {
                 >
                     {tabs.map((t) => (
                         <button
+                            type="button"
                             key={t.key}
                             role="tab"
                             aria-selected={tab === t.key}
@@ -972,6 +984,7 @@ export default function KnowledgeGraphPage() {
                     <>
                         <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                             <button
+                                type="button"
                                 className={`chip-btn ${showProgressEdges ? 'active' : ''}`}
                                 onClick={() => setShowProgressEdges((v) => !v)}
                                 aria-pressed={showProgressEdges}
@@ -979,6 +992,7 @@ export default function KnowledgeGraphPage() {
                                 {showProgressEdges ? 'progress 已显示' : 'progress 已隐藏'}
                             </button>
                             <button
+                                type="button"
                                 className={`chip-btn ${showAllPairEdges ? 'active' : ''}`}
                                 onClick={() => setShowAllPairEdges((v) => !v)}
                                 aria-pressed={showAllPairEdges}
@@ -986,6 +1000,7 @@ export default function KnowledgeGraphPage() {
                                 {showAllPairEdges ? '显示全部历史边' : '仅显示最新关系'}
                             </button>
                             <button
+                                type="button"
                                 className="chip-btn"
                                 onClick={() => setShowAddModal(true)}
                                 aria-label="添加节点"
@@ -994,6 +1009,7 @@ export default function KnowledgeGraphPage() {
                             </button>
                             {selectedNodeIds.size >= 2 && (
                                 <button
+                                    type="button"
                                     className="chip-btn active"
                                     onClick={handleMergeNodes}
                                     aria-label="合并节点"
@@ -1050,6 +1066,7 @@ export default function KnowledgeGraphPage() {
                                 }}
                             >
                                 <button
+                                    type="button"
                                     onClick={handleStartEdit}
                                     style={{
                                         display: 'block', width: '100%', padding: '8px 16px',
@@ -1060,6 +1077,7 @@ export default function KnowledgeGraphPage() {
                                     ✏ 编辑节点
                                 </button>
                                 <button
+                                    type="button"
                                     onClick={handleDeleteNode}
                                     style={{
                                         display: 'block', width: '100%', padding: '8px 16px',
@@ -1074,6 +1092,8 @@ export default function KnowledgeGraphPage() {
                         {editingNodeId && (
                             <div
                                 data-testid="edit-node-inline"
+                                role="dialog"
+                                aria-modal="true"
                                 style={{
                                     position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
                                     background: 'white', border: '1px solid var(--border)', borderRadius: 8,
@@ -1082,33 +1102,39 @@ export default function KnowledgeGraphPage() {
                                 }}
                             >
                                 <input
+                                    ref={editInputRef}
                                     type="text"
                                     value={editLabel}
                                     onChange={(e) => setEditLabel(e.target.value)}
                                     onKeyDown={(e) => e.key === 'Enter' && handleSaveEdit()}
                                     style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: '0.88rem' }}
-                                    autoFocus
                                 />
-                                <button className="btn btn-primary" onClick={handleSaveEdit} style={{ padding: '6px 14px', fontSize: '0.85rem' }}>保存</button>
-                                <button className="btn btn-secondary" onClick={() => setEditingNodeId(null)} style={{ padding: '6px 14px', fontSize: '0.85rem' }}>取消</button>
+                                <button type="button" className="btn btn-primary" onClick={handleSaveEdit} style={{ padding: '6px 14px', fontSize: '0.85rem' }}>保存</button>
+                                <button type="button" className="btn btn-secondary" onClick={() => setEditingNodeId(null)} style={{ padding: '6px 14px', fontSize: '0.85rem' }}>取消</button>
                             </div>
                         )}
                         {showAddModal && (
                             <div
+                                role="dialog"
+                                aria-modal="true"
                                 style={{
                                     position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)',
                                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                                     zIndex: 100,
                                 }}
                                 onClick={() => setShowAddModal(false)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Escape') setShowAddModal(false)
+                                }}
+                                tabIndex={-1}
                             >
                                 <div
                                     className="card"
                                     style={{ padding: 24, minWidth: 320 }}
-                                    onClick={(e) => e.stopPropagation()}
                                 >
                                     <h3 style={{ marginTop: 0, fontSize: '1rem' }}>添加新节点</h3>
                                     <input
+                                        ref={addNodeInputRef}
                                         type="text"
                                         value={newNodeLabel}
                                         onChange={(e) => setNewNodeLabel(e.target.value)}
@@ -1118,12 +1144,11 @@ export default function KnowledgeGraphPage() {
                                             borderRadius: 6, fontSize: '0.9rem', marginBottom: 12,
                                             boxSizing: 'border-box',
                                         }}
-                                        autoFocus
                                         onKeyDown={(e) => e.key === 'Enter' && handleAddNode()}
                                     />
                                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                                        <button className="btn btn-secondary" onClick={() => setShowAddModal(false)}>取消</button>
-                                        <button className="btn btn-primary" onClick={handleAddNode}>创建</button>
+                                        <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>取消</button>
+                                        <button type="button" className="btn btn-primary" onClick={handleAddNode}>创建</button>
                                     </div>
                                 </div>
                             </div>
