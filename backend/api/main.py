@@ -1711,6 +1711,7 @@ def build_outline_messages(
     project: Project,
     identity: str,
     continuation_mode: bool = False,
+    batch_direction: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     phase_hints = build_outline_phase_hints(chapter_count, continuation_mode)
     constraints = [
@@ -1736,37 +1737,63 @@ def build_outline_messages(
         },
         {
             "role": "user",
-            "content": json.dumps(
-                {
-                    "task": "根据一句话梗概拆成章节蓝图",
-                    "scope": scope,
-                    "chapter_count": chapter_count,
-                    "prompt": prompt,
-                    "genre": project.genre,
-                    "style": project.style,
-                    "identity": identity,
-                    "continuation_mode": continuation_mode,
-                    "constraints": constraints,
-                    "forbidden_title_keywords": [
-                        "起势递进",
-                        "代价扩张",
-                        "阶段收束",
-                        "里程碑",
-                        "第二阶段钩子",
-                    ],
-                    "title_style_examples": [
-                        "镜城残响",
-                        "第二次心跳",
-                        "车祸后的合法复活",
-                        "监控者的真面目",
-                        "在雪夜醒来的那个人",
-                    ],
-                    "phase_hints": phase_hints,
-                },
-                ensure_ascii=False,
+            "content": _build_outline_user_content(
+                scope=scope,
+                chapter_count=chapter_count,
+                prompt=prompt,
+                project=project,
+                identity=identity,
+                continuation_mode=continuation_mode,
+                constraints=constraints,
+                phase_hints=phase_hints,
+                batch_direction=batch_direction,
             ),
         },
     ]
+
+
+def _build_outline_user_content(
+    *,
+    scope: str,
+    chapter_count: int,
+    prompt: str,
+    project: Project,
+    identity: str,
+    continuation_mode: bool,
+    constraints: List[str],
+    phase_hints: Any,
+    batch_direction: Optional[str] = None,
+) -> str:
+    payload = {
+        "task": "根据一句话梗概拆成章节蓝图",
+        "scope": scope,
+        "chapter_count": chapter_count,
+        "prompt": prompt,
+        "genre": project.genre,
+        "style": project.style,
+        "identity": identity,
+        "continuation_mode": continuation_mode,
+        "constraints": constraints,
+        "forbidden_title_keywords": [
+            "起势递进",
+            "代价扩张",
+            "阶段收束",
+            "里程碑",
+            "第二阶段钩子",
+        ],
+        "title_style_examples": [
+            "镜城残响",
+            "第二次心跳",
+            "车祸后的合法复活",
+            "监控者的真面目",
+            "在雪夜醒来的那个人",
+        ],
+        "phase_hints": phase_hints,
+    }
+    content = json.dumps(payload, ensure_ascii=False)
+    if batch_direction:
+        content += f"\n\n用户对这批章节的创作方向要求：{batch_direction}\n请在拆章和内容生成时参考此方向。"
+    return content
 
 
 def build_chapter_outline(
@@ -1780,6 +1807,7 @@ def build_chapter_outline(
     continuation_mode: bool = False,
     start_chapter_number: int = 1,
     existing_titles: Optional[List[str]] = None,
+    batch_direction: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     identity = store.three_layer.get_identity()[:2500]
     messages = build_outline_messages(
@@ -1789,6 +1817,7 @@ def build_chapter_outline(
         project=project,
         identity=identity,
         continuation_mode=continuation_mode,
+        batch_direction=batch_direction,
     )
     raw = studio.llm_client.chat(
         messages,
@@ -2763,6 +2792,7 @@ class CreateProjectRequest(BaseModel):
     template_id: Optional[str] = None
     target_length: int = 300000
     taboo_constraints: List[str] = Field(default_factory=list)
+    synopsis: Optional[str] = None
 
 
 class BatchDeleteProjectsRequest(BaseModel):
@@ -2845,7 +2875,7 @@ class GenerationScope(str, Enum):
 
 
 class OneShotBookRequest(BaseModel):
-    prompt: str
+    prompt: str = ""
     mode: GenerationMode = GenerationMode.STUDIO
     scope: GenerationScope = GenerationScope.VOLUME
     chapter_count: Optional[int] = Field(default=None, ge=1, le=60)
@@ -2853,6 +2883,7 @@ class OneShotBookRequest(BaseModel):
     start_chapter_number: Optional[int] = Field(default=None, ge=1)
     auto_approve: bool = False
     continuation_mode: bool = False
+    batch_direction: Optional[str] = None
 
 
 class PromptPreviewRequest(BaseModel):
@@ -2864,6 +2895,7 @@ class PromptPreviewRequest(BaseModel):
     chapter_number: int = Field(default=1, ge=1)
     chapter_title: str = Field(default="第一章")
     chapter_goal: Optional[str] = None
+    batch_direction: Optional[str] = None
 
 
 class ProjectHealthRepairRequest(BaseModel):
@@ -3310,6 +3342,7 @@ async def prompt_preview(project_id: str, req: PromptPreviewRequest):
         project=project,
         identity=identity[:2500],
         continuation_mode=False,
+        batch_direction=req.batch_direction,
     )
     one_shot_messages = build_one_shot_messages(
         req=one_shot_req,
@@ -3404,6 +3437,9 @@ async def create_project(req: CreateProjectRequest):
         identity += f"- {selected_template.get('prompt_hint', '')}\n\n"
     else:
         identity += "- (未指定)\n\n"
+    if req.synopsis:
+        identity += "## Synopsis\n"
+        identity += f"{req.synopsis}\n\n"
     identity += "## Hard Taboos\n"
     if merged_taboos:
         identity += "".join(f"- {item}\n" for item in merged_taboos)
@@ -3835,6 +3871,7 @@ async def run_one_shot_book_generation(
         continuation_mode=req.continuation_mode,
         start_chapter_number=next_number,
         existing_titles=existing_titles,
+        batch_direction=req.batch_direction,
     )
     await emit_progress(
         progress,
@@ -4200,8 +4237,8 @@ async def generate_one_shot_book(project_id: str, req: OneShotBookRequest):
         raise HTTPException(status_code=404, detail="Project not found")
 
     prompt = req.prompt.strip()
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt is required")
+    if not prompt and not req.batch_direction:
+        raise HTTPException(status_code=400, detail="prompt or batch_direction is required")
 
     store = get_or_create_store(project_id)
     studio = get_or_create_studio(project_id)
@@ -4233,8 +4270,8 @@ async def generate_one_shot_book_stream(project_id: str, req: OneShotBookRequest
         raise HTTPException(status_code=404, detail="Project not found")
 
     prompt = req.prompt.strip()
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt is required")
+    if not prompt and not req.batch_direction:
+        raise HTTPException(status_code=400, detail="prompt or batch_direction is required")
 
     store = get_or_create_store(project_id)
     studio = get_or_create_studio(project_id)
@@ -4520,8 +4557,12 @@ async def update_draft(chapter_id: str, payload: UpdateDraftRequest):
     return {"chapter": chapter.model_dump(mode="json"), "consistency": consistency}
 
 
+class PlanGenerationRequest(BaseModel):
+    direction_hint: Optional[str] = None
+
+
 @app.post("/api/chapters/{chapter_id}/plan")
-async def generate_plan(chapter_id: str):
+async def generate_plan(chapter_id: str, req: PlanGenerationRequest = PlanGenerationRequest()):
     chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
@@ -4553,18 +4594,24 @@ async def generate_plan(chapter_id: str):
     ]
     context_pack = mem_ctx.build_generation_context_pack(chapter.chapter_number, project_chapters)
 
+    plan_context: Dict[str, Any] = {
+        "project_info": project.model_dump(mode="json"),
+        "previous_chapters": [
+            c.model_dump(mode="json")
+            for c in chapter_list(chapter.project_id)
+            if c.chapter_number < chapter.chapter_number
+        ],
+        "context_pack": context_pack,
+    }
+    if req.direction_hint:
+        plan_context["direction_hint"] = (
+            f"用户对本章的修改方向要求：{req.direction_hint}\n"
+            "请在保持故事连贯性的前提下，按照用户的修改意图重新生成内容。"
+        )
     try:
         plan = await workflow.generate_plan(
             chapter,
-            {
-                "project_info": project.model_dump(mode="json"),
-                "previous_chapters": [
-                    c.model_dump(mode="json")
-                    for c in chapter_list(chapter.project_id)
-                    if c.chapter_number < chapter.chapter_number
-                ],
-                "context_pack": context_pack,
-            },
+            plan_context,
         )
     except RuntimeError as exc:
         logger.warning(
@@ -4970,6 +5017,7 @@ async def _generate_draft_internal_stream(
     progress: ProgressReporter,
     on_stage: Optional[Callable[..., Any]] = None,
     force: bool = False,
+    direction_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     chapter = resolve_chapter(chapter_id)
     if not chapter:
@@ -5082,24 +5130,30 @@ async def _generate_draft_internal_stream(
             "chapter_number": chapter.chapter_number,
         },
     )
+    draft_context: Dict[str, Any] = {
+        "identity": context_pack.get("identity_core") or store.three_layer.get_identity(),
+        "runtime_state": context_pack.get("runtime_state", ""),
+        "memory_compact": context_pack.get("memory_compact", ""),
+        "previous_chapter_synopsis": context_pack.get("previous_chapter_synopsis", ""),
+        "open_threads": context_pack.get("open_threads", []),
+        "project_style": project.style,
+        "target_words": target_words,
+        "previous_chapters": context_pack.get("previous_chapters_compact")
+        or [
+            c.final or c.draft or ""
+            for c in chapter_list(chapter.project_id)
+            if c.chapter_number < chapter.chapter_number
+        ][-5:],
+    }
+    if direction_hint:
+        draft_context["direction_hint"] = (
+            f"用户对本章的修改方向要求：{direction_hint}\n"
+            "请在保持故事连贯性的前提下，按照用户的修改意图重新生成内容。"
+        )
     draft = await workflow.generate_draft_stream(
         chapter,
         chapter.plan,
-        {
-            "identity": context_pack.get("identity_core") or store.three_layer.get_identity(),
-            "runtime_state": context_pack.get("runtime_state", ""),
-            "memory_compact": context_pack.get("memory_compact", ""),
-            "previous_chapter_synopsis": context_pack.get("previous_chapter_synopsis", ""),
-            "open_threads": context_pack.get("open_threads", []),
-            "project_style": project.style,
-            "target_words": target_words,
-            "previous_chapters": context_pack.get("previous_chapters_compact")
-            or [
-                c.final or c.draft or ""
-                for c in chapter_list(chapter.project_id)
-                if c.chapter_number < chapter.chapter_number
-            ][-5:],
-        },
+        draft_context,
         on_stage_chunk=stream_chunk,
         on_stage=on_stage,
     )
@@ -5148,7 +5202,12 @@ async def _generate_draft_internal_stream(
 
 
 @app.get("/api/chapters/{chapter_id}/draft/stream")
-async def stream_draft(chapter_id: str, force: bool = False, resume_from: int = 0):
+async def stream_draft(
+    chapter_id: str,
+    force: bool = False,
+    resume_from: int = 0,
+    direction_hint: Optional[str] = None,
+):
     chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
@@ -5281,6 +5340,7 @@ async def stream_draft(chapter_id: str, force: bool = False, resume_from: int = 
                 progress=report,
                 on_stage=on_stage,
                 force=force,
+                direction_hint=direction_hint,
             )
             await report(
                 "done",
