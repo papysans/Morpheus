@@ -7,6 +7,8 @@ import { useToastStore } from '../../stores/useToastStore'
 
 const mockApiPost = vi.fn()
 const mockApiDelete = vi.fn()
+const appendChildSpy = vi.spyOn(document.body, 'appendChild')
+const removeChildSpy = vi.spyOn(document.body, 'removeChild')
 vi.mock('../../lib/api', () => ({
     api: {
         get: vi.fn().mockResolvedValue({ data: {} }),
@@ -170,6 +172,37 @@ describe('ProjectDetailPage', () => {
         useProjectStore.setState({ currentProject: sampleProject, chapters: [], loading: false })
         renderPage()
         expect(screen.getByText('整书导出')).toBeInTheDocument()
+    })
+
+    it('renders export project button in header actions', () => {
+        useProjectStore.setState({ currentProject: sampleProject, chapters: [], loading: false })
+        renderPage()
+        expect(screen.getByText('导出项目')).toBeInTheDocument()
+    })
+
+    it('clicking 导出项目 triggers project zip download', () => {
+        useProjectStore.setState({ currentProject: sampleProject, chapters: [], loading: false })
+        const createElementSpy = vi.spyOn(document, 'createElement')
+        const clickSpy = vi.fn()
+        createElementSpy.mockImplementation(((tagName: string) => {
+            const element = document.createElementNS('http://www.w3.org/1999/xhtml', tagName) as HTMLAnchorElement
+            if (tagName === 'a') {
+                Object.defineProperty(element, 'click', { value: clickSpy })
+            }
+            return element
+        }) as typeof document.createElement)
+
+        renderPage()
+        fireEvent.click(screen.getByText('导出项目'))
+
+        expect(createElementSpy).toHaveBeenCalledWith('a')
+        const anchor = appendChildSpy.mock.calls.at(-1)?.[0] as HTMLAnchorElement
+        expect(anchor.href).toContain('/api/projects/p1/export')
+        expect(anchor.download).toBe('霜城编年史.zip')
+        expect(clickSpy).toHaveBeenCalled()
+        expect(removeChildSpy).toHaveBeenCalledWith(anchor)
+
+        createElementSpy.mockRestore()
     })
 
     it('shows warning toast when exporting without chapters', () => {

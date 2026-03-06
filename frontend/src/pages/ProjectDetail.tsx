@@ -233,6 +233,16 @@ export default function ProjectDetail() {
     }
   }
 
+  const handleExportProject = () => {
+    if (!projectId || !currentProject) return
+    const a = document.createElement('a')
+    a.href = `/api/projects/${projectId}/export`
+    a.download = `${currentProject.name}.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
+
   const handleDeleteChapter = async (chapter: typeof chapters[number]) => {
     if (!projectId) return
     const confirmed = window.confirm(`确认删除第 ${chapter.chapter_number} 章《${chapter.title}》？此操作不可恢复。`)
@@ -360,6 +370,7 @@ export default function ProjectDetail() {
             </p>
           </div>
           <div className="grid-actions">
+            <button className="btn btn-secondary" onClick={handleExportProject}>导出项目</button>
             <button className="btn btn-secondary" onClick={() => void handleExportBook()} disabled={exportingBook}>
               {exportingBook ? '导出准备中...' : '整书导出'}
             </button>
