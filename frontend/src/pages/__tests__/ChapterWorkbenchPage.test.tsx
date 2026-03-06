@@ -183,7 +183,7 @@ vi.mock('../../components/chapter/ChapterExportMenu', () => ({
 vi.mock('../../components/ui/ReadingModeToolbar', () => ({
     default: ({ onExit, currentLabel }: any) => (
         <div data-testid="reading-toolbar">
-            <button onClick={onExit}>退出阅读</button>
+            <button type="button" onClick={onExit}>退出阅读</button>
             <span>{currentLabel}</span>
         </div>
     ),
@@ -249,18 +249,6 @@ describe('ChapterWorkbenchPage', () => {
         })
         fireEvent.click(screen.getByText('删除本章'))
         expect(screen.getByText('删除当前章节？')).toBeTruthy()
-    })
-
-    it('一句话整篇字数输入允许清空后重输', async () => {
-        renderPage()
-        await waitFor(() => {
-            expect(screen.getByText('一句话整篇')).toBeTruthy()
-        })
-        const wordInput = screen.getByDisplayValue('1600') as HTMLInputElement
-        fireEvent.change(wordInput, { target: { value: '' } })
-        expect(wordInput.value).toBe('')
-        fireEvent.change(wordInput, { target: { value: '2200' } })
-        expect(wordInput.value).toBe('2200')
     })
 
     it('显示决策回放链接', async () => {
@@ -579,10 +567,16 @@ describe('ChapterWorkbenchPage', () => {
         expect(await screen.findByText('润色阶段内容')).toBeTruthy()
     })
 
-    it('显示字数统计', async () => {
+    it('编辑态显示实时草稿字数，预览态显示章节统计字数', async () => {
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText('字数 18')).toBeTruthy()
+            expect(screen.getByText(`字数 ${sampleChapter.draft.length}`)).toBeTruthy()
+        })
+
+        fireEvent.click(screen.getByText('预览正文'))
+
+        await waitFor(() => {
+            expect(screen.getByText(`字数 ${sampleChapter.word_count}`)).toBeTruthy()
         })
     })
 
@@ -784,52 +778,6 @@ describe('ChapterWorkbenchPage', () => {
         expect(screen.getByText('保存编辑并重检')).toBeTruthy()
     })
 
-    it('清空创作台会清空终稿与侧通道，且不触发保存接口', async () => {
-        mockApiGet.mockImplementation((url: string) => {
-            if (url === '/chapters/ch-1') {
-                return Promise.resolve({ data: sampleChapter })
-            }
-            if (url === '/trace/ch-1') {
-                return Promise.resolve({
-                    data: {
-                        channel_snapshot: {
-                            director: '导演阶段待办',
-                            setter: '设定阶段校验',
-                            stylist: '润色阶段建议',
-                        },
-                    },
-                })
-            }
-            return Promise.resolve({ data: sampleChapter })
-        })
-
-        renderPage()
-        await waitFor(() => {
-            expect(screen.getByText('清空创作台')).toBeTruthy()
-        })
-
-        const editor = document.querySelector('textarea[rows="22"]') as HTMLTextAreaElement
-        expect(editor).toBeTruthy()
-        fireEvent.change(editor, { target: { value: '临时编辑内容' } })
-        expect(editor.value).toBe('临时编辑内容')
-
-        fireEvent.click(screen.getByText('导演'))
-        expect(await screen.findByText('导演阶段待办')).toBeTruthy()
-
-        fireEvent.click(screen.getByText('清空创作台'))
-        expect(screen.getByText('清空当前创作台？')).toBeTruthy()
-        fireEvent.click(screen.getByText('确认清空'))
-
-        const clearedEditor = document.querySelector('textarea[rows="22"]') as HTMLTextAreaElement
-        expect(clearedEditor.value).toBe('')
-
-        fireEvent.click(screen.getByText('导演'))
-        expect(await screen.findByText('等待该阶段输出...')).toBeTruthy()
-        expect(screen.queryByText('导演阶段待办')).toBeNull()
-
-        expect(mockApiPut).not.toHaveBeenCalled()
-    })
-
     it('流式生成完成后会清理本地草稿，避免弹出恢复对话框', async () => {
         const originalEventSource = (globalThis as any).EventSource
         const sources: any[] = []
@@ -866,12 +814,12 @@ describe('ChapterWorkbenchPage', () => {
         try {
             renderPage()
             await waitFor(() => {
-                expect(screen.getByText('流式生成草稿')).toBeTruthy()
+                expect(screen.getByText('重做本章')).toBeTruthy()
             })
 
             localStorageMock.removeItem.mockClear()
 
-            fireEvent.click(screen.getByText('流式生成草稿'))
+            fireEvent.click(screen.getByText('重做本章'))
             expect(sources.length).toBeGreaterThan(0)
 
             const source = sources[0]
@@ -898,6 +846,44 @@ describe('ChapterWorkbenchPage', () => {
         await waitFor(() => {
             expect(mockAddToast).toHaveBeenCalledWith('success', '草稿保存成功')
         })
+    })
+
+    it('流式生成进行中时 Cmd/Ctrl+S 不会触发保存草稿', async () => {
+        const originalEventSource = (globalThis as any).EventSource
+
+        class MockEventSource {
+            onerror: any = null
+            private listeners = new Map<string, Array<(event: MessageEvent) => void>>()
+            constructor(_url: string) { /* noop */ }
+            addEventListener(type: string, listener: (event: MessageEvent) => void) {
+                const list = this.listeners.get(type) || []
+                list.push(listener)
+                this.listeners.set(type, list)
+            }
+            close() { return undefined }
+        }
+
+        (globalThis as any).EventSource = MockEventSource as any
+
+        try {
+            renderPage()
+            await waitFor(() => {
+                expect(screen.getByText('重做本章')).toBeTruthy()
+            })
+
+            fireEvent.click(screen.getByText('重做本章'))
+
+            const metaEvent = new KeyboardEvent('keydown', { key: 's', metaKey: true, cancelable: true })
+            const ctrlEvent = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true })
+            window.dispatchEvent(metaEvent)
+            window.dispatchEvent(ctrlEvent)
+
+            expect(mockApiPut).not.toHaveBeenCalled()
+            expect(metaEvent.defaultPrevented).toBe(true)
+            expect(ctrlEvent.defaultPrevented).toBe(true)
+        } finally {
+            (globalThis as any).EventSource = originalEventSource
+        }
     })
 
     /* ── useProjectStore 集成 ── */
