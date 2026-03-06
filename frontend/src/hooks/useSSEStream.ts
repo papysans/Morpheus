@@ -288,7 +288,7 @@ export function useSSEStream() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     ...opts.form,
-                    prompt: opts.form.prompt.trim(),
+                    batch_direction: opts.form.batch_direction.trim(),
                 }),
                 signal: controller.signal,
             })

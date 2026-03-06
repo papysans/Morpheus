@@ -75,12 +75,12 @@ describe('useSSEStream', () => {
             await result.current.start({
                 projectId: 'proj-1',
                 form: {
-                    prompt: '写一本小说',
+                    batch_direction: '写一本小说',
                     mode: 'studio',
-                    scope: 'volume',
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
+                    start_chapter: 1,
                 },
                 onChapterStart,
                 onChapterDone,
@@ -124,12 +124,12 @@ describe('useSSEStream', () => {
             await result.current.start({
                 projectId: 'proj-1',
                 form: {
-                    prompt: '写一本小说',
+                    batch_direction: '写一本小说',
                     mode: 'studio',
-                    scope: 'volume',
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
+                    start_chapter: 1,
                 },
                 onError,
             })
@@ -159,12 +159,12 @@ describe('useSSEStream', () => {
             await result.current.start({
                 projectId: 'proj-2',
                 form: {
-                    prompt: '写一本小说',
+                    batch_direction: '写一本小说',
                     mode: 'studio',
-                    scope: 'volume',
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
+                    start_chapter: 1,
                 },
             })
         })
@@ -187,12 +187,12 @@ describe('useSSEStream', () => {
             await result.current.start({
                 projectId: 'proj-1',
                 form: {
-                    prompt: '写一本小说',
+                    batch_direction: '写一本小说',
                     mode: 'studio',
-                    scope: 'volume',
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
+                    start_chapter: 1,
                 },
                 onError,
             })
@@ -219,12 +219,12 @@ describe('useSSEStream', () => {
             startPromise = result.current.start({
                 projectId: 'proj-1',
                 form: {
-                    prompt: '写一本小说',
+                    batch_direction: '写一本小说',
                     mode: 'studio',
-                    scope: 'volume',
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
+                    start_chapter: 1,
                 },
             })
         })

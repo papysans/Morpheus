@@ -145,15 +145,14 @@ describe('WritingConsolePage', () => {
 
     it('渲染生成表单的 prompt 输入框', () => {
         renderPage()
-        const textarea = screen.getByPlaceholderText(/一句话输入你的小说核心/)
+        const textarea = screen.getByPlaceholderText(/对这批章节的创作方向/)
         expect(textarea).toBeTruthy()
     })
 
-    it('从项目概览带参进入时自动填充 prompt 与 scope', () => {
-        renderPage('/project/proj-1/write?prompt=%E6%B5%8B%E8%AF%95%E6%A2%97%E6%A6%82&scope=book')
-        const textarea = screen.getByPlaceholderText(/一句话输入你的小说核心/) as HTMLTextAreaElement
-        expect(textarea.value).toBe('测试梗概')
-        expect(screen.getByText('整本').className).toContain('active')
+    it('从项目概览带参进入时自动填充 direction', () => {
+        renderPage('/project/proj-1/write?direction=%E6%B5%8B%E8%AF%95%E6%96%B9%E5%90%91')
+        const textarea = screen.getByPlaceholderText(/对这批章节的创作方向/) as HTMLTextAreaElement
+        expect(textarea.value).toBe('测试方向')
     })
 
     it('渲染模式选择按钮', () => {
@@ -163,35 +162,20 @@ describe('WritingConsolePage', () => {
         expect(screen.getByText('电影感')).toBeTruthy()
     })
 
-    it('渲染范围选择按钮', () => {
+    it('有模板时显示模板名称标签', () => {
+        mockProjectStore.currentProject = { ...mockProjectStore.currentProject!, template_id: 'short-story' }
         renderPage()
-        expect(screen.getByText('单卷')).toBeTruthy()
-        expect(screen.getByText('整本')).toBeTruthy()
+        expect(screen.getAllByText(/模板/).length).toBeGreaterThan(0)
     })
 
-    it('渲染模板预设选择器', () => {
+    it('batch_direction 为空时仍可点击开始生成', () => {
         renderPage()
-        expect(screen.getByLabelText('模板预设')).toBeTruthy()
-    })
-
-    it('prompt 为空时禁用开始生成按钮', () => {
-        renderPage()
-        const btn = screen.getByText('开始生成')
-        expect(btn).toHaveProperty('disabled', true)
-    })
-
-    it('输入 prompt 后可以点击开始生成', () => {
-        renderPage()
-        const textarea = screen.getByPlaceholderText(/一句话输入你的小说核心/)
-        fireEvent.change(textarea, { target: { value: '一个关于时间旅行的故事' } })
         const btn = screen.getByText('开始生成')
         expect(btn).toHaveProperty('disabled', false)
     })
 
     it('点击开始生成时调用 start 并触发 Toast', () => {
         renderPage()
-        const textarea = screen.getByPlaceholderText(/一句话输入你的小说核心/)
-        fireEvent.change(textarea, { target: { value: '测试提示' } })
         fireEvent.click(screen.getByText('开始生成'))
         expect(mockStart).toHaveBeenCalledTimes(1)
         expect(mockAddToast).toHaveBeenCalledWith('info', '开始生成，请稍候…')
@@ -210,7 +194,7 @@ describe('WritingConsolePage', () => {
         const payload = mockStart.mock.calls[0][0]
         expect(payload.form.continuation_mode).toBe(true)
         expect(payload.form.start_chapter_number).toBe(4)
-        expect(String(payload.form.prompt)).toContain('延续当前故事')
+        expect(String(payload.form.batch_direction)).toContain('延续当前故事')
     })
 
     it('有 sections 时渲染 Markdown 内容', () => {
@@ -256,7 +240,6 @@ describe('WritingConsolePage', () => {
             { id: 'ch-1', chapter_number: 1, title: '序章', status: 'done', word_count: 1500, p0_count: 0 },
         ]
         renderPage()
-        fireEvent.click(screen.getByText('显示辅助面板'))
         fireEvent.click(screen.getByText('统计'))
         expect(screen.getByText('1 章')).toBeTruthy()
     })
@@ -267,12 +250,56 @@ describe('WritingConsolePage', () => {
             { chapterId: 'ch-2', chapterNumber: 2, title: '觉醒', body: '更多内容', waiting: false },
         ]
         renderPage()
-        fireEvent.click(screen.getByText('显示辅助面板'))
         expect(screen.getAllByText('章节目录').length).toBeGreaterThan(0)
         expect(screen.getByText('第1章')).toBeTruthy()
         expect(screen.getByText('序章')).toBeTruthy()
         expect(screen.getByText('第2章')).toBeTruthy()
         expect(screen.getByText('觉醒')).toBeTruthy()
+    })
+
+    it('点击目录条目后会同步高亮当前章节', async () => {
+        mockStreamStore.sections = [
+            { chapterId: 'ch-1', chapterNumber: 1, title: '序章', body: '内容', waiting: false },
+            { chapterId: 'ch-2', chapterNumber: 2, title: '觉醒', body: '更多内容', waiting: false },
+        ]
+        renderPage()
+
+        const paper = document.querySelector('.stream-paper') as HTMLElement
+        const scrollToMock = vi.fn()
+        Object.defineProperty(paper, 'scrollTo', {
+            value: scrollToMock,
+            configurable: true,
+        })
+
+        const targetButton = screen.getByText('觉醒').closest('button') as HTMLButtonElement
+        fireEvent.click(targetButton)
+
+        await waitFor(() => {
+            expect(targetButton.className).toContain('writing-toc__item--active')
+        })
+        expect(scrollToMock).toHaveBeenCalled()
+    })
+
+    it('手动滚动正文时目录高亮会同步到当前章节', async () => {
+        mockStreamStore.sections = [
+            { chapterId: 'ch-1', chapterNumber: 1, title: '序章', body: '内容', waiting: false },
+            { chapterId: 'ch-2', chapterNumber: 2, title: '觉醒', body: '更多内容', waiting: false },
+        ]
+        renderPage()
+
+        const paper = document.querySelector('.stream-paper') as HTMLElement
+        const sectionEls = Array.from(document.querySelectorAll('.stream-section')) as HTMLElement[]
+        const activeButton = screen.getByText('觉醒').closest('button') as HTMLButtonElement
+
+        Object.defineProperty(sectionEls[0], 'offsetTop', { value: 0, configurable: true })
+        Object.defineProperty(sectionEls[1], 'offsetTop', { value: 600, configurable: true })
+        Object.defineProperty(paper, 'scrollTop', { value: 650, writable: true, configurable: true })
+
+        fireEvent.scroll(paper)
+
+        await waitFor(() => {
+            expect(activeButton.className).toContain('writing-toc__item--active')
+        })
     })
 
     it('显示错误信息', () => {
@@ -297,15 +324,19 @@ describe('WritingConsolePage', () => {
         expect(mockAddToast).toHaveBeenCalledWith('success', '已清空当前创作草稿显示区')
     })
 
-    it('渲染高级设置区域', () => {
+    it('渲染生成设置区域', () => {
         renderPage()
-        expect(screen.getByText('高级设置')).toBeTruthy()
+        expect(document.querySelector('.settings-grid')).toBeTruthy()
+    })
+
+    it('不再显示无效的起始章节输入项', () => {
+        renderPage()
+        expect(screen.queryByLabelText(/起始章节/)).toBeNull()
     })
 
     it('渲染日志面板', () => {
         mockStreamStore.logs = ['10:00:00  开始流式生成']
         renderPage()
-        fireEvent.click(screen.getByText('显示辅助面板'))
         fireEvent.click(screen.getByText('日志'))
         expect(screen.getByText('生成日志')).toBeTruthy()
         expect(screen.getByText(/10:00:00.*开始流式生成/)).toBeTruthy()
@@ -352,7 +383,7 @@ describe('WritingConsolePage', () => {
         ]
         renderPage()
         expect(screen.queryByText('创作控制台')).toBeNull()
-        expect(screen.queryByPlaceholderText(/一句话输入你的小说核心/)).toBeNull()
+        expect(screen.queryByPlaceholderText(/对这批章节的创作方向/)).toBeNull()
         expect(screen.queryByText('生成日志')).toBeNull()
     })
 
@@ -400,23 +431,23 @@ describe('WritingConsolePage', () => {
 
     /* ── 高级设置字段级校验测试 ── */
 
-    it('章节数输入获得焦点时显示推荐值提示', () => {
+    it('章节数输入失焦后值在范围内时显示推荐值提示', () => {
         renderPage()
-        const input = screen.getByLabelText('章节数')
-        fireEvent.focus(input)
+        const input = screen.getByLabelText(/章节数/)
+        fireEvent.blur(input)
         expect(screen.getByText('推荐 8-12 章')).toBeTruthy()
     })
 
-    it('每章目标字数输入获得焦点时显示推荐值提示', () => {
+    it('每章字数输入失焦后值在范围内时显示推荐值提示', () => {
         renderPage()
-        const input = screen.getByLabelText('每章目标字数')
-        fireEvent.focus(input)
+        const input = screen.getByLabelText(/每章字数/)
+        fireEvent.blur(input)
         expect(screen.getByText('推荐 1200-2000 字')).toBeTruthy()
     })
 
     it('章节数超出范围时失焦显示错误提示', () => {
         renderPage()
-        const input = screen.getByLabelText('章节数')
+        const input = screen.getByLabelText(/章节数/)
         fireEvent.change(input, { target: { value: '100' } })
         fireEvent.blur(input)
         expect(screen.getByText('范围：1-60')).toBeTruthy()
@@ -424,7 +455,7 @@ describe('WritingConsolePage', () => {
 
     it('每章目标字数超出范围时失焦显示错误提示', () => {
         renderPage()
-        const input = screen.getByLabelText('每章目标字数')
+        const input = screen.getByLabelText(/每章字数/)
         fireEvent.change(input, { target: { value: '50000' } })
         fireEvent.blur(input)
         expect(screen.getByText('范围：300-12000')).toBeTruthy()
@@ -432,7 +463,7 @@ describe('WritingConsolePage', () => {
 
     it('章节数超出范围时输入框添加 field-error 类', () => {
         renderPage()
-        const input = screen.getByLabelText('章节数')
+        const input = screen.getByLabelText(/章节数/)
         fireEvent.change(input, { target: { value: '100' } })
         fireEvent.blur(input)
         expect(input.className).toContain('field-error')
@@ -440,14 +471,26 @@ describe('WritingConsolePage', () => {
 
     it('章节数在范围内时不添加 field-error 类', () => {
         renderPage()
-        const input = screen.getByLabelText('章节数')
+        const input = screen.getByLabelText(/章节数/)
         fireEvent.focus(input)
         expect(input.className).not.toContain('field-error')
     })
 
+    it('高级设置超出范围时禁用从最新章节续写按钮', () => {
+        renderPage()
+        fireEvent.change(screen.getByPlaceholderText(/对这批章节的创作方向/), {
+            target: { value: '测试续写参数校验' },
+        })
+        const input = screen.getByLabelText(/章节数/)
+        fireEvent.change(input, { target: { value: '100' } })
+        fireEvent.blur(input)
+
+        expect(screen.getByText('从最新章节续写')).toHaveProperty('disabled', true)
+    })
+
     it('章节数支持先清空再输入新值', () => {
         renderPage()
-        const input = screen.getByLabelText('章节数') as HTMLInputElement
+        const input = screen.getByLabelText(/章节数/) as HTMLInputElement
         fireEvent.change(input, { target: { value: '' } })
         expect(input.value).toBe('')
 
@@ -457,7 +500,7 @@ describe('WritingConsolePage', () => {
 
     it('每章字数支持先清空再输入新值', () => {
         renderPage()
-        const input = screen.getByLabelText('每章目标字数') as HTMLInputElement
+        const input = screen.getByLabelText(/每章字数/) as HTMLInputElement
         fireEvent.change(input, { target: { value: '' } })
         expect(input.value).toBe('')
 
@@ -467,26 +510,23 @@ describe('WritingConsolePage', () => {
 
     it('高级设置会按项目持久化并在重新进入后沿用', () => {
         const { unmount } = renderPage()
-        const chapterInput = screen.getByLabelText('章节数') as HTMLInputElement
-        const wordsInput = screen.getByLabelText('每章目标字数') as HTMLInputElement
-        const bookBtn = screen.getByText('整本')
+        const chapterInput = screen.getByLabelText(/章节数/) as HTMLInputElement
+        const wordsInput = screen.getByLabelText(/每章字数/) as HTMLInputElement
         const quickBtn = screen.getByText('快速')
-        const autoApprove = screen.getByLabelText('无 P0 冲突自动审批') as HTMLInputElement
+        const autoApprove = screen.getByLabelText('自动审批') as HTMLInputElement
 
         fireEvent.change(chapterInput, { target: { value: '16' } })
         fireEvent.change(wordsInput, { target: { value: '2200' } })
-        fireEvent.click(bookBtn)
         fireEvent.click(quickBtn)
         fireEvent.click(autoApprove)
 
         unmount()
 
         renderPage()
-        expect((screen.getByLabelText('章节数') as HTMLInputElement).value).toBe('16')
-        expect((screen.getByLabelText('每章目标字数') as HTMLInputElement).value).toBe('2200')
-        expect(screen.getByText('整本').className).toContain('active')
+        expect((screen.getByLabelText(/章节数/) as HTMLInputElement).value).toBe('16')
+        expect((screen.getByLabelText(/每章字数/) as HTMLInputElement).value).toBe('2200')
         expect(screen.getByText('快速').className).toContain('active')
-        expect((screen.getByLabelText('无 P0 冲突自动审批') as HTMLInputElement).checked).toBe(false)
+        expect((screen.getByLabelText('自动审批') as HTMLInputElement).checked).toBe(false)
     })
 
     it('初次加载不会弹出高级设置已保存提示', () => {
@@ -502,10 +542,75 @@ describe('WritingConsolePage', () => {
 
     it('修改高级设置后会静默持久化', () => {
         renderPage()
-        const input = screen.getByLabelText('章节数') as HTMLInputElement
+        const input = screen.getByLabelText(/章节数/) as HTMLInputElement
         fireEvent.change(input, { target: { value: '12' } })
         fireEvent.blur(input)
         expect(localStorageMock.setItem).toHaveBeenCalled()
         expect(mockAddToast).not.toHaveBeenCalledWith('info', '高级设置已保存')
+    })
+
+    it('流式生成报错后的重新开始动作会拦截非法高级设置', () => {
+        renderPage()
+        fireEvent.change(screen.getByPlaceholderText(/对这批章节的创作方向/), {
+            target: { value: '测试重启参数校验' },
+        })
+        fireEvent.click(screen.getByText('开始生成'))
+        expect(mockStart).toHaveBeenCalledTimes(1)
+
+        const input = screen.getByLabelText(/章节数/)
+        fireEvent.change(input, { target: { value: '100' } })
+        fireEvent.blur(input)
+
+        const payload = mockStart.mock.calls[0][0]
+        payload.onError('网络抖动')
+
+        const restartAction = mockAddToast.mock.calls
+            .find((call) => call[0] === 'error' && call[1] === '流式生成中断')?.[2]
+            ?.actions?.find((action: { label: string }) => action.label === '重新开始')
+
+        expect(restartAction).toBeTruthy()
+        mockAddToast.mockClear()
+
+        restartAction.onClick()
+
+        expect(mockStart).toHaveBeenCalledTimes(1)
+        expect(mockAddToast).toHaveBeenCalledWith(
+            'error',
+            '高级设置参数超出范围，请检查后重试',
+            expect.objectContaining({ context: '创作设置' }),
+        )
+    })
+
+    it('流式生成报错后的从断点续写动作会拦截非法高级设置', async () => {
+        renderPage()
+        fireEvent.change(screen.getByPlaceholderText(/对这批章节的创作方向/), {
+            target: { value: '测试断点续写参数校验' },
+        })
+        fireEvent.click(screen.getByText('开始生成'))
+        expect(mockStart).toHaveBeenCalledTimes(1)
+
+        const input = screen.getByLabelText(/章节数/)
+        fireEvent.change(input, { target: { value: '100' } })
+        fireEvent.blur(input)
+
+        const payload = mockStart.mock.calls[0][0]
+        payload.onError('网络抖动')
+
+        const continueAction = mockAddToast.mock.calls
+            .find((call) => call[0] === 'error' && call[1] === '流式生成中断')?.[2]
+            ?.actions?.find((action: { label: string }) => action.label === '从断点续写')
+
+        expect(continueAction).toBeTruthy()
+        mockAddToast.mockClear()
+
+        await continueAction.onClick()
+
+        expect(mockApiGet).not.toHaveBeenCalled()
+        expect(mockStart).toHaveBeenCalledTimes(1)
+        expect(mockAddToast).toHaveBeenCalledWith(
+            'error',
+            '高级设置参数超出范围，请检查后重试',
+            expect.objectContaining({ context: '创作设置' }),
+        )
     })
 })

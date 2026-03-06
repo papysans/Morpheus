@@ -17,12 +17,12 @@ import { useProjectStore } from '../stores/useProjectStore'
 import { useToastStore } from '../stores/useToastStore'
 import { useActivityStore } from '../stores/useActivityStore'
 import { useUIStore } from '../stores/useUIStore'
-import { STORY_TEMPLATE_PRESETS, getStoryTemplateById } from '../config/storyTemplates'
+import { getStoryTemplateById } from '../config/storyTemplates'
 
 /* ── SVG 图标 ── */
 
 export const IconBookOpen = () => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
         <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
@@ -37,10 +37,6 @@ const MODE_LABELS: Record<string, string> = {
     cinematic: '电影感',
 }
 
-const SCOPE_LABELS: Record<string, string> = {
-    volume: '单卷',
-    book: '整本',
-}
 
 const CHAPTER_COUNT_RULE = { min: 1, max: 60, hint: '推荐 8-12 章' } as const
 const WORDS_PER_CHAPTER_RULE = { min: 300, max: 12000, hint: '推荐 1200-2000 字' } as const
@@ -48,7 +44,7 @@ const CONTINUATION_FALLBACK_PROMPT = '延续当前故事，推进未决冲突与
 
 type PersistedWritingSettings = Pick<
     GenerationForm,
-    'mode' | 'scope' | 'chapter_count' | 'words_per_chapter' | 'auto_approve'
+    'mode' | 'chapter_count' | 'words_per_chapter' | 'auto_approve'
 >
 
 type ChapterPlanDraft = {
@@ -77,21 +73,26 @@ function isDigitsOnly(value: string) {
     return /^\d*$/.test(value)
 }
 
+function hasInvalidAdvancedSettings(form: Pick<GenerationForm, 'chapter_count' | 'words_per_chapter'>) {
+    return form.chapter_count < CHAPTER_COUNT_RULE.min
+        || form.chapter_count > CHAPTER_COUNT_RULE.max
+        || form.words_per_chapter < WORDS_PER_CHAPTER_RULE.min
+        || form.words_per_chapter > WORDS_PER_CHAPTER_RULE.max
+}
+
 function normalizePersistedSettings(raw: unknown): PersistedWritingSettings | null {
     if (!raw || typeof raw !== 'object') return null
     const data = raw as Partial<Record<keyof PersistedWritingSettings, unknown>>
 
     const mode = data.mode === 'studio' || data.mode === 'quick' || data.mode === 'cinematic' ? data.mode : null
-    const scope = data.scope === 'volume' || data.scope === 'book' ? data.scope : null
     const chapterCountNum = typeof data.chapter_count === 'number' ? data.chapter_count : Number(data.chapter_count)
     const wordsNum = typeof data.words_per_chapter === 'number' ? data.words_per_chapter : Number(data.words_per_chapter)
     const autoApprove = typeof data.auto_approve === 'boolean' ? data.auto_approve : true
 
-    if (!mode || !scope || Number.isNaN(chapterCountNum) || Number.isNaN(wordsNum)) return null
+    if (!mode || Number.isNaN(chapterCountNum) || Number.isNaN(wordsNum)) return null
 
     return {
         mode,
-        scope,
         chapter_count: Math.max(CHAPTER_COUNT_RULE.min, Math.min(CHAPTER_COUNT_RULE.max, Math.floor(chapterCountNum))),
         words_per_chapter: Math.max(WORDS_PER_CHAPTER_RULE.min, Math.min(WORDS_PER_CHAPTER_RULE.max, Math.floor(wordsNum))),
         auto_approve: autoApprove,
@@ -246,6 +247,25 @@ function formatPlanDraftAsMarkdown(plan: ChapterPlanDraft): string {
     return blocks.join('\n\n')
 }
 
+function dedupeStringItems(items: string[]) {
+    const seen = new Map<string, number>()
+    return items.map((item) => {
+        const occurrence = seen.get(item) ?? 0
+        seen.set(item, occurrence + 1)
+        return { key: `${item}-${occurrence}`, value: item }
+    })
+}
+
+function dedupeRoleGoals(items: Array<{ role: string; goal: string }>) {
+    const seen = new Map<string, number>()
+    return items.map((item) => {
+        const baseKey = `${item.role}-${item.goal}`
+        const occurrence = seen.get(baseKey) ?? 0
+        seen.set(baseKey, occurrence + 1)
+        return { key: `${baseKey}-${occurrence}`, value: item }
+    })
+}
+
 function composeSectionBodies(
     narrativeBody: string,
     planDraft: ChapterPlanDraft | null,
@@ -284,7 +304,7 @@ function PlanDraftBlock({ plan }: { plan: ChapterPlanDraft }) {
                     <p className="stream-plan__card-title">节拍</p>
                     {plan.beats.length > 0 ? (
                         <ol className="stream-plan__list stream-plan__list--ordered">
-                            {plan.beats.map((item, idx) => <li key={`${item}-${idx}`}>{item}</li>)}
+                            {dedupeStringItems(plan.beats).map(({ key, value }) => <li key={key}>{value}</li>)}
                         </ol>
                     ) : (
                         <p className="stream-plan__empty">暂无节拍。</p>
@@ -295,7 +315,7 @@ function PlanDraftBlock({ plan }: { plan: ChapterPlanDraft }) {
                     <p className="stream-plan__card-title">冲突</p>
                     {plan.conflicts.length > 0 ? (
                         <ul className="stream-plan__list">
-                            {plan.conflicts.map((item, idx) => <li key={`${item}-${idx}`}>{item}</li>)}
+                            {dedupeStringItems(plan.conflicts).map(({ key, value }) => <li key={key}>{value}</li>)}
                         </ul>
                     ) : (
                         <p className="stream-plan__empty">暂无冲突。</p>
@@ -306,7 +326,7 @@ function PlanDraftBlock({ plan }: { plan: ChapterPlanDraft }) {
                     <p className="stream-plan__card-title">伏笔</p>
                     {plan.foreshadowing.length > 0 ? (
                         <ul className="stream-plan__list">
-                            {plan.foreshadowing.map((item, idx) => <li key={`${item}-${idx}`}>{item}</li>)}
+                            {dedupeStringItems(plan.foreshadowing).map(({ key, value }) => <li key={key}>{value}</li>)}
                         </ul>
                     ) : (
                         <p className="stream-plan__empty">暂无伏笔。</p>
@@ -317,7 +337,7 @@ function PlanDraftBlock({ plan }: { plan: ChapterPlanDraft }) {
                     <p className="stream-plan__card-title">回收目标</p>
                     {plan.callbackTargets.length > 0 ? (
                         <ul className="stream-plan__list">
-                            {plan.callbackTargets.map((item, idx) => <li key={`${item}-${idx}`}>{item}</li>)}
+                            {dedupeStringItems(plan.callbackTargets).map(({ key, value }) => <li key={key}>{value}</li>)}
                         </ul>
                     ) : (
                         <p className="stream-plan__empty">暂无回收目标。</p>
@@ -329,9 +349,9 @@ function PlanDraftBlock({ plan }: { plan: ChapterPlanDraft }) {
                 <p className="stream-plan__card-title">角色目标</p>
                 {plan.roleGoals.length > 0 ? (
                     <ul className="stream-plan__list">
-                        {plan.roleGoals.map((item, idx) => (
-                            <li key={`${item.role}-${idx}`}>
-                                <strong>{item.role}</strong>：{item.goal}
+                        {dedupeRoleGoals(plan.roleGoals).map(({ key, value }) => (
+                            <li key={key}>
+                                <strong>{value.role}</strong>：{value.goal}
                             </li>
                         ))}
                     </ul>
@@ -384,9 +404,8 @@ export default function WritingConsolePage() {
     const [activeChapterIdx, setActiveChapterIdx] = useState(0)
 
     const [form, setForm] = useState<GenerationForm>({
-        prompt: '',
+        batch_direction: '',
         mode: 'studio',
-        scope: 'volume',
         chapter_count: 8,
         words_per_chapter: 1600,
         auto_approve: true,
@@ -394,7 +413,7 @@ export default function WritingConsolePage() {
     const [chapterCountInput, setChapterCountInput] = useState('8')
     const [wordsPerChapterInput, setWordsPerChapterInput] = useState('1600')
     const [continuationPreparing, setContinuationPreparing] = useState(false)
-    const [auxPanelOpen, setAuxPanelOpen] = useState(false)
+    const [auxPanelOpen, setAuxPanelOpen] = useState(true)
     const [auxPanelTab, setAuxPanelTab] = useState<'toc' | 'stats' | 'logs'>('toc')
 
     const [advErrors, setAdvErrors] = useState<Record<string, FieldError | null>>({})
@@ -402,6 +421,9 @@ export default function WritingConsolePage() {
     const settingsLoadedRef = useRef<string | null>(null)
     const settingsHydratedRef = useRef(false)
     const lastSavedSettingsRef = useRef<string | null>(null)
+    const latestFormRef = useRef(form)
+
+    latestFormRef.current = form
 
     const settingsStorageKey = useMemo(
         () => (projectId ? `writing-console-settings:${projectId}` : null),
@@ -446,7 +468,6 @@ export default function WritingConsolePage() {
         if (!settingsStorageKey || !settingsHydratedRef.current) return
         const payload: PersistedWritingSettings = {
             mode: form.mode,
-            scope: form.scope,
             chapter_count: form.chapter_count,
             words_per_chapter: form.words_per_chapter,
             auto_approve: form.auto_approve,
@@ -462,7 +483,6 @@ export default function WritingConsolePage() {
     }, [
         settingsStorageKey,
         form.mode,
-        form.scope,
         form.chapter_count,
         form.words_per_chapter,
         form.auto_approve,
@@ -480,28 +500,18 @@ export default function WritingConsolePage() {
     useEffect(() => {
         if (prefillAppliedRef.current) return
 
-        const prompt = searchParams.get('prompt')?.trim() ?? ''
-        const scope = searchParams.get('scope')
-        const hasPrompt = prompt.length > 0
-        const hasScope = scope === 'volume' || scope === 'book'
+        const direction = searchParams.get('direction')?.trim() ?? ''
+        const hasDirection = direction.length > 0
 
-        if (!hasPrompt && !hasScope) {
+        if (!hasDirection) {
             prefillAppliedRef.current = true
             return
         }
 
         setForm((prev) => {
             const next = { ...prev }
-            if (hasPrompt && !prev.prompt.trim()) {
-                next.prompt = prompt
-            }
-            if (scope === 'volume' || scope === 'book') {
-                next.scope = scope
-                if (scope === 'book') {
-                    next.chapter_count = Math.max(next.chapter_count, 12)
-                } else {
-                    next.chapter_count = Math.min(next.chapter_count, 10)
-                }
+            if (hasDirection && !prev.batch_direction.trim()) {
+                next.batch_direction = direction
             }
             return next
         })
@@ -509,8 +519,7 @@ export default function WritingConsolePage() {
         prefillAppliedRef.current = true
         setSearchParams((prev) => {
             const next = new URLSearchParams(prev)
-            next.delete('prompt')
-            next.delete('scope')
+            next.delete('direction')
             return next
         }, { replace: true })
     }, [searchParams, setSearchParams])
@@ -581,15 +590,39 @@ export default function WritingConsolePage() {
 
     /* ── 自动滚动 ── */
     useEffect(() => {
-        if (streamRef.current) {
-            streamRef.current.scrollTop = streamRef.current.scrollHeight
-        }
+        if (!markdownText || !streamRef.current) return
+        streamRef.current.scrollTop = streamRef.current.scrollHeight
     }, [markdownText])
 
     useEffect(() => {
-        if (logRef.current) {
-            logRef.current.scrollTop = logRef.current.scrollHeight
+        const container = streamRef.current
+        if (!container || sectionViewModels.length === 0) return
+
+        const handleScroll = () => {
+            const sectionElements = Array.from(container.querySelectorAll<HTMLElement>('.stream-section'))
+            if (sectionElements.length === 0) return
+
+            const scrollAnchor = container.scrollTop + 24
+            let nextIdx = 0
+            for (let i = 0; i < sectionElements.length; i += 1) {
+                if (sectionElements[i].offsetTop <= scrollAnchor) {
+                    nextIdx = i
+                } else {
+                    break
+                }
+            }
+
+            setActiveChapterIdx((prev) => (prev === nextIdx ? prev : nextIdx))
         }
+
+        handleScroll()
+        container.addEventListener('scroll', handleScroll)
+        return () => container.removeEventListener('scroll', handleScroll)
+    }, [sectionViewModels])
+
+    useEffect(() => {
+        if (!logRef.current || logs.length === 0) return
+        logRef.current.scrollTop = logRef.current.scrollHeight
     }, [logs])
 
     /* ── 统计 ── */
@@ -620,26 +653,26 @@ export default function WritingConsolePage() {
             }))
     }, [sectionViewModels])
 
-    function applyTemplatePreset(templateId: string) {
-        const template = getStoryTemplateById(templateId)
-        if (!template) return
-        setForm((prev) => ({
-            ...prev,
-            scope: template.recommended.scope,
-            mode: template.recommended.mode,
-            chapter_count: template.recommended.chapterCount,
-            words_per_chapter: template.recommended.wordsPerChapter,
-        }))
-        addToast('info', `已套用模板参数：${template.name}`)
-    }
+    const reportInvalidAdvancedSettings = useCallback(() => {
+        addToast('error', '高级设置参数超出范围，请检查后重试', {
+            context: '创作设置',
+            detail: `章节数范围 ${CHAPTER_COUNT_RULE.min}-${CHAPTER_COUNT_RULE.max}，每章目标字数范围 ${WORDS_PER_CHAPTER_RULE.min}-${WORDS_PER_CHAPTER_RULE.max}`,
+        })
+    }, [addToast])
+
 
     /* ── 开始生成 ── */
     function handleStart() {
-        if (!projectId || !form.prompt.trim() || generating) return
+        const currentForm = latestFormRef.current
+        if (!projectId || generating) return
+        if (hasInvalidAdvancedSettings(currentForm)) {
+            reportInvalidAdvancedSettings()
+            return
+        }
         addToast('info', '开始生成，请稍候…')
         start({
             projectId,
-            form,
+            form: currentForm,
             onChapterStart: (ch: StreamChapter) => {
                 addToast('info', `开始第 ${ch.chapter_number} 章：${ch.title}`)
             },
@@ -650,12 +683,12 @@ export default function WritingConsolePage() {
                 addToast('error', '流式生成中断', {
                     context: '流式生成',
                     actions: [
-                        { label: '继续生成', onClick: () => handleStart() },
+                        { label: '从断点续写', onClick: () => void handleContinueFromLatest() },
                         { label: '重新开始', onClick: () => { stop(); handleStart() } },
                     ],
                     detail: err,
                 })
-                addRecord({ type: 'generate', description: '流式生成中断', status: 'error', retryAction: () => handleStart() })
+                addRecord({ type: 'generate', description: '流式生成中断', status: 'error', retryAction: () => void handleContinueFromLatest() })
             },
             onComplete: () => {
                 addToast('success', '全部章节生成完成！')
@@ -665,7 +698,12 @@ export default function WritingConsolePage() {
     }
 
     async function handleContinueFromLatest() {
+        const currentForm = latestFormRef.current
         if (!projectId || generating || continuationPreparing) return
+        if (hasInvalidAdvancedSettings(currentForm)) {
+            reportInvalidAdvancedSettings()
+            return
+        }
         setContinuationPreparing(true)
         try {
             const chapterRes = await api.get(`/projects/${projectId}/chapters`)
@@ -675,16 +713,16 @@ export default function WritingConsolePage() {
                 return Number.isFinite(chapterNo) ? Math.max(max, chapterNo) : max
             }, 0)
             const startChapterNumber = latestChapterNumber > 0 ? latestChapterNumber + 1 : 1
-            const continuationPrompt = form.prompt.trim() || CONTINUATION_FALLBACK_PROMPT
-            if (!form.prompt.trim()) {
-                addToast('info', '未填写梗概，已使用默认续写提示。')
+            const continuationPrompt = currentForm.batch_direction.trim() || CONTINUATION_FALLBACK_PROMPT
+            if (!currentForm.batch_direction.trim()) {
+                addToast('info', '未填写创作方向，已使用默认续写提示。')
             }
             addToast('info', `从第 ${startChapterNumber} 章开始续写。`)
             start({
                 projectId,
                 form: {
-                    ...form,
-                    prompt: continuationPrompt,
+                    ...currentForm,
+                    batch_direction: continuationPrompt,
                     continuation_mode: true,
                     start_chapter_number: startChapterNumber,
                 },
@@ -733,6 +771,7 @@ export default function WritingConsolePage() {
     function scrollToChapter(chapterId: string) {
         const idx = sections.findIndex((s) => s.chapterId === chapterId)
         if (idx < 0 || !streamRef.current) return
+        setActiveChapterIdx(idx)
         // 简单实现：按比例滚动
         const el = streamRef.current
         const ratio = idx / Math.max(sections.length, 1)
@@ -740,13 +779,14 @@ export default function WritingConsolePage() {
     }
 
     /* ── "开始生成"按钮禁用状态 ── */
-    const startDisabled = !projectId || generating || !form.prompt.trim()
+    const hasAdvValidationError = hasInvalidAdvancedSettings(form)
+    const startDisabled = !projectId || generating || hasAdvValidationError
     const startDisabledReason = !projectId
         ? '缺少项目信息'
-        : !form.prompt.trim()
-            ? '请先输入创作提示'
-            : generating
-                ? '正在生成中，请等待完成或停止当前任务'
+        : generating
+            ? '正在生成中，请等待完成或停止当前任务'
+            : hasAdvValidationError
+                ? '高级设置参数超出范围，请检查后重试'
                 : ''
 
     /* ── 阅读模式渲染 ── */
@@ -783,34 +823,19 @@ export default function WritingConsolePage() {
                     <div>
                         <h1 className="writing-header__title">创作控制台</h1>
                         <p className="writing-header__sub">
-                            {currentProject?.name || '加载中…'} · {SCOPE_LABELS[form.scope]} · {MODE_LABELS[form.mode]}
+                            {currentProject?.name || '加载中…'} · {MODE_LABELS[form.mode]}
                         </p>
                         <p className="muted" style={{ marginTop: 6, marginBottom: 0, fontSize: '0.82rem' }}>
-                            本页负责一句话拆章与整卷/整本生成。章节细修、审批和冲突处理请在章节工作台完成。
+                            生成新章节的控制台。章节审核、修改和审批请在章节工作台完成。
                         </p>
                     </div>
-                    <div className="writing-header__controls">
-                        <label className="writing-template-picker">
-                            <span>模板预设</span>
-                            <select
-                                aria-label="模板预设"
-                                defaultValue=""
-                                onChange={(e) => {
-                                    const templateId = e.target.value
-                                    if (!templateId) return
-                                    applyTemplatePreset(templateId)
-                                    e.currentTarget.value = ''
-                                }}
-                            >
-                                <option value="">选择模板（可选）</option>
-                                {STORY_TEMPLATE_PRESETS.map((template) => (
-                                    <option key={template.id} value={template.id}>
-                                        {template.name}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
-                    </div>
+                    {projectTemplate && (
+                        <div className="writing-header__controls">
+                            <span className="chip" style={{ fontSize: '0.82rem' }}>
+                                模板：{projectTemplate.name}
+                            </span>
+                        </div>
+                    )}
                 </div>
 
                 <div className={`writing-body${auxPanelOpen ? ' writing-body--with-panel' : ''}`}>
@@ -831,6 +856,7 @@ export default function WritingConsolePage() {
                         <div className="writing-main__tools">
                             <div className="writing-main__tools-left">
                                 <button
+                                    type="button"
                                     className={`chip-btn ${auxPanelOpen ? 'active' : ''}`}
                                     onClick={() => setAuxPanelOpen((v) => !v)}
                                 >
@@ -839,18 +865,21 @@ export default function WritingConsolePage() {
                                 {auxPanelOpen && (
                                     <>
                                         <button
+                                            type="button"
                                             className={`chip-btn ${auxPanelTab === 'toc' ? 'active' : ''}`}
                                             onClick={() => setAuxPanelTab('toc')}
                                         >
                                             目录
                                         </button>
                                         <button
+                                            type="button"
                                             className={`chip-btn ${auxPanelTab === 'stats' ? 'active' : ''}`}
                                             onClick={() => setAuxPanelTab('stats')}
                                         >
                                             统计
                                         </button>
                                         <button
+                                            type="button"
                                             className={`chip-btn ${auxPanelTab === 'logs' ? 'active' : ''}`}
                                             onClick={() => setAuxPanelTab('logs')}
                                         >
@@ -862,6 +891,7 @@ export default function WritingConsolePage() {
                             <div className="writing-main__tools-right">
                                 {sections.length > 0 && (
                                     <button
+                                        type="button"
                                         className="chip-btn"
                                         onClick={enterReadingMode}
                                         title="进入阅读模式"
@@ -911,6 +941,7 @@ export default function WritingConsolePage() {
                                     {tocChapters.length > 0 ? (
                                         <ChapterTOC
                                             chapters={tocChapters}
+                                            activeChapterId={activeSection?.chapterId}
                                             onSelect={scrollToChapter}
                                         />
                                     ) : (
@@ -944,8 +975,8 @@ export default function WritingConsolePage() {
                                         {logs.length === 0 ? (
                                             <p className="placeholder-text">暂无日志</p>
                                         ) : (
-                                            logs.map((line, i) => (
-                                                <p key={i} className="writing-logs__line">{line}</p>
+                                            dedupeStringItems(logs).map(({ key, value }) => (
+                                                <p key={key} className="writing-logs__line">{value}</p>
                                             ))
                                         )}
                                     </div>
@@ -957,15 +988,15 @@ export default function WritingConsolePage() {
 
                 <div className="writing-composer-dock">
                     <div className="composer-panel">
-                        <p className="writing-composer-dock__title">创作输入</p>
-                        <p className="writing-composer-dock__subtitle">保留一个主入口：输入梗概后开始生成或续写。</p>
+                        <p className="writing-composer-dock__title">创作方向</p>
+                        <p className="writing-composer-dock__subtitle">输入创作方向后开始生成或续写。梗概已在项目创建时存入记忆。</p>
                         <div className="writing-composer-dock__prompt">
                             <textarea
                                 className="composer-input"
                                 rows={3}
-                                value={form.prompt}
-                                onChange={(e) => setForm((p) => ({ ...p, prompt: e.target.value }))}
-                                placeholder="一句话输入你的小说核心：主角是谁、冲突是什么、目标是什么。"
+                                value={form.batch_direction}
+                                onChange={(e) => setForm((p) => ({ ...p, batch_direction: e.target.value }))}
+                                placeholder="对这批章节的创作方向，如：在接下来8章收掉之前埋下的所有伏笔，然后直接大结局"
                             />
                             {projectTemplate && (
                                 <p className="muted" style={{ margin: '6px 0 0', fontSize: '0.8rem' }}>
@@ -978,6 +1009,7 @@ export default function WritingConsolePage() {
                             <div className="mode-group">
                                 {(['studio', 'quick', 'cinematic'] as const).map((mode) => (
                                     <button
+                                        type="button"
                                         key={mode}
                                         className={`chip-btn ${form.mode === mode ? 'active' : ''}`}
                                         onClick={() => setForm((p) => ({ ...p, mode }))}
@@ -987,28 +1019,9 @@ export default function WritingConsolePage() {
                                 ))}
                             </div>
 
-                            <div className="mode-group">
-                                {(['volume', 'book'] as const).map((scope) => (
-                                    <button
-                                        key={scope}
-                                        className={`chip-btn ${form.scope === scope ? 'active' : ''}`}
-                                        onClick={() =>
-                                            setForm((p) => ({
-                                                ...p,
-                                                scope,
-                                                chapter_count: scope === 'book'
-                                                    ? Math.max(p.chapter_count, 12)
-                                                    : Math.min(p.chapter_count, 10),
-                                            }))
-                                        }
-                                    >
-                                        {SCOPE_LABELS[scope]}
-                                    </button>
-                                ))}
-                            </div>
-
                             <DisabledTooltip reason={startDisabledReason} disabled={startDisabled}>
                                 <button
+                                    type="button"
                                     className="primary-btn"
                                     onClick={handleStart}
                                     disabled={startDisabled}
@@ -1021,18 +1034,21 @@ export default function WritingConsolePage() {
                                 reason={
                                     !projectId
                                         ? '缺少项目信息'
+                                        : hasAdvValidationError
+                                            ? '高级设置参数超出范围，请检查后重试'
                                         : generating
                                             ? '正在生成中，请等待完成或停止当前任务'
                                             : continuationPreparing
                                                 ? '正在准备续写任务'
                                                 : ''
                                 }
-                                disabled={!projectId || generating || continuationPreparing}
+                                disabled={!projectId || generating || continuationPreparing || hasAdvValidationError}
                             >
                                 <button
+                                    type="button"
                                     className="btn btn-secondary"
                                     onClick={() => void handleContinueFromLatest()}
-                                    disabled={!projectId || generating || continuationPreparing}
+                                    disabled={!projectId || generating || continuationPreparing || hasAdvValidationError}
                                 >
                                     {continuationPreparing ? '准备续写...' : '从最新章节续写'}
                                 </button>
@@ -1049,6 +1065,7 @@ export default function WritingConsolePage() {
                                 disabled={generating || (sections.length === 0 && chapters.length === 0 && logs.length === 0)}
                             >
                                 <button
+                                    type="button"
                                     className="btn btn-secondary"
                                     onClick={handleClearCurrentDraft}
                                     disabled={generating || (sections.length === 0 && chapters.length === 0 && logs.length === 0)}
@@ -1057,108 +1074,99 @@ export default function WritingConsolePage() {
                                 </button>
                             </DisabledTooltip>
 
-                            <button className="ghost-btn" onClick={stop} disabled={!generating}>
+                            <button type="button" className="ghost-btn" onClick={stop} disabled={!generating}>
                                 停止
                             </button>
                         </div>
 
-                        <details className="advanced-box">
-                            <summary>高级设置</summary>
-                            <div className="advanced-grid">
-                                <div className="form-group">
-                                    <label className="form-label" htmlFor="adv-chapter-count">章节数</label>
-                                    <input
-                                        id="adv-chapter-count"
-                                        className={`field-control${advErrors.chapter_count?.type === 'error' ? ' field-error' : ''}`}
-                                        type="number"
-                                        min={1}
-                                        max={60}
-                                        value={chapterCountInput}
-                                        onChange={(e) => {
-                                            const raw = e.target.value
-                                            if (!isDigitsOnly(raw)) return
-                                            setChapterCountInput(raw)
-                                            if (raw === '') return
-                                            setForm((p) => ({ ...p, chapter_count: Number(raw) }))
-                                        }}
-                                        onFocus={() =>
-                                            setAdvErrors((prev) => ({
-                                                ...prev,
-                                                chapter_count: validateField(form.chapter_count, CHAPTER_COUNT_RULE),
-                                            }))
+                        <div className="settings-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+                            <div className="form-group">
+                                <label className="form-label" htmlFor="adv-chapter-count">章节数</label>
+                                <input
+                                    id="adv-chapter-count"
+                                    className={`field-control${advErrors.chapter_count?.type === 'error' ? ' field-error' : ''}`}
+                                    type="number"
+                                    min={1}
+                                    max={60}
+                                    value={chapterCountInput}
+                                    onChange={(e) => {
+                                        const raw = e.target.value
+                                        if (!isDigitsOnly(raw)) return
+                                        setChapterCountInput(raw)
+                                        if (raw === '') return
+                                        setForm((p) => ({ ...p, chapter_count: Number(raw) }))
+                                    }}
+                                    onBlur={() => {
+                                        if (chapterCountInput.trim() === '') {
+                                            setChapterCountInput(String(form.chapter_count))
                                         }
-                                        onBlur={() => {
-                                            if (chapterCountInput.trim() === '') {
-                                                setChapterCountInput(String(form.chapter_count))
-                                            }
-                                            setAdvErrors((prev) => ({
-                                                ...prev,
-                                                chapter_count: validateField(
-                                                    chapterCountInput.trim() === '' ? form.chapter_count : Number(chapterCountInput),
-                                                    CHAPTER_COUNT_RULE,
-                                                ),
-                                            }))
-                                        }}
-                                    />
-                                    {advErrors.chapter_count && (
-                                        <span className={`field-message--${advErrors.chapter_count.type}`}>
-                                            {advErrors.chapter_count.message}
-                                        </span>
-                                    )}
-                                </div>
-                                <div className="form-group">
-                                    <label className="form-label" htmlFor="adv-words-per-chapter">每章目标字数</label>
-                                    <input
-                                        id="adv-words-per-chapter"
-                                        className={`field-control${advErrors.words_per_chapter?.type === 'error' ? ' field-error' : ''}`}
-                                        type="number"
-                                        min={300}
-                                        max={12000}
-                                        value={wordsPerChapterInput}
-                                        onChange={(e) => {
-                                            const raw = e.target.value
-                                            if (!isDigitsOnly(raw)) return
-                                            setWordsPerChapterInput(raw)
-                                            if (raw === '') return
-                                            setForm((p) => ({ ...p, words_per_chapter: Number(raw) }))
-                                        }}
-                                        onFocus={() =>
-                                            setAdvErrors((prev) => ({
-                                                ...prev,
-                                                words_per_chapter: validateField(form.words_per_chapter, WORDS_PER_CHAPTER_RULE),
-                                            }))
-                                        }
-                                        onBlur={() => {
-                                            if (wordsPerChapterInput.trim() === '') {
-                                                setWordsPerChapterInput(String(form.words_per_chapter))
-                                            }
-                                            setAdvErrors((prev) => ({
-                                                ...prev,
-                                                words_per_chapter: validateField(
-                                                    wordsPerChapterInput.trim() === '' ? form.words_per_chapter : Number(wordsPerChapterInput),
-                                                    WORDS_PER_CHAPTER_RULE,
-                                                ),
-                                            }))
-                                        }}
-                                    />
-                                    {advErrors.words_per_chapter && (
-                                        <span className={`field-message--${advErrors.words_per_chapter.type}`}>
-                                            {advErrors.words_per_chapter.message}
-                                        </span>
-                                    )}
-                                </div>
-                                <label className="checkbox-row">
-                                    <input
-                                        type="checkbox"
-                                        checked={form.auto_approve}
-                                        onChange={(e) =>
-                                            setForm((p) => ({ ...p, auto_approve: e.target.checked }))
-                                        }
-                                    />
-                                    无 P0 冲突自动审批
-                                </label>
+                                        setAdvErrors((prev) => ({
+                                            ...prev,
+                                            chapter_count: validateField(
+                                                chapterCountInput.trim() === '' ? form.chapter_count : Number(chapterCountInput),
+                                                CHAPTER_COUNT_RULE,
+                                            ),
+                                        }))
+                                    }}
+                                />
+                                {advErrors.chapter_count && (
+                                    <span className={`field-message--${advErrors.chapter_count.type}`}>
+                                        {advErrors.chapter_count.message}
+                                    </span>
+                                )}
                             </div>
-                        </details>
+                            <div className="form-group">
+                                <label className="form-label" htmlFor="adv-words-per-chapter">每章字数</label>
+                                <input
+                                    id="adv-words-per-chapter"
+                                    className={`field-control${advErrors.words_per_chapter?.type === 'error' ? ' field-error' : ''}`}
+                                    type="number"
+                                    min={300}
+                                    max={12000}
+                                    value={wordsPerChapterInput}
+                                    onChange={(e) => {
+                                        const raw = e.target.value
+                                        if (!isDigitsOnly(raw)) return
+                                        setWordsPerChapterInput(raw)
+                                        if (raw === '') return
+                                        setForm((p) => ({ ...p, words_per_chapter: Number(raw) }))
+                                    }}
+                                    onBlur={() => {
+                                        if (wordsPerChapterInput.trim() === '') {
+                                            setWordsPerChapterInput(String(form.words_per_chapter))
+                                        }
+                                        setAdvErrors((prev) => ({
+                                            ...prev,
+                                            words_per_chapter: validateField(
+                                                wordsPerChapterInput.trim() === '' ? form.words_per_chapter : Number(wordsPerChapterInput),
+                                                WORDS_PER_CHAPTER_RULE,
+                                            ),
+                                        }))
+                                    }}
+                                />
+                                {advErrors.words_per_chapter && (
+                                    <span className={`field-message--${advErrors.words_per_chapter.type}`}>
+                                        {advErrors.words_per_chapter.message}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                            <label className="toggle-switch">
+                                <input
+                                    type="checkbox"
+                                    checked={form.auto_approve}
+                                    onChange={(e) =>
+                                        setForm((p) => ({ ...p, auto_approve: e.target.checked }))
+                                    }
+                                />
+                                <span className="toggle-switch__track" />
+                                <span className="toggle-switch__label">自动审批</span>
+                            </label>
+                            <span className="muted" style={{ fontSize: '0.78rem', lineHeight: 1.3 }}>
+                                生成完成后，若章节无 P0 级冲突（时间线矛盾、角色特征冲突等阻断性问题）则自动通过审批，无需手动确认
+                            </span>
+                        </div>
 
                         {error && <p className="error-line">{error}</p>}
                     </div>
