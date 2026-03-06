@@ -196,7 +196,8 @@ describe('ProjectDetailPage', () => {
         fireEvent.click(screen.getByText('导出项目'))
 
         expect(createElementSpy).toHaveBeenCalledWith('a')
-        const anchor = appendChildSpy.mock.calls.at(-1)?.[0] as HTMLAnchorElement
+        const lastAppendCall = appendChildSpy.mock.calls[appendChildSpy.mock.calls.length - 1]
+        const anchor = lastAppendCall?.[0] as HTMLAnchorElement
         expect(anchor.href).toContain('/api/projects/p1/export')
         expect(anchor.download).toBe('霜城编年史.zip')
         expect(clickSpy).toHaveBeenCalled()
