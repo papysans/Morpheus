@@ -54,6 +54,13 @@ data/projects/
 # Playwright
 .playwright-cli/
 output/
+playwright-before-submit-snapshot.md
+*-old-ui-proof.png
+*-old-ui-proof.jpg
+*-old-ui-proof.jpeg
+*-reopen-review-fixed.png
+*-reopen-review-fixed.jpg
+*-reopen-review-fixed.jpeg
 
 # Hypothesis
 .hypothesis/
