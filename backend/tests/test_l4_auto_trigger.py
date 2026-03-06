@@ -61,7 +61,7 @@ class TestL4AutoTrigger(unittest.TestCase):
             side_effect=RuntimeError("extraction exploded"),
         ):
             res = self.client.post(
-                f"/api/review",
+                "/api/review",
                 json={
                     "chapter_id": cid,
                     "action": "approve",

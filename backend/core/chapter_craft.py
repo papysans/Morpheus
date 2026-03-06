@@ -5,7 +5,9 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 _CHAPTER_PREFIX_CN_RE = re.compile(
     r"^\s*(?:#\s*)?(?:第\s*[0-9一二三四五六七八九十百千零〇两IVXLCMivxlcm]+\s*[章节卷部]\s*[：:\-\s]*)"
 )
-_CHAPTER_PREFIX_EN_RE = re.compile(r"^\s*(?:#\s*)?(?:chapter|ch\.)\s*[0-9ivxlcm]+\s*[：:\-\s]*", re.IGNORECASE)
+_CHAPTER_PREFIX_EN_RE = re.compile(
+    r"^\s*(?:#\s*)?(?:chapter|ch\.)\s*[0-9ivxlcm]+\s*[：:\-\s]*", re.IGNORECASE
+)
 _MULTI_SPACE_RE = re.compile(r"\s+")
 _TITLE_SPLIT_RE = re.compile(r"[，。！？；：:、（）()【】\[\]<>《》“”\"'‘’|/\\\-—_]+")
 _LEADING_BULLET_RE = re.compile(r"^[\s\-•*\d.、:：]+")
@@ -107,7 +109,11 @@ def build_micro_arc_hint(
     phase_idx = (max(chapter_number, 1) - 1) % 4
     phase_name = ["起势抛钩", "对抗升级", "反转失衡", "代价余震"][phase_idx]
 
-    hook_rule = "章尾必须保留下一章可执行动作，不得终结全书主线。" if continuation_mode else "章尾保留未决信息或危机余波。"
+    hook_rule = (
+        "章尾必须保留下一章可执行动作，不得终结全书主线。"
+        if continuation_mode
+        else "章尾保留未决信息或危机余波。"
+    )
 
     return {
         "phase": phase_name,
@@ -405,18 +411,20 @@ def normalize_outline_items(
     used_titles: Set[str] = set()
     if existing_titles:
         for item in existing_titles:
-            normalized = _normalize_title_base(str(item or ""))
-            if not normalized:
+            normalized_title = _normalize_title_base(str(item or ""))
+            if not normalized_title:
                 continue
-            used_titles.add(normalized)
-            shortened = normalized[:16].rstrip("，。！？；：:、-—_·. ")
+            used_titles.add(normalized_title)
+            shortened = normalized_title[:16].rstrip("，。！？；：:、-—_·. ")
             if shortened:
                 used_titles.add(shortened)
-    normalized: List[Dict[str, str]] = []
+    normalized_items: List[Dict[str, str]] = []
 
     for idx in range(chapter_count):
         chapter_no = start_chapter_number + idx
-        phase_info = phase_hints[idx] if idx < len(phase_hints) else {"phase": "推进", "focus": "推进主线"}
+        phase_info = (
+            phase_hints[idx] if idx < len(phase_hints) else {"phase": "推进", "focus": "推进主线"}
+        )
 
         source = outline[idx] if idx < len(outline) else {}
         raw_goal = str((source or {}).get("goal", "")).strip()
@@ -431,9 +439,9 @@ def normalize_outline_items(
             phase=phase_info.get("phase"),
         )
 
-        normalized.append({"title": title, "goal": goal})
+        normalized_items.append({"title": title, "goal": goal})
 
-    return normalized
+    return normalized_items
 
 
 def strip_leading_chapter_heading(text: str) -> str:

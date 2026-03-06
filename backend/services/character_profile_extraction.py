@@ -13,7 +13,6 @@ from models import (
     CharacterRelationship,
     CharacterStateChange,
     ChapterEvent,
-    OverrideSource,
 )
 
 logger = logging.getLogger("novelist.extraction")
@@ -226,11 +225,15 @@ class ExtractionParser:
                 logger.warning("Skipping invalid profile for '%s': %s", name, e)
 
         return ExtractionResult(success=True, profiles=profiles)
+
+
 class CharacterProfileExtractionService:
     """High-level service: calls LLM, parses result, returns ExtractionResult."""
+
     def __init__(self, llm_client):
         self._llm = llm_client
         self._parser = ExtractionParser()
+
     def extract(
         self,
         chapter_text: str,
@@ -248,5 +251,7 @@ class CharacterProfileExtractionService:
         except Exception as exc:
             logger.warning("LLM extraction failed chapter=%d: %s", chapter, exc)
             return ExtractionResult(success=False, error=str(exc))
-        result = self._parser.parse(raw, chapter=chapter, project_id=project_id, provenance=provenance)
+        result = self._parser.parse(
+            raw, chapter=chapter, project_id=project_id, provenance=provenance
+        )
         return result
