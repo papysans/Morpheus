@@ -33,6 +33,7 @@ function saveToStorage(items: RecentAccessItem[]) {
 interface RecentAccessStore {
     items: RecentAccessItem[]
     addAccess: (item: Omit<RecentAccessItem, 'timestamp'>) => void
+    removeByProjectId: (projectId: string) => void
     clearAll: () => void
 }
 
@@ -45,6 +46,14 @@ export const useRecentAccessStore = create<RecentAccessStore>((set, get) => ({
         // Remove existing entry with same id, prepend new one, trim to max
         const filtered = get().items.filter(i => i.id !== item.id)
         const updated = [newItem, ...filtered].slice(0, MAX_ITEMS)
+        set({ items: updated })
+        saveToStorage(updated)
+    },
+
+    removeByProjectId: (projectId) => {
+        const updated = get().items.filter(
+            i => i.id !== projectId && i.projectId !== projectId
+        )
         set({ items: updated })
         saveToStorage(updated)
     },

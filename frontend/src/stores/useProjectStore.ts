@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api } from '../lib/api'
+import { useRecentAccessStore } from './useRecentAccessStore'
 
 export const CACHE_TTL = 30_000
 
@@ -339,6 +340,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
                 if (status !== 'missing') {
                     applyDeletedProjectIds([id])
                 }
+                useRecentAccessStore.getState().removeByProjectId(id)
                 void get().fetchProjects({ force: true })
             } catch (error) {
                 console.error('删除项目失败', error)
@@ -418,6 +420,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
                 result.failed_count = result.failed_ids.length
 
                 applyDeletedProjectIds([...result.deleted_ids, ...result.missing_ids])
+                const { removeByProjectId } = useRecentAccessStore.getState()
+                ;[...result.deleted_ids, ...result.missing_ids].forEach(removeByProjectId)
                 void get().fetchProjects({ force: true })
                 return result
             } catch (error) {
