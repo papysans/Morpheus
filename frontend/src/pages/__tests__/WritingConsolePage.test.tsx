@@ -162,6 +162,17 @@ describe('WritingConsolePage', () => {
         expect(screen.getByText('电影感')).toBeTruthy()
     })
 
+    it('不再渲染范围选择按钮', () => {
+        renderPage()
+        expect(screen.queryByText('单卷')).toBeNull()
+        expect(screen.queryByText('整本')).toBeNull()
+    })
+
+    it('不再渲染模板预设选择器', () => {
+        renderPage()
+        expect(screen.queryByLabelText('模板预设')).toBeNull()
+    })
+
     it('有模板时显示模板名称标签', () => {
         mockProjectStore.currentProject = { ...mockProjectStore.currentProject!, template_id: 'short-story' }
         renderPage()
@@ -193,8 +204,24 @@ describe('WritingConsolePage', () => {
         })
         const payload = mockStart.mock.calls[0][0]
         expect(payload.form.continuation_mode).toBe(true)
-        expect(payload.form.start_chapter_number).toBe(4)
+        expect(payload.form.start_chapter_number).toBeUndefined()
         expect(String(payload.form.batch_direction)).toContain('延续当前故事')
+    })
+
+    it('续写时不会向流式接口传显式起始章节字段', async () => {
+        mockApiGet.mockResolvedValue({
+            data: [{ id: 'ch-5', chapter_number: 5 }],
+        })
+        renderPage()
+
+        fireEvent.click(screen.getByText('从最新章节续写'))
+
+        await waitFor(() => {
+            expect(mockStart).toHaveBeenCalledTimes(1)
+        })
+
+        const payload = mockStart.mock.calls[0][0]
+        expect('start_chapter_number' in payload.form).toBe(false)
     })
 
     it('有 sections 时渲染 Markdown 内容', () => {
@@ -240,6 +267,7 @@ describe('WritingConsolePage', () => {
             { id: 'ch-1', chapter_number: 1, title: '序章', status: 'done', word_count: 1500, p0_count: 0 },
         ]
         renderPage()
+        fireEvent.click(screen.getByText('显示辅助面板'))
         fireEvent.click(screen.getByText('统计'))
         expect(screen.getByText('1 章')).toBeTruthy()
     })
@@ -250,6 +278,7 @@ describe('WritingConsolePage', () => {
             { chapterId: 'ch-2', chapterNumber: 2, title: '觉醒', body: '更多内容', waiting: false },
         ]
         renderPage()
+        fireEvent.click(screen.getByText('显示辅助面板'))
         expect(screen.getAllByText('章节目录').length).toBeGreaterThan(0)
         expect(screen.getByText('第1章')).toBeTruthy()
         expect(screen.getByText('序章')).toBeTruthy()
@@ -263,6 +292,7 @@ describe('WritingConsolePage', () => {
             { chapterId: 'ch-2', chapterNumber: 2, title: '觉醒', body: '更多内容', waiting: false },
         ]
         renderPage()
+        fireEvent.click(screen.getByText('显示辅助面板'))
 
         const paper = document.querySelector('.stream-paper') as HTMLElement
         const scrollToMock = vi.fn()
@@ -286,6 +316,7 @@ describe('WritingConsolePage', () => {
             { chapterId: 'ch-2', chapterNumber: 2, title: '觉醒', body: '更多内容', waiting: false },
         ]
         renderPage()
+        fireEvent.click(screen.getByText('显示辅助面板'))
 
         const paper = document.querySelector('.stream-paper') as HTMLElement
         const sectionEls = Array.from(document.querySelectorAll('.stream-section')) as HTMLElement[]
@@ -337,9 +368,17 @@ describe('WritingConsolePage', () => {
     it('渲染日志面板', () => {
         mockStreamStore.logs = ['10:00:00  开始流式生成']
         renderPage()
+        fireEvent.click(screen.getByText('显示辅助面板'))
         fireEvent.click(screen.getByText('日志'))
         expect(screen.getByText('生成日志')).toBeTruthy()
         expect(screen.getByText(/10:00:00.*开始流式生成/)).toBeTruthy()
+    })
+
+    it('高级设置默认折叠', () => {
+        renderPage()
+        expect(screen.getByText('高级设置')).toBeTruthy()
+        expect(document.querySelector('details.advanced-box')).toBeTruthy()
+        expect((document.querySelector('details.advanced-box') as HTMLDetailsElement).open).toBe(false)
     })
 
     /* ── 阅读模式测试 ── */
@@ -440,7 +479,7 @@ describe('WritingConsolePage', () => {
 
     it('每章字数输入失焦后值在范围内时显示推荐值提示', () => {
         renderPage()
-        const input = screen.getByLabelText(/每章字数/)
+        const input = screen.getByLabelText(/每章目标字数/)
         fireEvent.blur(input)
         expect(screen.getByText('推荐 1200-2000 字')).toBeTruthy()
     })
@@ -455,7 +494,7 @@ describe('WritingConsolePage', () => {
 
     it('每章目标字数超出范围时失焦显示错误提示', () => {
         renderPage()
-        const input = screen.getByLabelText(/每章字数/)
+        const input = screen.getByLabelText(/每章目标字数/)
         fireEvent.change(input, { target: { value: '50000' } })
         fireEvent.blur(input)
         expect(screen.getByText('范围：300-12000')).toBeTruthy()
@@ -500,7 +539,7 @@ describe('WritingConsolePage', () => {
 
     it('每章字数支持先清空再输入新值', () => {
         renderPage()
-        const input = screen.getByLabelText(/每章字数/) as HTMLInputElement
+        const input = screen.getByLabelText(/每章目标字数/) as HTMLInputElement
         fireEvent.change(input, { target: { value: '' } })
         expect(input.value).toBe('')
 
@@ -511,9 +550,9 @@ describe('WritingConsolePage', () => {
     it('高级设置会按项目持久化并在重新进入后沿用', () => {
         const { unmount } = renderPage()
         const chapterInput = screen.getByLabelText(/章节数/) as HTMLInputElement
-        const wordsInput = screen.getByLabelText(/每章字数/) as HTMLInputElement
+        const wordsInput = screen.getByLabelText(/每章目标字数/) as HTMLInputElement
         const quickBtn = screen.getByText('快速')
-        const autoApprove = screen.getByLabelText('自动审批') as HTMLInputElement
+        const autoApprove = screen.getByLabelText('无 P0 冲突自动审批') as HTMLInputElement
 
         fireEvent.change(chapterInput, { target: { value: '16' } })
         fireEvent.change(wordsInput, { target: { value: '2200' } })
@@ -524,9 +563,9 @@ describe('WritingConsolePage', () => {
 
         renderPage()
         expect((screen.getByLabelText(/章节数/) as HTMLInputElement).value).toBe('16')
-        expect((screen.getByLabelText(/每章字数/) as HTMLInputElement).value).toBe('2200')
+        expect((screen.getByLabelText(/每章目标字数/) as HTMLInputElement).value).toBe('2200')
         expect(screen.getByText('快速').className).toContain('active')
-        expect((screen.getByLabelText('自动审批') as HTMLInputElement).checked).toBe(false)
+        expect((screen.getByLabelText('无 P0 冲突自动审批') as HTMLInputElement).checked).toBe(false)
     })
 
     it('初次加载不会弹出高级设置已保存提示', () => {

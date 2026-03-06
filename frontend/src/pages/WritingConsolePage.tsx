@@ -37,7 +37,6 @@ const MODE_LABELS: Record<string, string> = {
     cinematic: '电影感',
 }
 
-
 const CHAPTER_COUNT_RULE = { min: 1, max: 60, hint: '推荐 8-12 章' } as const
 const WORDS_PER_CHAPTER_RULE = { min: 300, max: 12000, hint: '推荐 1200-2000 字' } as const
 const CONTINUATION_FALLBACK_PROMPT = '延续当前故事，推进未决冲突与人物关系，章尾保留下一章触发点。'
@@ -413,7 +412,7 @@ export default function WritingConsolePage() {
     const [chapterCountInput, setChapterCountInput] = useState('8')
     const [wordsPerChapterInput, setWordsPerChapterInput] = useState('1600')
     const [continuationPreparing, setContinuationPreparing] = useState(false)
-    const [auxPanelOpen, setAuxPanelOpen] = useState(true)
+    const [auxPanelOpen, setAuxPanelOpen] = useState(false)
     const [auxPanelTab, setAuxPanelTab] = useState<'toc' | 'stats' | 'logs'>('toc')
 
     const [advErrors, setAdvErrors] = useState<Record<string, FieldError | null>>({})
@@ -724,7 +723,6 @@ export default function WritingConsolePage() {
                     ...currentForm,
                     batch_direction: continuationPrompt,
                     continuation_mode: true,
-                    start_chapter_number: startChapterNumber,
                 },
                 onChapterStart: (ch: StreamChapter) => {
                     addToast('info', `开始第 ${ch.chapter_number} 章：${ch.title}`)
@@ -826,16 +824,9 @@ export default function WritingConsolePage() {
                             {currentProject?.name || '加载中…'} · {MODE_LABELS[form.mode]}
                         </p>
                         <p className="muted" style={{ marginTop: 6, marginBottom: 0, fontSize: '0.82rem' }}>
-                            生成新章节的控制台。章节审核、修改和审批请在章节工作台完成。
+                            本页负责批量生成与续写。章节细修、审批和冲突处理请在章节工作台完成。
                         </p>
                     </div>
-                    {projectTemplate && (
-                        <div className="writing-header__controls">
-                            <span className="chip" style={{ fontSize: '0.82rem' }}>
-                                模板：{projectTemplate.name}
-                            </span>
-                        </div>
-                    )}
                 </div>
 
                 <div className={`writing-body${auxPanelOpen ? ' writing-body--with-panel' : ''}`}>
@@ -1079,94 +1070,97 @@ export default function WritingConsolePage() {
                             </button>
                         </div>
 
-                        <div className="settings-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
-                            <div className="form-group">
-                                <label className="form-label" htmlFor="adv-chapter-count">章节数</label>
-                                <input
-                                    id="adv-chapter-count"
-                                    className={`field-control${advErrors.chapter_count?.type === 'error' ? ' field-error' : ''}`}
-                                    type="number"
-                                    min={1}
-                                    max={60}
-                                    value={chapterCountInput}
-                                    onChange={(e) => {
-                                        const raw = e.target.value
-                                        if (!isDigitsOnly(raw)) return
-                                        setChapterCountInput(raw)
-                                        if (raw === '') return
-                                        setForm((p) => ({ ...p, chapter_count: Number(raw) }))
-                                    }}
-                                    onBlur={() => {
-                                        if (chapterCountInput.trim() === '') {
-                                            setChapterCountInput(String(form.chapter_count))
-                                        }
-                                        setAdvErrors((prev) => ({
-                                            ...prev,
-                                            chapter_count: validateField(
-                                                chapterCountInput.trim() === '' ? form.chapter_count : Number(chapterCountInput),
-                                                CHAPTER_COUNT_RULE,
-                                            ),
-                                        }))
-                                    }}
-                                />
-                                {advErrors.chapter_count && (
-                                    <span className={`field-message--${advErrors.chapter_count.type}`}>
-                                        {advErrors.chapter_count.message}
-                                    </span>
-                                )}
+                        <details className="advanced-box" style={{ marginTop: 12 }}>
+                            <summary>高级设置</summary>
+                            <div className="settings-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginTop: 12 }}>
+                                <div className="form-group">
+                                    <label className="form-label" htmlFor="adv-chapter-count">章节数</label>
+                                    <input
+                                        id="adv-chapter-count"
+                                        className={`field-control${advErrors.chapter_count?.type === 'error' ? ' field-error' : ''}`}
+                                        type="number"
+                                        min={1}
+                                        max={60}
+                                        value={chapterCountInput}
+                                        onChange={(e) => {
+                                            const raw = e.target.value
+                                            if (!isDigitsOnly(raw)) return
+                                            setChapterCountInput(raw)
+                                            if (raw === '') return
+                                            setForm((p) => ({ ...p, chapter_count: Number(raw) }))
+                                        }}
+                                        onBlur={() => {
+                                            if (chapterCountInput.trim() === '') {
+                                                setChapterCountInput(String(form.chapter_count))
+                                            }
+                                            setAdvErrors((prev) => ({
+                                                ...prev,
+                                                chapter_count: validateField(
+                                                    chapterCountInput.trim() === '' ? form.chapter_count : Number(chapterCountInput),
+                                                    CHAPTER_COUNT_RULE,
+                                                ),
+                                            }))
+                                        }}
+                                    />
+                                    {advErrors.chapter_count && (
+                                        <span className={`field-message--${advErrors.chapter_count.type}`}>
+                                            {advErrors.chapter_count.message}
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="form-group">
+                                    <label className="form-label" htmlFor="adv-words-per-chapter">每章目标字数</label>
+                                    <input
+                                        id="adv-words-per-chapter"
+                                        className={`field-control${advErrors.words_per_chapter?.type === 'error' ? ' field-error' : ''}`}
+                                        type="number"
+                                        min={300}
+                                        max={12000}
+                                        value={wordsPerChapterInput}
+                                        onChange={(e) => {
+                                            const raw = e.target.value
+                                            if (!isDigitsOnly(raw)) return
+                                            setWordsPerChapterInput(raw)
+                                            if (raw === '') return
+                                            setForm((p) => ({ ...p, words_per_chapter: Number(raw) }))
+                                        }}
+                                        onBlur={() => {
+                                            if (wordsPerChapterInput.trim() === '') {
+                                                setWordsPerChapterInput(String(form.words_per_chapter))
+                                            }
+                                            setAdvErrors((prev) => ({
+                                                ...prev,
+                                                words_per_chapter: validateField(
+                                                    wordsPerChapterInput.trim() === '' ? form.words_per_chapter : Number(wordsPerChapterInput),
+                                                    WORDS_PER_CHAPTER_RULE,
+                                                ),
+                                            }))
+                                        }}
+                                    />
+                                    {advErrors.words_per_chapter && (
+                                        <span className={`field-message--${advErrors.words_per_chapter.type}`}>
+                                            {advErrors.words_per_chapter.message}
+                                        </span>
+                                    )}
+                                </div>
                             </div>
-                            <div className="form-group">
-                                <label className="form-label" htmlFor="adv-words-per-chapter">每章字数</label>
-                                <input
-                                    id="adv-words-per-chapter"
-                                    className={`field-control${advErrors.words_per_chapter?.type === 'error' ? ' field-error' : ''}`}
-                                    type="number"
-                                    min={300}
-                                    max={12000}
-                                    value={wordsPerChapterInput}
-                                    onChange={(e) => {
-                                        const raw = e.target.value
-                                        if (!isDigitsOnly(raw)) return
-                                        setWordsPerChapterInput(raw)
-                                        if (raw === '') return
-                                        setForm((p) => ({ ...p, words_per_chapter: Number(raw) }))
-                                    }}
-                                    onBlur={() => {
-                                        if (wordsPerChapterInput.trim() === '') {
-                                            setWordsPerChapterInput(String(form.words_per_chapter))
+                            <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <label className="toggle-switch">
+                                    <input
+                                        type="checkbox"
+                                        checked={form.auto_approve}
+                                        onChange={(e) =>
+                                            setForm((p) => ({ ...p, auto_approve: e.target.checked }))
                                         }
-                                        setAdvErrors((prev) => ({
-                                            ...prev,
-                                            words_per_chapter: validateField(
-                                                wordsPerChapterInput.trim() === '' ? form.words_per_chapter : Number(wordsPerChapterInput),
-                                                WORDS_PER_CHAPTER_RULE,
-                                            ),
-                                        }))
-                                    }}
-                                />
-                                {advErrors.words_per_chapter && (
-                                    <span className={`field-message--${advErrors.words_per_chapter.type}`}>
-                                        {advErrors.words_per_chapter.message}
-                                    </span>
-                                )}
+                                    />
+                                    <span className="toggle-switch__track" />
+                                    <span className="toggle-switch__label">无 P0 冲突自动审批</span>
+                                </label>
+                                <span className="muted" style={{ fontSize: '0.78rem', lineHeight: 1.3 }}>
+                                    生成完成后，若章节无 P0 级冲突则自动通过审批。
+                                </span>
                             </div>
-                        </div>
-                        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
-                            <label className="toggle-switch">
-                                <input
-                                    type="checkbox"
-                                    checked={form.auto_approve}
-                                    onChange={(e) =>
-                                        setForm((p) => ({ ...p, auto_approve: e.target.checked }))
-                                    }
-                                />
-                                <span className="toggle-switch__track" />
-                                <span className="toggle-switch__label">自动审批</span>
-                            </label>
-                            <span className="muted" style={{ fontSize: '0.78rem', lineHeight: 1.3 }}>
-                                生成完成后，若章节无 P0 级冲突（时间线矛盾、角色特征冲突等阻断性问题）则自动通过审批，无需手动确认
-                            </span>
-                        </div>
+                        </details>
 
                         {error && <p className="error-line">{error}</p>}
                     </div>

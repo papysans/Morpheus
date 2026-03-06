@@ -80,7 +80,6 @@ describe('useSSEStream', () => {
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
-                    start_chapter: 1,
                 },
                 onChapterStart,
                 onChapterDone,
@@ -129,7 +128,6 @@ describe('useSSEStream', () => {
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
-                    start_chapter: 1,
                 },
                 onError,
             })
@@ -164,7 +162,6 @@ describe('useSSEStream', () => {
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
-                    start_chapter: 1,
                 },
             })
         })
@@ -192,7 +189,6 @@ describe('useSSEStream', () => {
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
-                    start_chapter: 1,
                 },
                 onError,
             })
@@ -224,7 +220,6 @@ describe('useSSEStream', () => {
                     chapter_count: 1,
                     words_per_chapter: 1600,
                     auto_approve: true,
-                    start_chapter: 1,
                 },
             })
         })
@@ -241,5 +236,40 @@ describe('useSSEStream', () => {
         // After stop, generating should be false and no SSE error should be set
         expect(result.current.generating).toBe(false)
         expect(useStreamStore.getState().error).toBeNull()
+    })
+
+    it('posts canonical batch-generation payload without scope or explicit start chapter', async () => {
+        const frames = [sseFrame('done', { generated_chapters: 0, elapsed_s: 0.1 })]
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(makeSseResponse(frames))
+
+        const { result } = renderHook(() => useSSEStream())
+
+        await act(async () => {
+            await result.current.start({
+                projectId: 'proj-1',
+                form: {
+                    batch_direction: '  写一本小说  ',
+                    mode: 'studio',
+                    chapter_count: 1,
+                    words_per_chapter: 1600,
+                    auto_approve: true,
+                    continuation_mode: true,
+                },
+            })
+        })
+
+        const requestInit = fetchSpy.mock.calls[0]?.[1]
+        expect(requestInit).toBeTruthy()
+        const payload = JSON.parse(String(requestInit?.body || '{}'))
+        expect(payload).toMatchObject({
+            batch_direction: '写一本小说',
+            mode: 'studio',
+            chapter_count: 1,
+            words_per_chapter: 1600,
+            auto_approve: true,
+            continuation_mode: true,
+        })
+        expect(payload.scope).toBeUndefined()
+        expect(payload.start_chapter_number).toBeUndefined()
     })
 })
