@@ -1227,73 +1227,6 @@ def trigger_l4_extraction_async(
         )
 
 
-_detached_review_tasks: Set[asyncio.Task[Any]] = set()
-
-
-def _spawn_review_side_effects_task(func: Callable[..., None], *args: Any) -> None:
-    task = asyncio.create_task(asyncio.to_thread(func, *args))
-    _detached_review_tasks.add(task)
-
-    def _cleanup(done_task: asyncio.Task[Any]) -> None:
-        _detached_review_tasks.discard(done_task)
-        try:
-            exc = done_task.exception()
-            if exc:
-                logger.warning("detached review side-effect task failed", exc_info=exc)
-        except asyncio.CancelledError:
-            logger.warning("detached review side-effect task cancelled")
-
-    task.add_done_callback(_cleanup)
-
-
-def run_review_approval_side_effects(
-    project_id: str,
-    chapter_id: str,
-    chapter_number: int,
-    chapter_final: str,
-    chapter_plan: Any,
-) -> None:
-    store = get_or_create_store(project_id)
-    plan_payload = (
-        chapter_plan.model_dump() if hasattr(chapter_plan, "model_dump") else chapter_plan
-    )
-
-    try:
-        mem_ctx = MemoryContextService(store.three_layer, store)
-        project_chapters = [
-            {
-                "chapter_number": c.chapter_number,
-                "plan": c.plan,
-                "draft": c.draft,
-                "final": c.final,
-            }
-            for c in chapter_list(project_id)
-        ]
-        mem_ctx.refresh_memory_after_chapter(
-            chapter_number=chapter_number,
-            chapter_text=chapter_final,
-            chapter_plan=plan_payload,
-            project_chapters=project_chapters,
-            mode="consolidated",
-        )
-    except Exception:
-        logger.warning(
-            "consolidated memory refresh failed chapter_no=%d",
-            chapter_number,
-            exc_info=True,
-        )
-
-    try:
-        trigger_l4_extraction_async(
-            store=store,
-            chapter_text=chapter_final,
-            chapter_number=chapter_number,
-            project_id=project_id,
-        )
-    except Exception:
-        logger.warning("L4 trigger failed chapter_id=%s", chapter_id, exc_info=True)
-
-
 def chapter_list(project_id: str) -> List[Chapter]:
     sync_project_chapters_from_disk(project_id)
     return sorted(
@@ -1711,7 +1644,6 @@ def build_outline_messages(
     project: Project,
     identity: str,
     continuation_mode: bool = False,
-    batch_direction: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     phase_hints = build_outline_phase_hints(chapter_count, continuation_mode)
     constraints = [
@@ -1737,63 +1669,37 @@ def build_outline_messages(
         },
         {
             "role": "user",
-            "content": _build_outline_user_content(
-                scope=scope,
-                chapter_count=chapter_count,
-                prompt=prompt,
-                project=project,
-                identity=identity,
-                continuation_mode=continuation_mode,
-                constraints=constraints,
-                phase_hints=phase_hints,
-                batch_direction=batch_direction,
+            "content": json.dumps(
+                {
+                    "task": "根据一句话梗概拆成章节蓝图",
+                    "scope": scope,
+                    "chapter_count": chapter_count,
+                    "prompt": prompt,
+                    "genre": project.genre,
+                    "style": project.style,
+                    "identity": identity,
+                    "continuation_mode": continuation_mode,
+                    "constraints": constraints,
+                    "forbidden_title_keywords": [
+                        "起势递进",
+                        "代价扩张",
+                        "阶段收束",
+                        "里程碑",
+                        "第二阶段钩子",
+                    ],
+                    "title_style_examples": [
+                        "镜城残响",
+                        "第二次心跳",
+                        "车祸后的合法复活",
+                        "监控者的真面目",
+                        "在雪夜醒来的那个人",
+                    ],
+                    "phase_hints": phase_hints,
+                },
+                ensure_ascii=False,
             ),
         },
     ]
-
-
-def _build_outline_user_content(
-    *,
-    scope: str,
-    chapter_count: int,
-    prompt: str,
-    project: Project,
-    identity: str,
-    continuation_mode: bool,
-    constraints: List[str],
-    phase_hints: Any,
-    batch_direction: Optional[str] = None,
-) -> str:
-    payload = {
-        "task": "根据一句话梗概拆成章节蓝图",
-        "scope": scope,
-        "chapter_count": chapter_count,
-        "prompt": prompt,
-        "genre": project.genre,
-        "style": project.style,
-        "identity": identity,
-        "continuation_mode": continuation_mode,
-        "constraints": constraints,
-        "forbidden_title_keywords": [
-            "起势递进",
-            "代价扩张",
-            "阶段收束",
-            "里程碑",
-            "第二阶段钩子",
-        ],
-        "title_style_examples": [
-            "镜城残响",
-            "第二次心跳",
-            "车祸后的合法复活",
-            "监控者的真面目",
-            "在雪夜醒来的那个人",
-        ],
-        "phase_hints": phase_hints,
-    }
-    content = json.dumps(payload, ensure_ascii=False)
-    if batch_direction:
-        content += f"\n\n用户对这批章节的创作方向要求：{batch_direction}\n请在拆章和内容生成时参考此方向。"
-    return content
 
 
 def build_chapter_outline(
@@ -1807,7 +1713,6 @@ def build_chapter_outline(
     continuation_mode: bool = False,
     start_chapter_number: int = 1,
     existing_titles: Optional[List[str]] = None,
-    batch_direction: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     identity = store.three_layer.get_identity()[:2500]
     messages = build_outline_messages(
@@ -1817,7 +1722,6 @@ def build_chapter_outline(
         project=project,
         identity=identity,
         continuation_mode=continuation_mode,
-        batch_direction=batch_direction,
     )
     raw = studio.llm_client.chat(
         messages,
@@ -2792,7 +2696,6 @@ class CreateProjectRequest(BaseModel):
     template_id: Optional[str] = None
     target_length: int = 300000
     taboo_constraints: List[str] = Field(default_factory=list)
-    synopsis: Optional[str] = None
 
 
 class BatchDeleteProjectsRequest(BaseModel):
@@ -2820,10 +2723,6 @@ class ReviewRequest(BaseModel):
     chapter_id: str
     action: ReviewAction
     comment: str = ""
-
-
-P0_EXEMPTION_ALLOWED = False
-APPROVAL_GATING_MODE = "unresolved_p0"
 
 
 class IdentityUpdateRequest(BaseModel):
@@ -2875,7 +2774,7 @@ class GenerationScope(str, Enum):
 
 
 class OneShotBookRequest(BaseModel):
-    prompt: str = ""
+    prompt: str
     mode: GenerationMode = GenerationMode.STUDIO
     scope: GenerationScope = GenerationScope.VOLUME
     chapter_count: Optional[int] = Field(default=None, ge=1, le=60)
@@ -2883,7 +2782,6 @@ class OneShotBookRequest(BaseModel):
     start_chapter_number: Optional[int] = Field(default=None, ge=1)
     auto_approve: bool = False
     continuation_mode: bool = False
-    batch_direction: Optional[str] = None
 
 
 class PromptPreviewRequest(BaseModel):
@@ -2895,7 +2793,6 @@ class PromptPreviewRequest(BaseModel):
     chapter_number: int = Field(default=1, ge=1)
     chapter_title: str = Field(default="第一章")
     chapter_goal: Optional[str] = None
-    batch_direction: Optional[str] = None
 
 
 class ProjectHealthRepairRequest(BaseModel):
@@ -3342,7 +3239,6 @@ async def prompt_preview(project_id: str, req: PromptPreviewRequest):
         project=project,
         identity=identity[:2500],
         continuation_mode=False,
-        batch_direction=req.batch_direction,
     )
     one_shot_messages = build_one_shot_messages(
         req=one_shot_req,
@@ -3437,9 +3333,6 @@ async def create_project(req: CreateProjectRequest):
         identity += f"- {selected_template.get('prompt_hint', '')}\n\n"
     else:
         identity += "- (未指定)\n\n"
-    if req.synopsis:
-        identity += "## Synopsis\n"
-        identity += f"{req.synopsis}\n\n"
     identity += "## Hard Taboos\n"
     if merged_taboos:
         identity += "".join(f"- {item}\n" for item in merged_taboos)
@@ -3871,7 +3764,6 @@ async def run_one_shot_book_generation(
         continuation_mode=req.continuation_mode,
         start_chapter_number=next_number,
         existing_titles=existing_titles,
-        batch_direction=req.batch_direction,
     )
     await emit_progress(
         progress,
@@ -4237,8 +4129,8 @@ async def generate_one_shot_book(project_id: str, req: OneShotBookRequest):
         raise HTTPException(status_code=404, detail="Project not found")
 
     prompt = req.prompt.strip()
-    if not prompt and not req.batch_direction:
-        raise HTTPException(status_code=400, detail="prompt or batch_direction is required")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
 
     store = get_or_create_store(project_id)
     studio = get_or_create_studio(project_id)
@@ -4270,8 +4162,8 @@ async def generate_one_shot_book_stream(project_id: str, req: OneShotBookRequest
         raise HTTPException(status_code=404, detail="Project not found")
 
     prompt = req.prompt.strip()
-    if not prompt and not req.batch_direction:
-        raise HTTPException(status_code=400, detail="prompt or batch_direction is required")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
 
     store = get_or_create_store(project_id)
     studio = get_or_create_studio(project_id)
@@ -4517,22 +4409,10 @@ async def get_chapter(chapter_id: str):
     return chapter.model_dump(mode="json")
 
 
-@app.put("/api/chapters/{chapter_id}/draft")
-async def update_draft(chapter_id: str, payload: UpdateDraftRequest):
-    chapter = resolve_chapter(chapter_id)
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Chapter not found")
-    project = resolve_project(chapter.project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
+def _recompute_chapter_consistency(chapter: Chapter, project: Project) -> Dict[str, Any]:
     store = get_or_create_store(chapter.project_id)
-    chapter.draft = payload.draft
-    chapter.word_count = len(payload.draft)
-    chapter.status = ChapterStatus.REVIEWING
-
     consistency = ConsistencyEngine().check(
-        payload.draft,
+        chapter.draft or "",
         {
             "chapter_id": chapter.chapter_number,
             "entities": store.get_all_entities(),
@@ -4545,24 +4425,53 @@ async def update_draft(chapter_id: str, payload: UpdateDraftRequest):
     chapter.p0_conflict_count = int(consistency["p0_count"])
     if chapter.first_pass_ok is None:
         chapter.first_pass_ok = bool(consistency["can_submit"])
+    return consistency
+
+
+def _conflict_log_fields(conflicts: List[Conflict]) -> Dict[str, Any]:
+    rule_ids = sorted({conflict.rule_id for conflict in conflicts if conflict.rule_id})
+    unresolved_p0_count = sum(
+        1
+        for conflict in conflicts
+        if conflict.severity.value == "P0" and not conflict.exempted and not conflict.resolved
+    )
+    return {
+        "rule_ids": rule_ids,
+        "unresolved_p0_count": unresolved_p0_count,
+    }
+
+
+@app.put("/api/chapters/{chapter_id}/draft")
+async def update_draft(chapter_id: str, payload: UpdateDraftRequest):
+    chapter = resolve_chapter(chapter_id)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    project = resolve_project(chapter.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    chapter.draft = payload.draft
+    chapter.word_count = len(payload.draft)
+    chapter.status = ChapterStatus.REVIEWING
+
+    consistency = _recompute_chapter_consistency(chapter, project)
     save_chapter(chapter)
+    conflict_log = _conflict_log_fields(chapter.conflicts)
     logger.info(
-        "draft updated manually chapter_id=%s project_id=%s words=%d conflicts_total=%d p0=%d",
+        "draft updated manually chapter_id=%s project_id=%s words=%d conflicts_total=%d p0=%d unresolved_p0_count=%d rule_ids=%s",
         chapter.id,
         chapter.project_id,
         chapter.word_count,
         consistency["total_conflicts"],
         consistency["p0_count"],
+        conflict_log["unresolved_p0_count"],
+        ",".join(conflict_log["rule_ids"]),
     )
     return {"chapter": chapter.model_dump(mode="json"), "consistency": consistency}
 
 
-class PlanGenerationRequest(BaseModel):
-    direction_hint: Optional[str] = None
-
-
 @app.post("/api/chapters/{chapter_id}/plan")
-async def generate_plan(chapter_id: str, req: PlanGenerationRequest = PlanGenerationRequest()):
+async def generate_plan(chapter_id: str):
     chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
@@ -4594,24 +4503,18 @@ async def generate_plan(chapter_id: str, req: PlanGenerationRequest = PlanGenera
     ]
     context_pack = mem_ctx.build_generation_context_pack(chapter.chapter_number, project_chapters)
 
-    plan_context: Dict[str, Any] = {
-        "project_info": project.model_dump(mode="json"),
-        "previous_chapters": [
-            c.model_dump(mode="json")
-            for c in chapter_list(chapter.project_id)
-            if c.chapter_number < chapter.chapter_number
-        ],
-        "context_pack": context_pack,
-    }
-    if req.direction_hint:
-        plan_context["direction_hint"] = (
-            f"用户对本章的修改方向要求：{req.direction_hint}\n"
-            "请在保持故事连贯性的前提下，按照用户的修改意图重新生成内容。"
-        )
     try:
         plan = await workflow.generate_plan(
             chapter,
-            plan_context,
+            {
+                "project_info": project.model_dump(mode="json"),
+                "previous_chapters": [
+                    c.model_dump(mode="json")
+                    for c in chapter_list(chapter.project_id)
+                    if c.chapter_number < chapter.chapter_number
+                ],
+                "context_pack": context_pack,
+            },
         )
     except RuntimeError as exc:
         logger.warning(
@@ -5017,7 +4920,6 @@ async def _generate_draft_internal_stream(
     progress: ProgressReporter,
     on_stage: Optional[Callable[..., Any]] = None,
     force: bool = False,
-    direction_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     chapter = resolve_chapter(chapter_id)
     if not chapter:
@@ -5130,30 +5032,24 @@ async def _generate_draft_internal_stream(
             "chapter_number": chapter.chapter_number,
         },
     )
-    draft_context: Dict[str, Any] = {
-        "identity": context_pack.get("identity_core") or store.three_layer.get_identity(),
-        "runtime_state": context_pack.get("runtime_state", ""),
-        "memory_compact": context_pack.get("memory_compact", ""),
-        "previous_chapter_synopsis": context_pack.get("previous_chapter_synopsis", ""),
-        "open_threads": context_pack.get("open_threads", []),
-        "project_style": project.style,
-        "target_words": target_words,
-        "previous_chapters": context_pack.get("previous_chapters_compact")
-        or [
-            c.final or c.draft or ""
-            for c in chapter_list(chapter.project_id)
-            if c.chapter_number < chapter.chapter_number
-        ][-5:],
-    }
-    if direction_hint:
-        draft_context["direction_hint"] = (
-            f"用户对本章的修改方向要求：{direction_hint}\n"
-            "请在保持故事连贯性的前提下，按照用户的修改意图重新生成内容。"
-        )
     draft = await workflow.generate_draft_stream(
         chapter,
         chapter.plan,
-        draft_context,
+        {
+            "identity": context_pack.get("identity_core") or store.three_layer.get_identity(),
+            "runtime_state": context_pack.get("runtime_state", ""),
+            "memory_compact": context_pack.get("memory_compact", ""),
+            "previous_chapter_synopsis": context_pack.get("previous_chapter_synopsis", ""),
+            "open_threads": context_pack.get("open_threads", []),
+            "project_style": project.style,
+            "target_words": target_words,
+            "previous_chapters": context_pack.get("previous_chapters_compact")
+            or [
+                c.final or c.draft or ""
+                for c in chapter_list(chapter.project_id)
+                if c.chapter_number < chapter.chapter_number
+            ][-5:],
+        },
         on_stage_chunk=stream_chunk,
         on_stage=on_stage,
     )
@@ -5202,12 +5098,7 @@ async def _generate_draft_internal_stream(
 
 
 @app.get("/api/chapters/{chapter_id}/draft/stream")
-async def stream_draft(
-    chapter_id: str,
-    force: bool = False,
-    resume_from: int = 0,
-    direction_hint: Optional[str] = None,
-):
+async def stream_draft(chapter_id: str, force: bool = False, resume_from: int = 0):
     chapter = resolve_chapter(chapter_id)
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
@@ -5340,7 +5231,6 @@ async def stream_draft(
                 progress=report,
                 on_stage=on_stage,
                 force=force,
-                direction_hint=direction_hint,
             )
             await report(
                 "done",
@@ -5626,34 +5516,68 @@ async def review_chapter(req: ReviewRequest):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    consistency: Optional[Dict[str, Any]] = None
-    pending_side_effect_args: Optional[Tuple[str, str, int, str, Any]] = None
+    P0_EXEMPTION_ALLOWED = False
+    P0_APPROVAL_BLOCK_MESSAGE = "P0 conflicts must be resolved before approval"
+    P0_EXEMPT_BLOCK_MESSAGE = "P0 conflicts cannot be exempted"
+    consistency = None
 
     if req.action == ReviewAction.APPROVE:
         p0_conflicts = [
             conflict
             for conflict in chapter.conflicts
-            if conflict.severity.value == "P0" and not conflict.exempted and not conflict.resolved
+            if conflict.severity.value == "P0" and not conflict.exempted
         ]
         if p0_conflicts:
+            conflict_log = _conflict_log_fields(chapter.conflicts)
             logger.warning(
-                "review blocked by P0 chapter_id=%s p0_count=%d",
+                "review blocked by P0 chapter_id=%s p0_count=%d unresolved_p0_count=%d rule_ids=%s",
                 chapter.id,
                 len(p0_conflicts),
+                conflict_log["unresolved_p0_count"],
+                ",".join(conflict_log["rule_ids"]),
             )
-            raise HTTPException(
-                status_code=400, detail="P0 conflicts must be resolved before approval"
-            )
+            raise HTTPException(status_code=400, detail=P0_APPROVAL_BLOCK_MESSAGE)
         chapter.final = chapter.draft
         chapter.status = ChapterStatus.APPROVED
         if chapter.final:
-            pending_side_effect_args = (
-                chapter.project_id,
-                chapter.id,
-                chapter.chapter_number,
-                chapter.final,
-                chapter.plan,
-            )
+            store = get_or_create_store(chapter.project_id)
+
+            # Memory context: consolidated refresh after approval (includes reflect)
+            try:
+                mem_ctx = MemoryContextService(store.three_layer, store)
+                project_chapters = [
+                    {
+                        "chapter_number": c.chapter_number,
+                        "plan": c.plan,
+                        "draft": c.draft,
+                        "final": c.final,
+                    }
+                    for c in chapter_list(chapter.project_id)
+                ]
+                mem_ctx.refresh_memory_after_chapter(
+                    chapter_number=chapter.chapter_number,
+                    chapter_text=chapter.final,
+                    chapter_plan=chapter.plan,
+                    project_chapters=project_chapters,
+                    mode="consolidated",
+                )
+            except Exception:
+                logger.warning(
+                    "consolidated memory refresh failed chapter_no=%d",
+                    chapter.chapter_number,
+                    exc_info=True,
+                )
+
+            # L4: auto-extract character profiles after chapter approval
+            try:
+                trigger_l4_extraction_async(
+                    store=store,
+                    chapter_text=chapter.final,
+                    chapter_number=chapter.chapter_number,
+                    project_id=chapter.project_id,
+                )
+            except Exception:
+                logger.warning("L4 trigger failed chapter_id=%s", chapter.id, exc_info=True)
     elif req.action == ReviewAction.REJECT:
         chapter.status = ChapterStatus.DRAFT
     elif req.action == ReviewAction.REWRITE:
@@ -5661,45 +5585,12 @@ async def review_chapter(req: ReviewRequest):
         chapter.draft = None
     elif req.action == ReviewAction.RESCAN:
         chapter.status = ChapterStatus.REVIEWING
-        draft_text = chapter.draft or ""
-        if draft_text.strip():
-            store = get_or_create_store(chapter.project_id)
-            consistency = ConsistencyEngine().check(
-                draft_text,
-                {
-                    "chapter_id": chapter.chapter_number,
-                    "entities": store.get_all_entities(),
-                    "events": store.get_all_events(),
-                    "identity": store.three_layer.get_identity(),
-                    "taboo_constraints": project.taboo_constraints,
-                },
-            )
-            chapter.conflicts = [Conflict.model_validate(item) for item in consistency["conflicts"]]
-            chapter.p0_conflict_count = int(consistency["p0_count"])
-            chapter.first_pass_ok = bool(consistency["can_submit"])
-        else:
-            chapter.conflicts = []
-            chapter.p0_conflict_count = 0
-            consistency = {
-                "can_submit": True,
-                "total_conflicts": 0,
-                "p0_count": 0,
-                "p1_count": 0,
-                "p2_count": 0,
-                "conflicts": [],
-                "p0_conflicts": [],
-                "p1_conflicts": [],
-                "p2_conflicts": [],
-            }
+        consistency = _recompute_chapter_consistency(chapter, project)
     elif req.action == ReviewAction.EXEMPT:
         if not P0_EXEMPTION_ALLOWED and any(
-            conflict.severity.value == "P0" and not conflict.exempted and not conflict.resolved
-            for conflict in chapter.conflicts
+            conflict.severity.value == "P0" for conflict in chapter.conflicts
         ):
-            raise HTTPException(
-                status_code=400,
-                detail="P0 conflicts cannot be exempted; resolve conflicts before approval",
-            )
+            raise HTTPException(status_code=400, detail=P0_EXEMPT_BLOCK_MESSAGE)
         for conflict in chapter.conflicts:
             if conflict.severity.value == "P1":
                 conflict.exempted = True
@@ -5713,38 +5604,10 @@ async def review_chapter(req: ReviewRequest):
         chapter.status.value,
         len(req.comment or ""),
     )
-    logger.info(
-        "review diagnostics chapter_id=%s action=%s unresolved_p0_count=%d p0=%d p1=%d p2=%d",
-        chapter.id,
-        req.action.value,
-        len(
-            [
-                c
-                for c in chapter.conflicts
-                if c.severity.value == "P0" and not c.exempted and not c.resolved
-            ]
-        ),
-        len([c for c in chapter.conflicts if c.severity.value == "P0"]),
-        len([c for c in chapter.conflicts if c.severity.value == "P1"]),
-        len([c for c in chapter.conflicts if c.severity.value == "P2"]),
-    )
-    if pending_side_effect_args is not None:
-        _spawn_review_side_effects_task(
-            run_review_approval_side_effects,
-            pending_side_effect_args[0],
-            pending_side_effect_args[1],
-            pending_side_effect_args[2],
-            pending_side_effect_args[3],
-            pending_side_effect_args[4],
-        )
-
-    response_payload = {
-        "status": chapter.status.value,
-        "action": req.action.value,
-        "comment": req.comment,
-        "consistency": consistency,
-    }
-    return response_payload
+    response = {"status": chapter.status.value, "action": req.action.value, "comment": req.comment}
+    if consistency is not None:
+        response["consistency"] = consistency
+    return response
 
 
 @app.post("/api/projects/{project_id}/fanqie/create-book")

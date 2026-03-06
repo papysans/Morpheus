@@ -57,61 +57,12 @@ const sampleChapter = {
     ],
 }
 
-const unresolvedP0Chapter = {
-    ...sampleChapter,
-    conflicts: [{ id: 'cf-u1', severity: 'P0' as const, rule_id: 'R001', reason: '时间线矛盾' }],
-}
-
-const resolvedP0Chapter = {
+const sampleChapterResolvedP0 = {
     ...sampleChapter,
     conflicts: [
-        {
-            id: 'cf-r1',
-            severity: 'P0' as const,
-            rule_id: 'R001',
-            reason: '已解决冲突',
-            resolved: true,
-        },
+        { id: 'cf-1', severity: 'P0' as const, rule_id: 'R001', reason: '时间线矛盾', resolved: true },
+        { id: 'cf-2', severity: 'P1' as const, rule_id: 'R002', reason: '角色名不一致', suggested_fix: '统一为"李明"' },
     ],
-}
-
-const exemptedP0Chapter = {
-    ...sampleChapter,
-    conflicts: [
-        {
-            id: 'cf-e1',
-            severity: 'P0' as const,
-            rule_id: 'R001',
-            reason: '已豁免冲突',
-            exempted: true,
-        },
-    ],
-}
-
-const approvedChapter = {
-    ...sampleChapter,
-    status: 'approved',
-    conflicts: [],
-}
-
-const approvedChapterWithEmptyDraft = {
-    ...sampleChapter,
-    status: 'approved',
-    draft: '',
-    final: '这是已审批终稿',
-    conflicts: [],
-}
-
-const reviewingChapter = {
-    ...sampleChapter,
-    status: 'reviewing',
-    conflicts: [],
-}
-
-const revisedChapter = {
-    ...sampleChapter,
-    status: 'revised',
-    conflicts: [],
 }
 
 const mockApiGet = vi.fn()
@@ -183,7 +134,7 @@ vi.mock('../../components/chapter/ChapterExportMenu', () => ({
 vi.mock('../../components/ui/ReadingModeToolbar', () => ({
     default: ({ onExit, currentLabel }: any) => (
         <div data-testid="reading-toolbar">
-            <button type="button" onClick={onExit}>退出阅读</button>
+            <button onClick={onExit}>退出阅读</button>
             <span>{currentLabel}</span>
         </div>
     ),
@@ -249,6 +200,18 @@ describe('ChapterWorkbenchPage', () => {
         })
         fireEvent.click(screen.getByText('删除本章'))
         expect(screen.getByText('删除当前章节？')).toBeTruthy()
+    })
+
+    it('一句话整篇字数输入允许清空后重输', async () => {
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('一句话整篇')).toBeTruthy()
+        })
+        const wordInput = screen.getByDisplayValue('1600') as HTMLInputElement
+        fireEvent.change(wordInput, { target: { value: '' } })
+        expect(wordInput.value).toBe('')
+        fireEvent.change(wordInput, { target: { value: '2200' } })
+        expect(wordInput.value).toBe('2200')
     })
 
     it('显示决策回放链接', async () => {
@@ -567,142 +530,59 @@ describe('ChapterWorkbenchPage', () => {
         expect(await screen.findByText('润色阶段内容')).toBeTruthy()
     })
 
-    it('编辑态显示实时草稿字数，预览态显示章节统计字数', async () => {
+    it('显示字数统计', async () => {
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText(`字数 ${sampleChapter.draft.length}`)).toBeTruthy()
-        })
-
-        fireEvent.click(screen.getByText('预览正文'))
-
-        await waitFor(() => {
-            expect(screen.getByText(`字数 ${sampleChapter.word_count}`)).toBeTruthy()
+            expect(screen.getByText('字数 18')).toBeTruthy()
         })
     })
 
-    it('有未解决 P0 冲突时禁用提交审批按钮', async () => {
-        mockApiGet.mockResolvedValue({ data: unresolvedP0Chapter })
+    it('有 P0 冲突时禁用审批通过按钮', async () => {
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText('提交审批')).toBeTruthy()
+            expect(screen.getByRole('button', { name: '审批通过' })).toBeTruthy()
         })
-        expect(screen.getByText('提交审批')).toHaveProperty('disabled', true)
+        expect(screen.getByRole('button', { name: '审批通过' })).toHaveProperty('disabled', true)
     })
 
-    it('P0 冲突已 resolved 时允许提交审批', async () => {
-        mockApiGet.mockResolvedValue({ data: resolvedP0Chapter })
+    it('全部 P0 已 resolved 时允许审批通过按钮可点击', async () => {
+        mockApiGet.mockResolvedValue({ data: sampleChapterResolvedP0 })
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText('提交审批')).toBeTruthy()
+            expect(screen.getByRole('button', { name: '审批通过' })).toBeTruthy()
         })
-        expect(screen.getByText('提交审批')).toHaveProperty('disabled', false)
+        expect(screen.getByRole('button', { name: '审批通过' })).toHaveProperty('disabled', false)
     })
 
-    it('P0 冲突已 exempted 时允许提交审批', async () => {
-        mockApiGet.mockResolvedValue({ data: exemptedP0Chapter })
+    it('审批遇到 P0 策略错误时显示精确提示', async () => {
+        mockApiGet.mockResolvedValue({ data: sampleChapterResolvedP0 })
+        mockApiPost.mockRejectedValue({ response: { data: { detail: 'P0 conflicts must be resolved before approval' } } })
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText('提交审批')).toBeTruthy()
+            expect(screen.getByRole('button', { name: '审批通过' })).toBeTruthy()
         })
-        expect(screen.getByText('提交审批')).toHaveProperty('disabled', false)
-    })
-
-    it('审批返回 P0 策略错误时展示精确提示', async () => {
-        mockApiGet.mockResolvedValue({ data: resolvedP0Chapter })
-        mockApiPost.mockRejectedValueOnce({
-            response: { data: { detail: 'P0 conflicts must be resolved before approval' } },
-            message: 'bad request',
-        })
-        renderPage()
+        fireEvent.click(screen.getByRole('button', { name: '审批通过' }))
         await waitFor(() => {
-            expect(screen.getByText('提交审批')).toBeTruthy()
-        })
-
-        fireEvent.click(screen.getByText('提交审批'))
-
-        await waitFor(() => {
-            expect(mockAddToast).toHaveBeenCalledWith('error', '提交审批失败', expect.objectContaining({
-                detail: '存在未解决的 P0 冲突，请先解决后再审批通过。',
+            expect(mockAddToast).toHaveBeenCalledWith('error', '需先解决 P0 冲突后再审批', expect.objectContaining({
+                context: '审批操作',
+                detail: 'P0 conflicts must be resolved before approval',
             }))
         })
     })
 
-    it('审批非 P0 错误时保留后端原始错误提示', async () => {
-        mockApiGet.mockResolvedValue({ data: resolvedP0Chapter })
-        mockApiPost.mockRejectedValueOnce({
-            response: { data: { detail: 'gateway timeout' } },
-            message: 'network failed',
-        })
+    it('审批遇到普通错误时仍显示通用失败提示', async () => {
+        mockApiGet.mockResolvedValue({ data: sampleChapterResolvedP0 })
+        mockApiPost.mockRejectedValue(new Error('网络错误'))
         renderPage()
         await waitFor(() => {
-            expect(screen.getByText('提交审批')).toBeTruthy()
+            expect(screen.getByRole('button', { name: '审批通过' })).toBeTruthy()
         })
-
-        fireEvent.click(screen.getByText('提交审批'))
-
+        fireEvent.click(screen.getByRole('button', { name: '审批通过' }))
         await waitFor(() => {
             expect(mockAddToast).toHaveBeenCalledWith('error', '提交审批失败', expect.objectContaining({
-                detail: 'gateway timeout',
+                context: '审批操作',
+                detail: '网络错误',
             }))
-        })
-    })
-
-    it('已审批状态展示状态与流程提示，按钮显示为重新打开审核并可点击', async () => {
-        mockApiGet.mockResolvedValue({ data: approvedChapter })
-        renderPage()
-
-        await waitFor(() => {
-            expect(screen.getByText('当前状态：已审批')).toBeTruthy()
-            expect(screen.getByText('当前已审批：如需继续修改，请先重新打开审核。')).toBeTruthy()
-            expect(screen.getByText('重新打开审核')).toBeTruthy()
-        })
-
-        expect(screen.getByText('重新打开审核')).toHaveProperty('disabled', false)
-    })
-
-    it('已审批状态点击重新打开审核会调用 rescan 并提示成功', async () => {
-        mockApiGet.mockResolvedValue({ data: approvedChapter })
-        mockApiPost.mockResolvedValueOnce({ data: { status: 'reviewing', action: 'rescan' } })
-        renderPage()
-
-        await waitFor(() => {
-            expect(screen.getByText('重新打开审核')).toBeTruthy()
-        })
-
-        fireEvent.click(screen.getByText('重新打开审核'))
-
-        await waitFor(() => {
-            expect(mockApiPost).toHaveBeenCalledWith('/review', { chapter_id: 'ch-1', action: 'rescan' }, expect.any(Object))
-            expect(mockAddToast).toHaveBeenCalledWith('success', '已重新打开审核，可继续修改后再提交审批')
-        })
-    })
-
-    it('已审批且草稿为空时仍可重新打开审核', async () => {
-        mockApiGet.mockResolvedValue({ data: approvedChapterWithEmptyDraft })
-        renderPage()
-
-        await waitFor(() => {
-            expect(screen.getByText('重新打开审核')).toBeTruthy()
-        })
-
-        expect(screen.getByText('重新打开审核')).toHaveProperty('disabled', false)
-    })
-
-    it('待审核与已退回状态展示对应流程提示与统一主按钮', async () => {
-        mockApiGet.mockResolvedValueOnce({ data: reviewingChapter })
-        renderPage()
-
-        await waitFor(() => {
-            expect(screen.getByText('当前状态：待审核')).toBeTruthy()
-            expect(screen.getByText('下一步：先处理冲突项，再提交审批。')).toBeTruthy()
-            expect(screen.getByText('提交审批')).toBeTruthy()
-        })
-
-        mockApiGet.mockResolvedValueOnce({ data: revisedChapter })
-        renderPage()
-        await waitFor(() => {
-            expect(screen.getByText('当前状态：已退回')).toBeTruthy()
-            expect(screen.getByText('下一步：根据退回意见修改，完成后重新提交审批。')).toBeTruthy()
         })
     })
 
@@ -778,6 +658,52 @@ describe('ChapterWorkbenchPage', () => {
         expect(screen.getByText('保存编辑并重检')).toBeTruthy()
     })
 
+    it('清空创作台会清空终稿与侧通道，且不触发保存接口', async () => {
+        mockApiGet.mockImplementation((url: string) => {
+            if (url === '/chapters/ch-1') {
+                return Promise.resolve({ data: sampleChapter })
+            }
+            if (url === '/trace/ch-1') {
+                return Promise.resolve({
+                    data: {
+                        channel_snapshot: {
+                            director: '导演阶段待办',
+                            setter: '设定阶段校验',
+                            stylist: '润色阶段建议',
+                        },
+                    },
+                })
+            }
+            return Promise.resolve({ data: sampleChapter })
+        })
+
+        renderPage()
+        await waitFor(() => {
+            expect(screen.getByText('清空创作台')).toBeTruthy()
+        })
+
+        const editor = document.querySelector('textarea[rows="22"]') as HTMLTextAreaElement
+        expect(editor).toBeTruthy()
+        fireEvent.change(editor, { target: { value: '临时编辑内容' } })
+        expect(editor.value).toBe('临时编辑内容')
+
+        fireEvent.click(screen.getByText('导演'))
+        expect(await screen.findByText('导演阶段待办')).toBeTruthy()
+
+        fireEvent.click(screen.getByText('清空创作台'))
+        expect(screen.getByText('清空当前创作台？')).toBeTruthy()
+        fireEvent.click(screen.getByText('确认清空'))
+
+        const clearedEditor = document.querySelector('textarea[rows="22"]') as HTMLTextAreaElement
+        expect(clearedEditor.value).toBe('')
+
+        fireEvent.click(screen.getByText('导演'))
+        expect(await screen.findByText('等待该阶段输出...')).toBeTruthy()
+        expect(screen.queryByText('导演阶段待办')).toBeNull()
+
+        expect(mockApiPut).not.toHaveBeenCalled()
+    })
+
     it('流式生成完成后会清理本地草稿，避免弹出恢复对话框', async () => {
         const originalEventSource = (globalThis as any).EventSource
         const sources: any[] = []
@@ -814,12 +740,12 @@ describe('ChapterWorkbenchPage', () => {
         try {
             renderPage()
             await waitFor(() => {
-                expect(screen.getByText('重做本章')).toBeTruthy()
+                expect(screen.getByText('流式生成草稿')).toBeTruthy()
             })
 
             localStorageMock.removeItem.mockClear()
 
-            fireEvent.click(screen.getByText('重做本章'))
+            fireEvent.click(screen.getByText('流式生成草稿'))
             expect(sources.length).toBeGreaterThan(0)
 
             const source = sources[0]
@@ -846,44 +772,6 @@ describe('ChapterWorkbenchPage', () => {
         await waitFor(() => {
             expect(mockAddToast).toHaveBeenCalledWith('success', '草稿保存成功')
         })
-    })
-
-    it('流式生成进行中时 Cmd/Ctrl+S 不会触发保存草稿', async () => {
-        const originalEventSource = (globalThis as any).EventSource
-
-        class MockEventSource {
-            onerror: any = null
-            private listeners = new Map<string, Array<(event: MessageEvent) => void>>()
-            constructor(_url: string) { /* noop */ }
-            addEventListener(type: string, listener: (event: MessageEvent) => void) {
-                const list = this.listeners.get(type) || []
-                list.push(listener)
-                this.listeners.set(type, list)
-            }
-            close() { return undefined }
-        }
-
-        (globalThis as any).EventSource = MockEventSource as any
-
-        try {
-            renderPage()
-            await waitFor(() => {
-                expect(screen.getByText('重做本章')).toBeTruthy()
-            })
-
-            fireEvent.click(screen.getByText('重做本章'))
-
-            const metaEvent = new KeyboardEvent('keydown', { key: 's', metaKey: true, cancelable: true })
-            const ctrlEvent = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true })
-            window.dispatchEvent(metaEvent)
-            window.dispatchEvent(ctrlEvent)
-
-            expect(mockApiPut).not.toHaveBeenCalled()
-            expect(metaEvent.defaultPrevented).toBe(true)
-            expect(ctrlEvent.defaultPrevented).toBe(true)
-        } finally {
-            (globalThis as any).EventSource = originalEventSource
-        }
     })
 
     /* ── useProjectStore 集成 ── */

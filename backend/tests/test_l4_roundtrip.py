@@ -1,7 +1,12 @@
 import io
 import os
 import unittest
-from typing import ClassVar, TypedDict, cast, override
+from typing import ClassVar, TypedDict, cast
+
+try:
+    from typing import override
+except ImportError:
+    from typing_extensions import override
 from uuid import uuid4
 
 os.environ["REMOTE_LLM_ENABLED"] = "false"

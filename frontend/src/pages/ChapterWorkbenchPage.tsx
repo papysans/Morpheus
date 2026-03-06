@@ -33,8 +33,8 @@ interface Conflict {
     reason: string
     suggested_fix?: string
     evidence_paths?: string[]
-    exempted?: boolean
     resolved?: boolean
+    exempted?: boolean
 }
 
 interface Plan {
@@ -77,13 +77,6 @@ interface Chapter {
     status: string
     word_count: number
     conflicts: Conflict[]
-}
-
-const chapterStatusMeta: Record<string, { label: string; hint: string }> = {
-    draft: { label: '草稿中', hint: '下一步：完善正文并保存，保存后可进入审核。' },
-    reviewing: { label: '待审核', hint: '下一步：先处理冲突项，再提交审批。' },
-    revised: { label: '已退回', hint: '下一步：根据退回意见修改，完成后重新提交审批。' },
-    approved: { label: '已审批', hint: '当前已审批：如需继续修改，请先重新打开审核。' },
 }
 
 interface StreamDonePayload {
@@ -148,6 +141,7 @@ function buildStreamSideChannelText(trace?: TracePayload | null): StreamSideChan
     return base
 }
 
+type OneShotMode = 'studio' | 'quick' | 'cinematic'
 
 type BlueprintDetailItem = {
     title: string
@@ -318,7 +312,12 @@ export default function ChapterWorkbenchPage() {
         setter: '',
         stylist: '',
     })
-    const [directionHint, setDirectionHint] = useState('')
+    const [oneShotPrompt, setOneShotPrompt] = useState('')
+    const [oneShotMode, setOneShotMode] = useState<OneShotMode>('studio')
+    const [oneShotWords, setOneShotWords] = useState(1600)
+    const [oneShotWordsInput, setOneShotWordsInput] = useState('1600')
+    const [oneShotLoading, setOneShotLoading] = useState(false)
+    const [oneShotStage, setOneShotStage] = useState<{ id: string; label: string } | null>(null)
     const [loadingPlan, setLoadingPlan] = useState(false)
     const [streaming, setStreaming] = useState(false)
     const [streamingStage, setStreamingStage] = useState<string | null>(null)
@@ -346,6 +345,7 @@ export default function ChapterWorkbenchPage() {
     const localDraftContent = autoSave.draftContent
     const clearLocalDraft = autoSave.clearDraft
     const [showDraftRestore, setShowDraftRestore] = useState(false)
+    const [showRejectConfirm, setShowRejectConfirm] = useState(false)
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
     const [showClearWorkspaceConfirm, setShowClearWorkspaceConfirm] = useState(false)
     const [deletingChapter, setDeletingChapter] = useState(false)
@@ -355,7 +355,7 @@ export default function ChapterWorkbenchPage() {
         : streamChannelText[streamChannel]
     const canEditDraft = streamChannel === 'arbiter'
     const emptyStreamText = streamChannel === 'arbiter'
-        ? '草稿内容将在此显示。'
+        ? '点击"流式生成草稿"开始创作。'
         : '等待该阶段输出...'
 
     /* ── 加载章节 ── */
@@ -365,7 +365,7 @@ export default function ChapterWorkbenchPage() {
             const response = await api.get(`/chapters/${chapterId}`)
             setChapter(response.data)
             setDraftContent(response.data.draft ?? response.data.final ?? '')
-            setDirectionHint((prev) => prev || '')
+            setOneShotPrompt((prev) => prev || response.data.goal || '')
 
             try {
                 const traceResponse = await api.get(`/trace/${chapterId}`)
@@ -447,13 +447,13 @@ export default function ChapterWorkbenchPage() {
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
             if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
-            event.preventDefault()
             if (!editing || savingDraft || streaming) return
+            event.preventDefault()
             void saveDraft()
         }
         window.addEventListener('keydown', onKeyDown)
         return () => window.removeEventListener('keydown', onKeyDown)
-    }, [editing, savingDraft, streaming]) // eslint-disable-line react-hooks/exhaustive-deps
+    }, [editing, savingDraft, streaming, draftContent]) // eslint-disable-line react-hooks/exhaustive-deps
 
     /* ── 草稿恢复处理 ── */
     const handleRestoreDraft = () => {
@@ -472,10 +472,7 @@ export default function ChapterWorkbenchPage() {
 
     /* ── 冲突分类 ── */
     const p0Conflicts = useMemo(
-        () =>
-            (chapter?.conflicts || []).filter(
-                (c) => c.severity === 'P0' && !c.exempted && !c.resolved,
-            ),
+        () => (chapter?.conflicts || []).filter((c) => c.severity === 'P0' && !c.resolved && !c.exempted),
         [chapter],
     )
     const p1Conflicts = useMemo(
@@ -486,23 +483,6 @@ export default function ChapterWorkbenchPage() {
         () => (chapter?.conflicts || []).filter((c) => c.severity === 'P2'),
         [chapter],
     )
-
-    const isGenerating = streaming
-    const statusKey = String(chapter?.status || 'draft').toLowerCase()
-    const statusMeta = chapterStatusMeta[statusKey] || chapterStatusMeta.draft
-    const isApproved = statusKey === 'approved'
-    const canApproveDraft = !isGenerating && p0Conflicts.length === 0 && !!draftContent.trim()
-    const canSubmitApproval = isApproved ? !isGenerating : canApproveDraft
-    const primaryActionLabel = isApproved ? '重新打开审核' : '提交审批'
-    const primaryActionReason = isApproved
-        ? isGenerating
-            ? '正在生成中，请等待完成或停止当前任务'
-            : '当前章节已审批，如需修改请先重新打开审核'
-        : p0Conflicts.length > 0
-            ? '存在 P0 冲突，请先解决后再审批'
-            : !draftContent.trim()
-                ? '无草稿内容'
-                : '正在生成中，请等待完成或停止当前任务'
 
     const blueprintBeats = useMemo(
         () => (chapter?.plan?.beats || []).map(cleanBlueprintText).filter(Boolean),
@@ -693,22 +673,18 @@ export default function ChapterWorkbenchPage() {
         })
 
         source.addEventListener('error', (event) => {
-            try {
-                const payload = JSON.parse((event as MessageEvent).data) as { detail?: string }
-                source.close()
-                setStreaming(false)
-                setStreamingStage(null)
-                addToast('error', payload?.detail || '流式生成失败', {
-                    context: '流式生成',
-                    actions: [
-                        { label: '继续生成', onClick: () => startDraftStream(false, true) },
-                        { label: '重新开始', onClick: () => startDraftStream(true, false) },
-                    ],
-                })
-                addRecord({ type: 'generate', description: '流式生成失败', status: 'error', retryAction: () => startDraftStream(false, true) })
-            } catch {
-                // Non-JSON error event — handled by onerror below
-            }
+            const payload = JSON.parse((event as MessageEvent).data) as { detail?: string }
+            source.close()
+            setStreaming(false)
+            addToast('error', '流式生成失败', {
+                context: '流式生成',
+                actions: [
+                    { label: '继续生成', onClick: () => startDraftStream(false, true) },
+                    { label: '重新开始', onClick: () => startDraftStream(true, false) },
+                ],
+                detail: payload?.detail || '流式生成失败',
+            })
+            addRecord({ type: 'generate', description: '流式生成失败', status: 'error', retryAction: () => startDraftStream(false, true) })
         })
 
         source.addEventListener('done', async (event) => {
@@ -730,18 +706,34 @@ export default function ChapterWorkbenchPage() {
             addRecord({ type: 'generate', description: '草稿生成完成', status: 'success' })
         })
 
+        source.addEventListener('error', (event) => {
+            try {
+                const payload = JSON.parse((event as MessageEvent).data)
+                source.close()
+                setStreaming(false)
+                setStreamingStage(null)
+                addToast('error', payload.detail || '草稿生成失败', {
+                    context: '流式生成',
+                    actions: [{ label: '重试', onClick: () => startDraftStream(true, false) }],
+                })
+                addRecord({ type: 'generate', description: '草稿生成失败', status: 'error', retryAction: () => startDraftStream(true, false) })
+            } catch {
+                // Not a business error event, let onerror handle it
+            }
+        })
+
         source.onerror = () => {
             source.close()
             setStreaming(false)
             setStreamingStage(null)
-            addToast('error', '流式连接中断', {
+            addToast('error', '流式生成中断', {
                 context: '流式生成',
                 actions: [
                     { label: '继续生成', onClick: () => startDraftStream(false, true) },
                     { label: '重新开始', onClick: () => startDraftStream(true, false) },
                 ],
             })
-            addRecord({ type: 'generate', description: '流式连接中断', status: 'error', retryAction: () => startDraftStream(false, true) })
+            addRecord({ type: 'generate', description: '流式生成中断', status: 'error', retryAction: () => startDraftStream(false, true) })
         }
     }
 
@@ -756,41 +748,13 @@ export default function ChapterWorkbenchPage() {
         } catch (err: any) {
             console.error(err)
             const detail = err?.response?.data?.detail || err?.message
-            const isP0PolicyError =
-                typeof detail === 'string' &&
-                detail.toLowerCase().includes('p0') &&
-                detail.toLowerCase().includes('resolved before approval')
-            addToast('error', '提交审批失败', {
+            const isP0PolicyError = detail === 'P0 conflicts must be resolved before approval' || detail === 'P0 conflicts cannot be exempted'
+            addToast('error', isP0PolicyError ? '需先解决 P0 冲突后再审批' : '提交审批失败', {
                 context: '审批操作',
                 actions: [{ label: '重试', onClick: () => void reviewDraft(action) }],
-                detail: isP0PolicyError
-                    ? '存在未解决的 P0 冲突，请先解决后再审批通过。'
-                    : detail,
+                detail,
             })
             addRecord({ type: 'approve', description: '审批操作失败', status: 'error', retryAction: () => void reviewDraft(action) })
-        }
-    }
-
-    const reopenReview = async () => {
-        if (!chapterId) return
-        try {
-            await api.post('/review', { chapter_id: chapterId, action: 'rescan' }, { timeout: LLM_TIMEOUT })
-            await loadChapter()
-            addToast('success', '已重新打开审核，可继续修改后再提交审批')
-            addRecord({ type: 'approve', description: '重新打开审核', status: 'success' })
-        } catch (err: any) {
-            console.error(err)
-            addToast('error', '重新打开审核失败', {
-                context: '审批操作',
-                actions: [{ label: '重试', onClick: () => void reopenReview() }],
-                detail: err?.response?.data?.detail || err?.message,
-            })
-            addRecord({
-                type: 'approve',
-                description: '重新打开审核失败',
-                status: 'error',
-                retryAction: () => void reopenReview(),
-            })
         }
     }
 
@@ -823,6 +787,113 @@ export default function ChapterWorkbenchPage() {
             addRecord({ type: 'save', description: '草稿保存失败', status: 'error', retryAction: () => void saveDraft() })
         } finally {
             setSavingDraft(false)
+        }
+    }
+
+    const oneShotAbortRef = useRef<AbortController | null>(null)
+
+    const generateOneShot = async () => {
+        if (!chapterId || !oneShotPrompt.trim()) return
+        setOneShotLoading(true)
+        setDraftContent('')
+
+        const controller = new AbortController()
+        oneShotAbortRef.current = controller
+
+        try {
+            const res = await fetch(`/api/chapters/${chapterId}/one-shot/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    prompt: oneShotPrompt.trim(),
+                    mode: oneShotMode,
+                    target_words: oneShotWords,
+                    override_goal: true,
+                    rewrite_plan: true,
+                }),
+                signal: controller.signal,
+            })
+
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text || `HTTP ${res.status}`)
+            }
+
+            if (!res.body) throw new Error('No response body')
+
+            const reader = res.body.getReader()
+            const decoder = new TextDecoder('utf-8')
+            let buffer = ''
+            let receivedChunk = false
+
+            while (true) {
+                if (controller.signal.aborted) {
+                    await reader.cancel()
+                    break
+                }
+                const { value, done: readerDone } = await reader.read()
+                if (readerDone) break
+                buffer += decoder.decode(value, { stream: true })
+                const frames = buffer.split('\n\n')
+                buffer = frames.pop() || ''
+
+                for (const frame of frames) {
+                    const lines = frame.split('\n').map((l: string) => l.trim()).filter(Boolean)
+                    if (lines.length === 0) continue
+                    let eventName = 'message'
+                    const dataLines: string[] = []
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) eventName = line.slice(6).trim()
+                        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+                    }
+                    const raw = dataLines.join('\n')
+                    if (!raw) continue
+
+                    if (eventName === 'heartbeat') continue
+
+                    let payload: any = {}
+                    try { payload = JSON.parse(raw) } catch { continue }
+
+                    if (eventName === 'stage') {
+                        setOneShotStage({ id: payload.stage, label: payload.label })
+                        continue
+                    }
+
+                    if (eventName === 'chunk') {
+                        receivedChunk = true
+                        setDraftContent((prev) => prev + (payload.chunk || ''))
+                    } else if (eventName === 'done') {
+                        setOneShotStage(null)
+                        if (payload.chapter) {
+                            setChapter(payload.chapter)
+                        }
+                        if (!receivedChunk && payload.draft) {
+                            setDraftContent(payload.draft)
+                        }
+                        await loadChapter()
+                        addToast('success', '一句话整篇生成完成')
+                    } else if (eventName === 'error') {
+                        throw new Error(payload.detail || '一句话整篇生成失败')
+                    }
+                }
+            }
+            clearLocalDraft()
+            setShowDraftRestore(false)
+            addToast('success', '一句话整篇生成完成')
+        } catch (err: any) {
+            setOneShotStage(null)
+            if (controller.signal.aborted) {
+                addToast('info', '一句话整篇已取消')
+            } else {
+                console.error(err)
+                addToast('error', err?.message ?? '一句话整篇生成失败', {
+                    context: '一句话整篇',
+                    actions: [{ label: '重试', onClick: () => void generateOneShot() }],
+                })
+            }
+        } finally {
+            setOneShotLoading(false)
+            oneShotAbortRef.current = null
         }
     }
 
@@ -939,12 +1010,12 @@ export default function ChapterWorkbenchPage() {
             stylist: '',
         })
         setStreamChannel('arbiter')
-        setDirectionHint('')
+        setOneShotPrompt('')
         setEditing(true)
         autoSave.clearDraft()
         setShowDraftRestore(false)
-        addToast('success', '编辑区已清空（仅本地，不影响已保存章节）')
-        addRecord({ type: 'save', description: '清空编辑区（仅本地）', status: 'success' })
+        addToast('success', '创作台已清空（仅本地，不影响已保存章节）')
+        addRecord({ type: 'save', description: '清空创作台（仅本地）', status: 'success' })
     }
 
     const fillFanqieFormWithLLM = async () => {
@@ -1188,7 +1259,7 @@ export default function ChapterWorkbenchPage() {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', width: '100%', flexBasis: '100%' }}>
                         <div className="grid-actions">
-                            <button className="btn btn-secondary" onClick={() => setShowDeleteConfirm(true)} disabled={isGenerating || deletingChapter}>
+                            <button className="btn btn-secondary" onClick={() => setShowDeleteConfirm(true)} disabled={streaming || deletingChapter}>
                                 {deletingChapter ? '处理中...' : '删除本章'}
                             </button>
                             <button className="btn btn-secondary" onClick={enterReadingMode}>
@@ -1206,7 +1277,7 @@ export default function ChapterWorkbenchPage() {
                             <button
                                 className="btn btn-secondary"
                                 onClick={() => setShowFanqieCreateForm((v) => !v)}
-                                disabled={creatingFanqieBook || fillingFanqieByLLM || isGenerating}
+                                disabled={creatingFanqieBook || fillingFanqieByLLM || streaming}
                             >
                                 {showFanqieCreateForm ? '收起番茄参数' : '填写番茄参数'}
                             </button>
@@ -1214,16 +1285,16 @@ export default function ChapterWorkbenchPage() {
                                 reason={
                                     creatingFanqieBook
                                         ? '正在创建番茄书本，请稍候'
-                                        : isGenerating
+                                        : streaming
                                             ? '请先等待当前生成流程结束'
                                             : '将调用 Playwright 在番茄后台创建新书并自动绑定 book_id'
                                 }
-                                disabled={creatingFanqieBook || fillingFanqieByLLM || isGenerating}
+                                disabled={creatingFanqieBook || fillingFanqieByLLM || streaming}
                             >
                                 <button
                                     className="btn btn-secondary"
                                     onClick={() => void createAndBindFanqieBook()}
-                                    disabled={creatingFanqieBook || fillingFanqieByLLM || isGenerating}
+                                    disabled={creatingFanqieBook || fillingFanqieByLLM || streaming}
                                 >
                                     {creatingFanqieBook ? '创建中...' : '创建并绑定番茄书本'}
                                 </button>
@@ -1241,12 +1312,12 @@ export default function ChapterWorkbenchPage() {
                                             ? '当前无可发布正文'
                                             : '请先等待当前生成流程结束'
                                 }
-                                disabled={publishing || isGenerating || !draftContent.trim()}
+                                disabled={publishing || streaming || !draftContent.trim()}
                             >
                                 <button
                                     className="btn btn-primary"
                                     onClick={() => void publishChapterExternally()}
-                                    disabled={publishing || isGenerating || !draftContent.trim()}
+                                    disabled={publishing || streaming || !draftContent.trim()}
                                 >
                                     {publishing ? '发布中...' : '一键发布章节'}
                                 </button>
@@ -1468,6 +1539,11 @@ export default function ChapterWorkbenchPage() {
                                     </div>
                                 </div>
                             )}
+                            <div style={{ marginTop: 12 }}>
+                                <button className="btn btn-secondary" onClick={generatePlan} disabled={loadingPlan || streaming}>
+                                    {loadingPlan ? '生成中...' : chapter.plan ? '重新生成蓝图' : '生成蓝图'}
+                                </button>
+                            </div>
                         </section>
 
                         {/* 一致性冲突 */}
@@ -1498,29 +1574,152 @@ export default function ChapterWorkbenchPage() {
                         </section>
                     </div>
 
-                    {/* 右栏 */}
-                    <div style={{ display: 'grid', gap: 12 }}>
+                    {/* 右栏 - 正文草稿 */}
                     <section className="card" style={{ padding: 14 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
                             <h2 className="section-title">正文草稿</h2>
-                            <span className="chip">字数 {editing ? draftContent.length : (chapter.word_count || draftContent.length)}</span>
+                            <span className="chip">字数 {chapter.word_count || draftContent.length}</span>
                         </div>
 
                         <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            {!chapter.plan && !draftContent.trim() && (
-                                <p className="muted" style={{ margin: 0 }}>
-                                    本章尚未生成内容，请前往
-                                    <Link to={`/project/${projectId}/write`} style={{ marginLeft: 4, marginRight: 4 }}>
-                                        创作控制台
-                                    </Link>
-                                    生成。
-                                </p>
+                            {/* 一句话整篇 */}
+                            <div className="card-strong" style={{ width: '100%', padding: 10, marginBottom: 4 }}>
+                                <div className="metric-label" style={{ marginBottom: 6 }}>一句话整篇</div>
+                                <textarea
+                                    className="textarea"
+                                    rows={3}
+                                    placeholder="输入一句话梗概，例如：雪夜里主角被同伴背叛后设局反杀。"
+                                    value={oneShotPrompt}
+                                    onChange={(e) => setOneShotPrompt(e.target.value)}
+                                    disabled={streaming || oneShotLoading}
+                                />
+                                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                                    <select
+                                        className="input"
+                                        value={oneShotMode}
+                                        onChange={(e) => setOneShotMode(e.target.value as OneShotMode)}
+                                        disabled={streaming || oneShotLoading}
+                                        style={{ width: 170 }}
+                                    >
+                                        <option value="studio">Studio 多Agent</option>
+                                        <option value="quick">Quick 极速</option>
+                                        <option value="cinematic">Cinematic 电影感</option>
+                                    </select>
+                                    <input
+                                        className="input"
+                                        type="number"
+                                        min={300}
+                                        max={12000}
+                                        value={oneShotWordsInput}
+                                        onChange={(e) => {
+                                            const raw = e.target.value
+                                            if (!/^\d*$/.test(raw)) return
+                                            setOneShotWordsInput(raw)
+                                            if (!raw) return
+                                            const parsed = Number(raw)
+                                            if (Number.isFinite(parsed)) {
+                                                setOneShotWords(parsed)
+                                            }
+                                        }}
+                                        onBlur={() => {
+                                            if (!oneShotWordsInput.trim()) {
+                                                setOneShotWordsInput(String(oneShotWords))
+                                                return
+                                            }
+                                            const parsed = Number(oneShotWordsInput)
+                                            if (!Number.isFinite(parsed)) {
+                                                setOneShotWordsInput(String(oneShotWords))
+                                                return
+                                            }
+                                            const normalized = Math.max(300, Math.min(12000, parsed))
+                                            setOneShotWords(normalized)
+                                            setOneShotWordsInput(String(normalized))
+                                        }}
+                                        disabled={streaming || oneShotLoading}
+                                        style={{ width: 130 }}
+                                    />
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={generateOneShot}
+                                        disabled={streaming || oneShotLoading || !oneShotPrompt.trim()}
+                                    >
+                                        {oneShotLoading
+                                            ? (oneShotStage ? oneShotStage.label : '整篇生成中...')
+                                            : '一句话生成整篇'}
+                                    </button>
+                                </div>
+                                {oneShotLoading && (() => {
+                                    const studioSteps = [
+                                        { id: 'plan', label: '蓝图' },
+                                        { id: 'director', label: '导演' },
+                                        { id: 'setter', label: '审校' },
+                                        { id: 'stylist', label: '润色' },
+                                        { id: 'arbiter', label: '终稿' },
+                                        { id: 'consistency', label: '检查' },
+                                    ]
+                                    const quickSteps = [
+                                        { id: 'plan', label: '蓝图' },
+                                        { id: 'draft_streaming', label: '生成' },
+                                        { id: 'consistency', label: '检查' },
+                                    ]
+                                    const steps = oneShotMode === 'studio' ? studioSteps : quickSteps
+                                    const currentIdx = oneShotStage
+                                        ? steps.findIndex((s) => s.id === oneShotStage.id)
+                                        : -1
+                                    return (
+                                        <div style={{ display: 'flex', gap: 0, marginTop: 8, width: '100%' }}>
+                                            {steps.map((step, i) => {
+                                                const status = i < currentIdx ? 'completed' : i === currentIdx ? 'active' : 'pending'
+                                                return (
+                                                    <div
+                                                        key={step.id}
+                                                        style={{
+                                                            flex: 1,
+                                                            textAlign: 'center',
+                                                            padding: '4px 0',
+                                                            fontSize: 11,
+                                                            fontWeight: status === 'active' ? 700 : 400,
+                                                            color: status === 'pending' ? 'var(--text-muted, #888)' : status === 'active' ? 'var(--accent, #4f8cff)' : 'var(--text-secondary, #aaa)',
+                                                            borderBottom: `2px solid ${status === 'active' ? 'var(--accent, #4f8cff)' : status === 'completed' ? 'var(--success, #52c41a)' : 'var(--border, #333)'}`,
+                                                            transition: 'all 0.3s',
+                                                        }}
+                                                    >
+                                                        {status === 'completed' ? `✓ ${step.label}` : step.label}
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                    )
+                                })()}
+                            </div>
+
+                            {!chapter.plan && (
+                                <button className="btn btn-secondary" onClick={generatePlan} disabled={loadingPlan || streaming}>
+                                    先生成蓝图
+                                </button>
+                            )}
+                            <DisabledTooltip reason="正在生成中，请等待完成或停止当前任务" disabled={streaming}>
+                                <button className="btn btn-primary" disabled={streaming} onClick={() => startDraftStream(true, false)}>
+                                    {streaming ? (streamingStage || '流式生成中...') : '流式生成草稿'}
+                                </button>
+                            </DisabledTooltip>
+                            {draftContent.length > 0 && (
+                                <button className="btn btn-secondary" disabled={streaming} onClick={() => startDraftStream(false, true)}>
+                                    继续流式生成
+                                </button>
                             )}
                             <button className="btn btn-secondary" onClick={() => setEditing((s) => !s)}>
                                 {editing ? '预览正文' : '返回编辑'}
                             </button>
-                            <button className="btn btn-secondary" disabled={savingDraft || isGenerating} onClick={saveDraft}>
+                            <button className="btn btn-secondary" disabled={savingDraft || streaming} onClick={saveDraft}>
                                 {savingDraft ? '保存中...' : '保存编辑并重检'}
+                            </button>
+                            <button
+                                className="btn btn-secondary"
+                                disabled={streaming || (!draftContent.trim() && !oneShotPrompt.trim())}
+                                onClick={() => setShowClearWorkspaceConfirm(true)}
+                            >
+                                清空创作台
                             </button>
                             {editing && autoSave.lastSaved && (
                                 <span className="muted" style={{ fontSize: '0.8rem', alignSelf: 'center' }}>
@@ -1534,7 +1733,7 @@ export default function ChapterWorkbenchPage() {
                             <button
                                 className={streamChannel === 'arbiter' ? 'btn btn-primary' : 'btn btn-secondary'}
                                 onClick={() => setStreamChannel('arbiter')}
-                                disabled={isGenerating && streamChannel !== 'arbiter' && draftContent.length === 0}
+                                disabled={streaming && streamChannel !== 'arbiter' && draftContent.length === 0}
                             >
                                 终稿
                             </button>
@@ -1562,7 +1761,7 @@ export default function ChapterWorkbenchPage() {
                             {editing && canEditDraft ? (
                                 <textarea
                                     className="textarea"
-                                    style={{ height: 480, resize: 'vertical' }}
+                                    rows={22}
                                     value={draftContent}
                                     onChange={(e) => setDraftContent(e.target.value)}
                                 />
@@ -1570,13 +1769,11 @@ export default function ChapterWorkbenchPage() {
                                 <div
                                     className="card-strong"
                                     style={{
-                                        padding: '10px 14px',
-                                        height: 480,
+                                        padding: 12,
+                                        minHeight: 420,
                                         whiteSpace: 'pre-wrap',
-                                        fontSize: '0.9rem',
-                                        lineHeight: 1.6,
-                                        fontFamily: 'inherit',
-                                        overflowY: 'auto',
+                                        lineHeight: 1.7,
+                                        overflow: 'auto',
                                     }}
                                 >
                                     {activeStreamText || emptyStreamText}
@@ -1584,72 +1781,58 @@ export default function ChapterWorkbenchPage() {
                             )}
                         </div>
 
-                        <div className="grid-actions" style={{ marginTop: 12, alignItems: 'center', gap: 10 }}>
-                            <div className="card-strong" style={{ padding: '8px 10px', minWidth: 260 }}>
-                                <div className="metric-label">当前状态：{statusMeta.label}</div>
-                                <div className="muted" style={{ fontSize: '0.85rem', marginTop: 4 }}>{statusMeta.hint}</div>
-                                {p0Conflicts.length > 0 && (
-                                    <div style={{ fontSize: '0.82rem', marginTop: 4, color: 'var(--warning, #faad14)' }}>
-                                        当前阻断：存在未解决 P0 冲突，请先处理后再审批。
-                                    </div>
-                                )}
-                            </div>
+                        <div className="grid-actions" style={{ marginTop: 12 }}>
                             <DisabledTooltip
-                                reason={primaryActionReason}
-                                disabled={!canSubmitApproval}
+                                reason={
+                                    p0Conflicts.length > 0
+                                        ? '存在 P0 冲突，请先解决后再审批'
+                                        : !draftContent.trim()
+                                            ? '无草稿内容'
+                                            : '正在生成中，请等待完成或停止当前任务'
+                                }
+                                disabled={streaming || p0Conflicts.length > 0 || !draftContent.trim()}
                             >
                                 <button
                                     className="btn btn-primary"
-                                    onClick={() => (isApproved ? reopenReview() : reviewDraft('approve'))}
-                                    disabled={!canSubmitApproval}
+                                    onClick={() => reviewDraft('approve')}
+                                    disabled={streaming || p0Conflicts.length > 0 || !draftContent.trim()}
                                 >
-                                    {primaryActionLabel}
+                                    审批通过
                                 </button>
                             </DisabledTooltip>
-                        </div>
-                    </section>
-
-                    <section className="card" style={{ padding: 14 }}>
-                        <h2 className="section-title">修改方向</h2>
-                        <p className="muted" style={{ margin: '6px 0 10px', fontSize: '0.82rem' }}>
-                            对本章内容不满意？填写修改意图后重新生成蓝图或重做整章。留空则由 AI 自行判断。
-                        </p>
-                        <textarea
-                            className="textarea"
-                            rows={2}
-                            placeholder="描述你想怎么改这一章，如：把背叛情节改成暗中保护的误会"
-                            value={directionHint}
-                            onChange={(e) => setDirectionHint(e.target.value)}
-                            disabled={isGenerating}
-                        />
-                        <div className="modifier-section__actions">
-                            <button className="btn btn-secondary" onClick={generatePlan} disabled={loadingPlan || isGenerating}>
-                                {loadingPlan ? '生成中...' : '重新生成蓝图'}
+                            <button className="btn btn-secondary" onClick={() => setShowRejectConfirm(true)} disabled={streaming}>
+                                退回重写
                             </button>
-                            {draftContent.trim() && (
-                                <button
-                                    className="btn btn-secondary"
-                                    disabled={isGenerating}
-                                    onClick={() => startDraftStream(true, false)}
-                                >
-                                    {streaming ? (streamingStage || '重做中...') : '重做本章'}
-                                </button>
+                            {p0Conflicts.length > 0 && (
+                                <span className="muted" style={{ fontSize: '0.85rem' }}>
+                                    存在 {p0Conflicts.length} 个 P0 冲突需解决
+                                </span>
                             )}
                         </div>
-                        {draftContent.trim() && hasNextChapter && (
-                            <p className="modifier-section__warning">
-                                后续章节已存在，重做本章可能导致衔接不一致。建议重做后检查后续章节的一致性冲突。
-                            </p>
-                        )}
                     </section>
-                    </div>
                 </div>
 
-                {/* 清空编辑区确认对话框 */}
+                {/* 退回重写确认对话框 */}
+                {showRejectConfirm && (
+                    <div className="modal-backdrop">
+                        <div className="card" style={{ padding: 20, textAlign: 'center', maxWidth: 360 }}>
+                            <p style={{ margin: '0 0 8px', fontWeight: 500 }}>确认退回重写？</p>
+                            <p className="muted" style={{ margin: '0 0 16px' }}>
+                                退回后当前草稿将标记为需要重写，此操作不可撤销。
+                            </p>
+                            <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
+                                <button className="btn btn-secondary" onClick={() => setShowRejectConfirm(false)}>取消</button>
+                                <button className="btn btn-primary" onClick={() => { setShowRejectConfirm(false); reviewDraft('reject') }}>确认退回</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 清空创作台确认对话框 */}
                 {showClearWorkspaceConfirm && (
                     <div className="modal-backdrop">
                         <div className="card" style={{ padding: 20, textAlign: 'center', maxWidth: 380 }}>
-                            <p style={{ margin: '0 0 8px', fontWeight: 500 }}>清空编辑区？</p>
+                            <p style={{ margin: '0 0 8px', fontWeight: 500 }}>清空当前创作台？</p>
                             <p className="muted" style={{ margin: '0 0 16px' }}>
                                 该操作只清空当前页面编辑区和本地草稿，不会删除服务器已保存内容与历史章节。
                             </p>
