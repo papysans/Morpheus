@@ -9,15 +9,14 @@ import { useToastStore } from '../stores/useToastStore'
 import PageTransition from '../components/ui/PageTransition'
 import Skeleton from '../components/ui/Skeleton'
 
-/** Unified chart theme aligned with the 2026-02 bright design system */
 export const CHART_THEME = {
-    accentColor: '#0a8b83',                    // var(--accent)
-    gridColor: 'rgba(102, 124, 164, 0.16)',    // based on --glass-border
-    tickColor: '#7e8fab',                       // var(--text-tertiary)
-    legendColor: '#5a6e8d',                     // var(--text-secondary)
-    tooltipBg: 'rgba(255, 255, 255, 0.96)',
-    tooltipBorder: 'rgba(102, 124, 164, 0.22)',
-    tooltipColor: '#1e2a3f',                    // var(--text-primary)
+    accentColor: 'var(--chart-accent)',
+    gridColor: 'var(--chart-grid-color)',
+    tickColor: 'var(--chart-tick-color)',
+    legendColor: 'var(--chart-legend-color)',
+    tooltipBg: 'var(--chart-tooltip-bg)',
+    tooltipBorder: 'var(--chart-tooltip-border)',
+    tooltipColor: 'var(--chart-tooltip-color)',
 } as const
 
 interface Metrics {
@@ -211,6 +210,7 @@ export default function DashboardPage() {
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                         {(Object.keys(QUALITY_DRILL_CONFIG) as QualityDrillKey[]).map((key) => (
                             <button
+                                type="button"
                                 key={key}
                                 className={`chip-btn ${selectedDrillKey === key ? 'active' : ''}`}
                                 onClick={() => setSelectedDrillKey(key)}

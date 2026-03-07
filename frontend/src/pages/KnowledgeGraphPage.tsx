@@ -71,12 +71,12 @@ export interface L4GraphEdge {
 /* ── Style config ── */
 
 export const ENTITY_STYLES: Record<string, { color: string; borderColor: string; textColor: string; shape: string; label: string }> = {
-    character: { color: 'rgba(45, 126, 192, 0.14)', borderColor: 'rgba(45, 126, 192, 0.5)', textColor: '#2d7ec0', shape: 'circle', label: '人物' },
-    location: { color: 'rgba(31, 159, 97, 0.14)', borderColor: 'rgba(31, 159, 97, 0.5)', textColor: '#1f9f61', shape: 'square', label: '地点' },
-    item: { color: 'rgba(173, 111, 27, 0.14)', borderColor: 'rgba(173, 111, 27, 0.5)', textColor: '#ad6f1b', shape: 'diamond', label: '物品' },
+    character: { color: 'var(--graph-character-bg)', borderColor: 'var(--graph-character-border)', textColor: 'var(--graph-character-text)', shape: 'circle', label: '人物' },
+    location: { color: 'var(--graph-location-bg)', borderColor: 'var(--graph-location-border)', textColor: 'var(--graph-location-text)', shape: 'square', label: '地点' },
+    item: { color: 'var(--graph-item-bg)', borderColor: 'var(--graph-item-border)', textColor: 'var(--graph-item-text)', shape: 'diamond', label: '物品' },
 }
 
-const DEFAULT_STYLE = { color: 'rgba(102, 124, 164, 0.08)', borderColor: 'rgba(102, 124, 164, 0.2)', textColor: '#5a6e8d', shape: 'square', label: '未知' }
+const DEFAULT_STYLE = { color: 'var(--graph-default-bg)', borderColor: 'var(--graph-default-border)', textColor: 'var(--graph-default-text)', shape: 'square', label: '未知' }
 
 const ROLE_NAME_ALIASES: Record<string, string> = {
     primary: '主角',
@@ -252,9 +252,9 @@ function EntityNodeComponent({ data }: NodeProps<EntityNodeData>) {
                         padding: '10px 14px',
                         borderRadius: 10,
                         border: '1px solid var(--glass-border)',
-                        background: 'rgba(255, 255, 255, 0.96)',
+                        background: 'var(--graph-tooltip-bg)',
                         backdropFilter: 'blur(20px)',
-                        boxShadow: '0 4px 24px rgba(32, 53, 88, 0.10), 0 1.5px 6px rgba(27, 38, 63, 0.04)',
+                        boxShadow: 'var(--graph-tooltip-shadow)',
                         zIndex: 100,
                         minWidth: 180,
                         maxWidth: 280,
@@ -433,12 +433,12 @@ export function buildGraphEdges(
                 type: 'default',
                 label: winner.count > 1 ? `${winner.relation} ×${winner.count}` : winner.relation,
                 animated: false,
-                style: { stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
-                labelStyle: { fill: '#5a6e8d', fontSize: 11 },
-                labelBgStyle: { fill: 'rgba(255, 255, 255, 0.9)', fillOpacity: 0.9 },
+                style: { stroke: 'var(--graph-edge-stroke)', strokeWidth: 1.5 },
+                labelStyle: { fill: 'var(--graph-edge-label)', fontSize: 11 },
+                labelBgStyle: { fill: 'var(--graph-edge-label-bg)', fillOpacity: 0.9 },
                 labelBgPadding: [6, 4] as [number, number],
                 labelBgBorderRadius: 4,
-                markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(102, 124, 164, 0.3)' },
+                markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--graph-edge-stroke)' },
             })
         }
         return edges
@@ -470,12 +470,12 @@ export function buildGraphEdges(
                 type: 'default',
                 label: item.count > 1 ? `${item.relation} ×${item.count}` : item.relation,
                 animated: false,
-                style: { stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
-                labelStyle: { fill: '#5a6e8d', fontSize: 11 },
-                labelBgStyle: { fill: 'rgba(255, 255, 255, 0.9)', fillOpacity: 0.9 },
+                style: { stroke: 'var(--graph-edge-stroke)', strokeWidth: 1.5 },
+                labelStyle: { fill: 'var(--graph-edge-label)', fontSize: 11 },
+                labelBgStyle: { fill: 'var(--graph-edge-label-bg)', fillOpacity: 0.9 },
                 labelBgPadding: [6, 4] as [number, number],
                 labelBgBorderRadius: 4,
-                markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(102, 124, 164, 0.3)' },
+                markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--graph-edge-stroke)' },
             })
         })
     }
@@ -637,12 +637,12 @@ export function buildL4GraphEdges(l4Edges: L4GraphEdge[], nodeIds: Set<string>):
         label: edge.label,
         data: { relationLabel: edge.label },
         animated: false,
-        style: { stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
-        labelStyle: { fill: '#5a6e8d', fontSize: 11 },
-        labelBgStyle: { fill: 'rgba(255, 255, 255, 0.9)', fillOpacity: 0.9 },
+        style: { stroke: 'var(--graph-edge-stroke)', strokeWidth: 1.5 },
+        labelStyle: { fill: 'var(--graph-edge-label)', fontSize: 11 },
+        labelBgStyle: { fill: 'var(--graph-edge-label-bg)', fillOpacity: 0.9 },
         labelBgPadding: [6, 4] as [number, number],
         labelBgBorderRadius: 4,
-        markerEnd: { type: MarkerType.ArrowClosed, color: 'rgba(102, 124, 164, 0.3)' },
+        markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--graph-edge-stroke)' },
     }))
 }
 
@@ -761,7 +761,7 @@ export default function KnowledgeGraphPage() {
                     eds.map((e) => ({
                         ...e,
                         animated: false,
-                        style: { ...e.style, stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
+                        style: { ...e.style, stroke: 'var(--graph-edge-stroke)', strokeWidth: 1.5 },
                         label: '',
                     })),
                 )
@@ -791,7 +791,7 @@ export default function KnowledgeGraphPage() {
                         : '',
                     style: {
                         ...e.style,
-                        stroke: highlightedEdgeIds.has(e.id) ? '#0a8b83' : 'rgba(102, 124, 164, 0.1)',
+                        stroke: highlightedEdgeIds.has(e.id) ? 'var(--graph-edge-highlight)' : 'var(--graph-edge-dim)',
                         strokeWidth: highlightedEdgeIds.has(e.id) ? 2.5 : 1,
                     },
                 })),
@@ -813,7 +813,7 @@ export default function KnowledgeGraphPage() {
             eds.map((e) => ({
                 ...e,
                 animated: false,
-                style: { ...e.style, stroke: 'rgba(102, 124, 164, 0.3)', strokeWidth: 1.5 },
+                style: { ...e.style, stroke: 'var(--graph-edge-stroke)', strokeWidth: 1.5 },
                 label: '',
             })),
         )
@@ -1056,10 +1056,10 @@ export default function KnowledgeGraphPage() {
                                     position: 'fixed',
                                     top: contextMenu.y,
                                     left: contextMenu.x,
-                                    background: 'white',
+                                    background: 'var(--graph-surface)',
                                     border: '1px solid var(--border)',
                                     borderRadius: 8,
-                                    boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                                    boxShadow: 'var(--graph-floating-shadow)',
                                     zIndex: 50,
                                     padding: '4px 0',
                                     minWidth: 140,
@@ -1082,7 +1082,7 @@ export default function KnowledgeGraphPage() {
                                     style={{
                                         display: 'block', width: '100%', padding: '8px 16px',
                                         border: 'none', background: 'none', textAlign: 'left',
-                                        cursor: 'pointer', fontSize: '0.88rem', color: '#d32f2f',
+                                        cursor: 'pointer', fontSize: '0.88rem', color: 'var(--danger)',
                                     }}
                                 >
                                     ✖ 删除节点
@@ -1096,8 +1096,8 @@ export default function KnowledgeGraphPage() {
                                 aria-modal="true"
                                 style={{
                                     position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
-                                    background: 'white', border: '1px solid var(--border)', borderRadius: 8,
-                                    boxShadow: '0 4px 16px rgba(0,0,0,0.12)', zIndex: 50, padding: '12px 16px',
+                                    background: 'var(--graph-surface)', border: '1px solid var(--border)', borderRadius: 8,
+                                    boxShadow: 'var(--graph-floating-shadow)', zIndex: 50, padding: '12px 16px',
                                     display: 'flex', gap: 8, alignItems: 'center',
                                 }}
                             >
@@ -1118,7 +1118,7 @@ export default function KnowledgeGraphPage() {
                                 role="dialog"
                                 aria-modal="true"
                                 style={{
-                                    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)',
+                                    position: 'fixed', inset: 0, background: 'var(--graph-overlay)',
                                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                                     zIndex: 100,
                                 }}

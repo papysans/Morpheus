@@ -316,31 +316,31 @@ describe('METRIC_CARDS', () => {
 })
 
 describe('CHART_THEME', () => {
-    it('accentColor matches --accent (#0a8b83)', () => {
-        expect(CHART_THEME.accentColor).toBe('#0a8b83')
+    it('accentColor uses chart accent token', () => {
+        expect(CHART_THEME.accentColor).toBe('var(--chart-accent)')
     })
 
-    it('gridColor matches --glass-border based rgba', () => {
-        expect(CHART_THEME.gridColor).toBe('rgba(102, 124, 164, 0.16)')
+    it('gridColor uses chart grid token', () => {
+        expect(CHART_THEME.gridColor).toBe('var(--chart-grid-color)')
     })
 
-    it('tickColor matches --text-tertiary (#7e8fab)', () => {
-        expect(CHART_THEME.tickColor).toBe('#7e8fab')
+    it('tickColor uses chart tick token', () => {
+        expect(CHART_THEME.tickColor).toBe('var(--chart-tick-color)')
     })
 
-    it('legendColor matches --text-secondary (#5a6e8d)', () => {
-        expect(CHART_THEME.legendColor).toBe('#5a6e8d')
+    it('legendColor uses chart legend token', () => {
+        expect(CHART_THEME.legendColor).toBe('var(--chart-legend-color)')
     })
 
-    it('tooltipBg uses bright near-white background', () => {
-        expect(CHART_THEME.tooltipBg).toBe('rgba(255, 255, 255, 0.96)')
+    it('tooltipBg uses tokenized tooltip surface', () => {
+        expect(CHART_THEME.tooltipBg).toBe('var(--chart-tooltip-bg)')
     })
 
-    it('tooltipBorder uses unified border color', () => {
-        expect(CHART_THEME.tooltipBorder).toBe('rgba(102, 124, 164, 0.22)')
+    it('tooltipBorder uses tokenized tooltip border', () => {
+        expect(CHART_THEME.tooltipBorder).toBe('var(--chart-tooltip-border)')
     })
 
-    it('tooltipColor matches --text-primary (#1e2a3f)', () => {
-        expect(CHART_THEME.tooltipColor).toBe('#1e2a3f')
+    it('tooltipColor uses tokenized tooltip text color', () => {
+        expect(CHART_THEME.tooltipColor).toBe('var(--chart-tooltip-color)')
     })
 })

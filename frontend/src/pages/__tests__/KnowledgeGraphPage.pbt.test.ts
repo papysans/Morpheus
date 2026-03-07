@@ -251,26 +251,17 @@ describe('Feature: frontend-visual-consistency, Property 1: 图谱边样式一�
      * label styles (--text-secondary text color, bright background), with NO
      * dark theme hardcoded values.
      */
-    it('all edges use bright theme stroke, label, and marker styles', () => {
+    it('all edges use theme token references for stroke, label, and marker styles', () => {
         fc.assert(
             fc.property(entitiesAndEventsArb, ({ entities, events }) => {
                 const edges = buildGraphEdges(events, entities)
 
                 for (const edge of edges) {
-                    // a. edge.style.stroke === 'rgba(102, 124, 164, 0.3)'
-                    expect((edge.style as Record<string, unknown>)?.stroke).toBe('rgba(102, 124, 164, 0.3)')
-
-                    // b. edge.style.strokeWidth === 1.5
+                    expect((edge.style as Record<string, unknown>)?.stroke).toBe('var(--graph-edge-stroke)')
                     expect((edge.style as Record<string, unknown>)?.strokeWidth).toBe(1.5)
-
-                    // c. edge.labelStyle.fill === '#5a6e8d'
-                    expect((edge.labelStyle as Record<string, unknown>)?.fill).toBe('#5a6e8d')
-
-                    // d. edge.labelBgStyle.fill === 'rgba(255, 255, 255, 0.9)'
-                    expect((edge.labelBgStyle as Record<string, unknown>)?.fill).toBe('rgba(255, 255, 255, 0.9)')
-
-                    // e. edge.markerEnd.color === 'rgba(102, 124, 164, 0.3)'
-                    expect((edge.markerEnd as Record<string, unknown>)?.color).toBe('rgba(102, 124, 164, 0.3)')
+                    expect((edge.labelStyle as Record<string, unknown>)?.fill).toBe('var(--graph-edge-label)')
+                    expect((edge.labelBgStyle as Record<string, unknown>)?.fill).toBe('var(--graph-edge-label-bg)')
+                    expect((edge.markerEnd as Record<string, unknown>)?.color).toBe('var(--graph-edge-stroke)')
                 }
             }),
             { numRuns: 100 },
