@@ -2741,6 +2741,7 @@ class ExternalCreateBookRequest(BaseModel):
     protagonist1: Optional[str] = None
     protagonist2: Optional[str] = None
     target_reader: str = Field(default="male")
+    tags_by_tab: Optional[Dict[str, List[str]]] = None
     timeout_sec: int = Field(default=300, ge=30, le=900)
 
 
@@ -2983,6 +2984,69 @@ def _normalize_fanqie_role_name(value: Any) -> str:
         return ""
     text = re.split(r"[，。,.!?！？\s]+", text)[0].strip()
     return text[:5]
+
+
+FANQIE_DEFAULT_TAGS_BY_TAB: Dict[str, List[str]] = {
+    "主分类": ["悬疑脑洞"],
+    "主题": ["赛博朋克"],
+    "角色": ["神探"],
+    "情节": ["惊悚游戏"],
+}
+
+FANQIE_TAG_TAB_LIMITS: Dict[str, int] = {
+    "主分类": 1,
+    "主题": 2,
+    "角色": 2,
+    "情节": 2,
+}
+
+FANQIE_TAG_TAB_ALIASES: Dict[str, str] = {
+    "主分类": "主分类",
+    "main": "主分类",
+    "main_category": "主分类",
+    "category": "主分类",
+    "主题": "主题",
+    "theme": "主题",
+    "角色": "角色",
+    "role": "角色",
+    "情节": "情节",
+    "plot": "情节",
+}
+
+
+def _normalize_fanqie_tags_by_tab(value: Any) -> Dict[str, List[str]]:
+    normalized: Dict[str, List[str]] = {key: [] for key in FANQIE_TAG_TAB_LIMITS}
+    if isinstance(value, dict):
+        for raw_key, raw_items in value.items():
+            alias_key = str(raw_key or "").strip()
+            key = FANQIE_TAG_TAB_ALIASES.get(alias_key) or FANQIE_TAG_TAB_ALIASES.get(
+                alias_key.lower()
+            )
+            if not key:
+                continue
+            if isinstance(raw_items, list):
+                candidates = raw_items
+            else:
+                candidates = re.split(r"[,，\n]+", str(raw_items or ""))
+            values: List[str] = []
+            for item in candidates:
+                text = str(item or "").strip()
+                if not text or text in values:
+                    continue
+                values.append(text[:12])
+                if len(values) >= FANQIE_TAG_TAB_LIMITS[key]:
+                    break
+            normalized[key] = values
+
+    if not normalized["主分类"]:
+        return {key: list(values) for key, values in FANQIE_DEFAULT_TAGS_BY_TAB.items()}
+
+    output: Dict[str, List[str]] = {}
+    for key, limit in FANQIE_TAG_TAB_LIMITS.items():
+        values = normalized.get(key) or []
+        if values:
+            output[key] = values[:limit]
+    return output
 
 
 def _derive_fanqie_role_candidates(project_id: str) -> List[str]:
@@ -5618,8 +5682,11 @@ async def create_fanqie_book(project_id: str, req: ExternalCreateBookRequest):
     automation_dir = (
         Path(
             os.getenv(
-                "FANQIE_AUTOMATION_DIR",
-                str((BACKEND_ROOT.parent / "automation" / "fanqie-playwright")),
+                "FANQIE_CREATE_BOOK_AUTOMATION_DIR",
+                os.getenv(
+                    "FANQIE_AUTOMATION_DIR",
+                    str((BACKEND_ROOT.parent / "automation" / "fanqie-create-book-atomic")),
+                ),
             )
         )
         .expanduser()
@@ -5642,11 +5709,13 @@ async def create_fanqie_book(project_id: str, req: ExternalCreateBookRequest):
     target_reader = str(req.target_reader or "male").strip().lower()
     if target_reader not in {"male", "female"}:
         target_reader = "male"
+    tags_by_tab = _normalize_fanqie_tags_by_tab(req.tags_by_tab)
 
     config_payload = {
         "book": {
             "title": title,
             "tags": [],
+            "tagsByTab": tags_by_tab,
             "clearExistingTags": False,
             "intro": intro,
             "protagonist1": protagonist1,
@@ -5754,6 +5823,7 @@ async def create_fanqie_book(project_id: str, req: ExternalCreateBookRequest):
                 "protagonist1": protagonist1,
                 "protagonist2": protagonist2,
                 "intro_length": len(intro),
+                "tags_by_tab": tags_by_tab,
             },
             "stdout_tail": stdout_tail,
         }
@@ -5795,9 +5865,12 @@ async def suggest_fanqie_create_book(project_id: str, req: FanqieCreateSuggestio
             "role": "system",
             "content": (
                 "你是番茄小说创作后台助手，负责补全创建书本表单。"
-                "只输出 JSON 对象，字段为 intro, protagonist1, protagonist2, target_reader。"
+                "只输出 JSON 对象，字段为 intro, protagonist1, protagonist2, target_reader, tags_by_tab。"
                 "不要输出 title；title 已固定由外部引用。"
                 "约束：intro 50-500 字；protagonist1/2 各<=5 字；target_reader 只能 male 或 female。"
+                "tags_by_tab 必须是对象，键只能是 主分类、主题、角色、情节。"
+                "主分类必须且只能有 1 个标签；主题、角色、情节各最多 2 个标签。"
+                "标签要尽量贴合番茄小说创建页常见标签风格，优先给出可落地、可点击的中文标签。"
             ),
         },
         {
@@ -5811,6 +5884,7 @@ async def suggest_fanqie_create_book(project_id: str, req: FanqieCreateSuggestio
                     "taboo_constraints": project.taboo_constraints[:8],
                     "role_candidates": role_candidates,
                     "recent_chapters": recent_chapters,
+                    "default_tags_by_tab": FANQIE_DEFAULT_TAGS_BY_TAB,
                     "extra_instruction": prompt,
                 },
                 ensure_ascii=False,
@@ -5835,6 +5909,7 @@ async def suggest_fanqie_create_book(project_id: str, req: FanqieCreateSuggestio
     target_reader = _normalize_fanqie_target_reader(
         parsed.get("target_reader") or fallback_target_reader
     )
+    tags_by_tab = _normalize_fanqie_tags_by_tab(parsed.get("tags_by_tab"))
 
     logger.info(
         "fanqie create suggestion generated project_id=%s title_reference=%s target_reader=%s",
@@ -5849,6 +5924,7 @@ async def suggest_fanqie_create_book(project_id: str, req: FanqieCreateSuggestio
         "protagonist1": protagonist1,
         "protagonist2": protagonist2,
         "target_reader": target_reader,
+        "tags_by_tab": tags_by_tab,
         "source": "llm",
     }
 
