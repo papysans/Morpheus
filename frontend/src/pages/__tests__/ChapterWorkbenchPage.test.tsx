@@ -283,6 +283,12 @@ describe('ChapterWorkbenchPage', () => {
                     title: '霜城编年史',
                     target_reader: 'male',
                     intro: '测试简介补充文本',
+                    tags_by_tab: {
+                        主分类: ['悬疑脑洞'],
+                        主题: ['赛博朋克'],
+                        角色: ['神探'],
+                        情节: ['惊悚游戏'],
+                    },
                 }),
                 expect.objectContaining({ timeout: 300000 }),
             )
@@ -299,6 +305,12 @@ describe('ChapterWorkbenchPage', () => {
                     protagonist1: '沈砺',
                     protagonist2: '苏岚',
                     target_reader: 'female',
+                    tags_by_tab: {
+                        主分类: ['悬疑脑洞'],
+                        主题: ['赛博朋克'],
+                        角色: ['神探'],
+                        情节: ['惊悚游戏'],
+                    },
                 },
             })
         renderPage()
@@ -319,6 +331,7 @@ describe('ChapterWorkbenchPage', () => {
         await waitFor(() => {
             expect(screen.getByDisplayValue('沈砺')).toBeTruthy()
             expect(screen.getByDisplayValue('苏岚')).toBeTruthy()
+            expect(screen.getByDisplayValue('悬疑脑洞')).toBeTruthy()
         })
     })
 

@@ -149,6 +149,43 @@ type FanqieCreateFormState = {
     protagonist1: string
     protagonist2: string
     targetReader: 'male' | 'female'
+    tagsByTab: {
+        mainCategory: string
+        theme: string
+        role: string
+        plot: string
+    }
+}
+
+const DEFAULT_FANQIE_TAGS = {
+    mainCategory: '悬疑脑洞',
+    theme: '赛博朋克',
+    role: '神探',
+    plot: '惊悚游戏',
+}
+
+function splitFanqieTagInput(value: string, maxItems: number) {
+    return String(value || '')
+        .split(/[,\n，]/g)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .slice(0, maxItems)
+}
+
+function buildFanqieTagsPayload(form: FanqieCreateFormState['tagsByTab']) {
+    return {
+        主分类: splitFanqieTagInput(form.mainCategory, 1),
+        主题: splitFanqieTagInput(form.theme, 2),
+        角色: splitFanqieTagInput(form.role, 2),
+        情节: splitFanqieTagInput(form.plot, 2),
+    }
+}
+
+function normalizeFanqieTagField(value: unknown, fallback: string, maxItems: number) {
+    const text = Array.isArray(value)
+        ? value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, maxItems).join(', ')
+        : String(value || '').trim()
+    return text || fallback
 }
 
 const BLUEPRINT_NOISE_TOKENS = new Set([
@@ -317,6 +354,7 @@ export default function ChapterWorkbenchPage() {
         protagonist1: '',
         protagonist2: '',
         targetReader: 'male',
+        tagsByTab: { ...DEFAULT_FANQIE_TAGS },
     })
     const eventSourceRef = useRef<EventSource | null>(null)
 
@@ -843,6 +881,7 @@ export default function ChapterWorkbenchPage() {
             protagonist1: fanqieCreateForm.protagonist1.trim(),
             protagonist2: fanqieCreateForm.protagonist2.trim(),
             target_reader: fanqieCreateForm.targetReader,
+            tags_by_tab: buildFanqieTagsPayload(fanqieCreateForm.tagsByTab),
         }
         if (!payload.title) {
             addToast('error', '缺少可引用标题，请先确认项目名称')
@@ -906,6 +945,28 @@ export default function ChapterWorkbenchPage() {
                 protagonist1: String(result.protagonist1 || prev.protagonist1 || ''),
                 protagonist2: String(result.protagonist2 || prev.protagonist2 || ''),
                 targetReader: result.target_reader === 'female' ? 'female' : 'male',
+                tagsByTab: {
+                    mainCategory: normalizeFanqieTagField(
+                        result.tags_by_tab?.['主分类'],
+                        prev.tagsByTab.mainCategory,
+                        1,
+                    ),
+                    theme: normalizeFanqieTagField(
+                        result.tags_by_tab?.['主题'],
+                        prev.tagsByTab.theme,
+                        2,
+                    ),
+                    role: normalizeFanqieTagField(
+                        result.tags_by_tab?.['角色'],
+                        prev.tagsByTab.role,
+                        2,
+                    ),
+                    plot: normalizeFanqieTagField(
+                        result.tags_by_tab?.['情节'],
+                        prev.tagsByTab.plot,
+                        2,
+                    ),
+                },
             }))
             addToast('success', 'LLM 已填充番茄创建参数')
         } catch (err: any) {
@@ -1222,7 +1283,67 @@ export default function ChapterWorkbenchPage() {
                                 >
                                     <option value="male">男频</option>
                                     <option value="female">女频</option>
-                                </select>
+                                    </select>
+                                </label>
+                            <label>
+                                <div className="metric-label" style={{ marginBottom: 6 }}>主分类（必填，仅 1 个）</div>
+                                <input
+                                    className="input"
+                                    value={fanqieCreateForm.tagsByTab.mainCategory}
+                                    maxLength={24}
+                                    onChange={(e) =>
+                                        setFanqieCreateForm((prev) => ({
+                                            ...prev,
+                                            tagsByTab: { ...prev.tagsByTab, mainCategory: e.target.value },
+                                        }))
+                                    }
+                                    placeholder="例如：悬疑脑洞"
+                                />
+                            </label>
+                            <label>
+                                <div className="metric-label" style={{ marginBottom: 6 }}>主题（最多 2 个）</div>
+                                <input
+                                    className="input"
+                                    value={fanqieCreateForm.tagsByTab.theme}
+                                    maxLength={40}
+                                    onChange={(e) =>
+                                        setFanqieCreateForm((prev) => ({
+                                            ...prev,
+                                            tagsByTab: { ...prev.tagsByTab, theme: e.target.value },
+                                        }))
+                                    }
+                                    placeholder="逗号分隔，例如：赛博朋克"
+                                />
+                            </label>
+                            <label>
+                                <div className="metric-label" style={{ marginBottom: 6 }}>角色（最多 2 个）</div>
+                                <input
+                                    className="input"
+                                    value={fanqieCreateForm.tagsByTab.role}
+                                    maxLength={40}
+                                    onChange={(e) =>
+                                        setFanqieCreateForm((prev) => ({
+                                            ...prev,
+                                            tagsByTab: { ...prev.tagsByTab, role: e.target.value },
+                                        }))
+                                    }
+                                    placeholder="逗号分隔，例如：神探"
+                                />
+                            </label>
+                            <label>
+                                <div className="metric-label" style={{ marginBottom: 6 }}>情节（最多 2 个）</div>
+                                <input
+                                    className="input"
+                                    value={fanqieCreateForm.tagsByTab.plot}
+                                    maxLength={40}
+                                    onChange={(e) =>
+                                        setFanqieCreateForm((prev) => ({
+                                            ...prev,
+                                            tagsByTab: { ...prev.tagsByTab, plot: e.target.value },
+                                        }))
+                                    }
+                                    placeholder="逗号分隔，例如：惊悚游戏"
+                                />
                             </label>
                             <label>
                                 <div className="metric-label" style={{ marginBottom: 6 }}>主角名1（可选）</div>
@@ -1248,6 +1369,9 @@ export default function ChapterWorkbenchPage() {
                                     placeholder="最多5字"
                                 />
                             </label>
+                        </div>
+                        <div className="muted" style={{ marginTop: 6, fontSize: '0.78rem' }}>
+                            番茄创建要求主分类必填；主题、角色、情节可填 1-2 个，多个标签用逗号分隔。
                         </div>
                         <label style={{ display: 'block', marginTop: 10 }}>
                             <div className="metric-label" style={{ marginBottom: 6 }}>作品简介（建议 ≥50）</div>
