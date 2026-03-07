@@ -13,6 +13,8 @@ beforeEach(() => {
         readingMode: false,
         shortcutHelpOpen: false,
         _savedSidebarCollapsed: null,
+        themeMode: 'light',
+        themePaletteId: 'water-lilies-dawn',
     })
 })
 
@@ -82,6 +84,24 @@ describe('Feature: frontend-ux-overhaul, Property 12: 阅读模式往返', () =>
                 expect(stateAfter._savedSidebarCollapsed).toBeNull()
             }),
             { numRuns: 100 },
+        )
+    })
+})
+
+const themeModeArb = fc.constantFrom<'light' | 'dark'>('light', 'dark')
+
+describe('Feature: theme-system, Property 1: 主题切换映射固定调色板', () => {
+    it('changing theme mode applies the expected fixed palette', () => {
+        fc.assert(
+            fc.property(themeModeArb, (mode) => {
+                useUIStore.setState({ themeMode: 'light', themePaletteId: 'water-lilies-dawn' })
+                useUIStore.getState().setThemeMode(mode)
+
+                const state = useUIStore.getState()
+                expect(state.themeMode).toBe(mode)
+                expect(state.themePaletteId).toBe(mode === 'dark' ? 'parliament-twilight' : 'water-lilies-dawn')
+            }),
+            { numRuns: 50 },
         )
     })
 })
